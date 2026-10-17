@@ -11,6 +11,32 @@ tab without screenshots. The user cannot see the extension's internals, and the
 panel deliberately hides its connection settings, so **you are the interface for
 this diagnosis**. Read this before proposing anything.
 
+## What this document gives you
+
+| What you are facing | Section |
+|---|---|
+| A red dot, or the panel says 「未连接」 | The dot is red (`stopped`) and the page name is empty |
+| "The model could not open my browser" | The user says the model could not open their browser |
+| Green dot but the page name says 「未选择页面」 | The dot is green but the page name says `未选择页面` |
+| Browser tools time out | Browser tools time out |
+| Tools refuse, or the model says it has no browser | Tools refuse with "not connected" / the model says it has no browser |
+| A blank, clipped or over-wide panel | The panel is blank, clipped, or a huge empty area |
+| No approval card appears | Approvals never appear |
+| An empty workspace mirror | The panel says 「桌面端还没加载新版桥接」 / the mirror is empty |
+| "Which desktop conversation is it writing to?" | Which conversation the panel writes to |
+| "Why did my browser move by itself?" | The "may the model open pages" switch · The `@open` directive |
+| "Fix it, but there is no button for it" | Step 3 — Repair by editing storage |
+
+It also carries reference material so you do not re-derive it: the five-line
+architecture, where the sources and the profile actually live, why the bearer
+token exists, the bridge's full config surface, and the measured facts about
+editing a plugin while it is running.
+
+**Not covered here:** what the browser tools themselves do (`browser_snapshot`,
+`browser_click`, `browser_type`, `browser_navigate`, …) or how to drive them.
+That is `README.md` in the same checkout. This document starts where the tooling
+stops working.
+
 ## Architecture in five lines
 
 ```
@@ -270,53 +296,58 @@ Two things to check while you are there, because they are what the mode needs:
 
 ## Which conversation the panel writes to
 
-`settings.sessionScope` decides it, and the target is **chosen, never guessed**:
+`settings.sessionScope` decides it. Three values; the first two differ only in
+whether the last visit is reused:
 
-- `fresh` — the panel gets its own session, created lazily on the first prompt.
-  Browser chatter never lands in a longer conversation.
-- `pinned` — the panel continues the conversation named in
-  `settings.pinnedSessionId`, so you can ask about a page inside context that
-  already exists.
-- `workspace` (**default**) — the panel mirrors every conversation in the desktop's
-  browser workspace instead of one. It is identified by the **path** the bridge sends in
-  the handshake as `policy.sessionWorkspacePath`, not by the workspace's title, because a
-  user can rename the group. This is the only mode that shows a conversation the panel
-  never prompted, which is what "instructions issued on the desktop do not appear here"
-  is about.
+- `fresh` — 「工作区内新建对话」: the next prompt starts a new conversation in the
+  browser-chats workspace. Selecting it clears the remembered id, so the choice
+  takes effect on the next message instead of being silently overridden by it.
+- `last` — 「工作区内上次浏览器对话」: continues the conversation this panel last
+  used. The id lives in `chrome.storage.local` under `dshFreshSessionId` and is
+  checked against the desktop's session list before it is used, because the user
+  may have deleted that conversation in the meantime. A retired `pinned` value
+  folds onto this one.
+- `workspace` (**default**) — 「全部工作区」: mirrors the conversations of **every**
+  desktop workspace, so work driven from a desktop workspace appears here without
+  being picked first. It used to mirror only the workspace the bridge named in
+  `policy.sessionWorkspacePath`; that path is still sent, but it no longer decides
+  what is mirrored.
 
-  Two consequences a diagnosis needs. First, the mirrored set is re-read every ten
+  Mirroring consequences a diagnosis needs. The mirrored set is re-read every ten
   seconds and narrowed to conversations that are **`running` or updated within five
-  minutes** (`RECENT_ACTIVITY_MS`); a conversation that goes quiet is dropped, so a
-  mirror that looks incomplete mid-session is usually this and not a fault. Entering the
-  mode mirrors the whole group once, which is what brings an existing transcript on
-  screen. Second, a launch opens one follower per conversation on the bridge, so if a
-  user reports the panel stuck on one conversation while others are active, the bridge
-  is the suspect: a bridge older than `0.38.4` follows a single Session and aborts the
-  previous follower when asked for another.
+  minutes** (`RECENT_ACTIVITY_MS`); one that goes quiet is dropped, so a mirror that
+  looks incomplete mid-session is usually this and not a fault. Entering the mode
+  mirrors everything once, which is what brings an existing transcript on screen.
+  And a launch opens one follower per conversation on the bridge, so a panel stuck
+  on one conversation while others are active points at the bridge: one older than
+  `0.38.4` follows a single Session and aborts the previous follower when asked for
+  another.
 
   First failure to check is a desktop running an older bridge, which answers
   `session.follow` with `not-found`. The worker surfaces that as a panel notice naming
   the fix, so if the user reports an empty mirror, ask whether that notice is on screen
   before looking anywhere else.
 
-`sessionScope: 'workspace'` does **not** change where a prompt goes: the panel keeps its
-own conversation, and typing in the composer starts one. Mirroring is about watching the
-conversations the desktop drives.
+`sessionScope: 'workspace'` does **not** change where a prompt goes: the panel keeps
+its own conversation, and typing in the composer starts one. Mirroring is about
+watching the conversations the desktop drives.
 
-The desktop publishes no "session I am viewing" signal, so there is nothing to
-infer from. A mode that guessed by recent activity would deliver a prompt into
-the wrong conversation and say nothing about it — which is why the panel asks
-the user to pick one instead. `session.list` is reachable from the extension for
-that picker, and the worker narrows what it returns before the picker sees it:
-`{ sessionId, title, preview, updatedAt, running }`, where `title` is read from
+**There is no longer any way to point the panel at an arbitrary conversation.** The
+picker was removed together with `settings.pinnedSessionId`; `last` only ever means
+"the one this panel used before". If a user asks to continue a conversation they
+chose by name, the honest answer is that this build does not support it — do not
+improvise a picker on top of `session.list`.
+
+`session.list` is still read for two internal checks: validating the remembered
+conversation before reuse, and choosing which mirrored conversations are worth
+following. The worker narrows it before use to
+`{ sessionId, title, preview, updatedAt, running }`, where `title` comes from
 `projections.values.title` (it is not a top-level field) and `preview` is the
 conversation's opening prompt, from `projections.values.turnOutline`. Sub-agent
 conversations are dropped — anything with `origin === 'subagent'` or a
-`parentSessionId` — because a delegated sub-agent is a Session of its own and would
-otherwise fill the picker with rows titled after its own instructions. The list is
-sorted running-first, and the panel labels a running one 「进行中」. A report that a
-conversation is *missing* from the picker is therefore usually the sub-agent filter
-working, not a bug; check `origin` on the raw `session.list` reply before believing it.
+`parentSessionId` — because a delegated sub-agent is a Session of its own. The list
+is sorted running-first, so a conversation that seems to be *missing* is usually that
+filter working; check `origin` on the raw reply before believing it is a bug.
 
 Two invariants worth knowing before changing this code:
 
@@ -349,9 +380,13 @@ Design points that matter if you change this:
   told may still call `browser_open_tab`, and the user would never know why their
   browser moved.
 - **The extension does not keep its own authoritative copy.** The desktop app
-  owns the setting; the extension receives it in the handshake and obeys it. The
-  panel shows it **read-only** with a note saying where to change it — two
-  switches that can disagree is worse than one switch plus a clear statement.
+  owns the setting; the extension receives it in the handshake and obeys it.
+  **The panel no longer displays it at all.** The row that used to show it is now
+  「dsh 连接状态」 and reports the bridge connection instead — it previously derived
+  "connected" from `policy !== null`, which answered "did the host send a policy",
+  not "is the extension connected". So a user cannot confirm this switch from the
+  extension; check the plugin config on the desktop side. One source of truth beats
+  two surfaces that can disagree.
 - **Absence means "not allowed".** `pagesMayBeOpened()` requires an explicit
   `true`. If a dropped field read as permission, a broken handshake would hand
   out a grant nobody gave. Covered by a test.
@@ -427,16 +462,23 @@ then **restart the desktop app** (see the sources section: plugin config is read
 at boot).
 
 ```js
-// Point the panel at a specific conversation without using the picker:
+// Continue the conversation this panel used last ("上次浏览器对话"):
 chrome.storage.local.get('dshSettings').then(({ dshSettings }) =>
-  chrome.storage.local.set({
-    dshSettings: { ...dshSettings, sessionScope: 'pinned', pinnedSessionId: '<session id>' },
-  }))
+  chrome.storage.local.set({ dshSettings: { ...dshSettings, sessionScope: 'last' } }))
 
-// Back to the panel's own conversation:
+// Start a new conversation on the next prompt:
 chrome.storage.local.get('dshSettings').then(({ dshSettings }) =>
-  chrome.storage.local.set({ dshSettings: { ...dshSettings, sessionScope: 'fresh', pinnedSessionId: null } }))
+  chrome.storage.local.set({ dshSettings: { ...dshSettings, sessionScope: 'fresh' } }))
 
+// Mirror every desktop workspace instead (the shipped default):
+chrome.storage.local.get('dshSettings').then(({ dshSettings }) =>
+  chrome.storage.local.set({ dshSettings: { ...dshSettings, sessionScope: 'workspace' } }))
+```
+
+There is **no** supported way to point the panel at an arbitrary session id: that
+setting (`pinnedSessionId`) was removed along with the picker. A stored `'pinned'`
+scope is migrated to `'last'` on load, so an old profile keeps working without
+continuing the conversation it used to name.
 // Force a specific bridge address (e.g. the desktop app picked a random port):
 chrome.storage.local.get('dshSettings').then(({ dshSettings }) =>
   chrome.storage.local.set({

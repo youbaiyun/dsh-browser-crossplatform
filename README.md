@@ -32,14 +32,16 @@ dsh plugin --profile desktop add link:<clone>/packages/bridge
 **Step-by-step foolproof instructions (including "how to confirm it is installed") are in [docs/INSTALL.md](docs/INSTALL.md).**
 
 The extension itself is installed from the browser extension store (or load the unpacked build yourself following the build section below); the package above is the bridge plugin,
-and its settings page lives inside dsh, titled 「dsh 浏览器扩展（全端）的桌面端一半」.
+and its settings page lives inside dsh, titled 「dsh 浏览器扩展（全平台）的桌面端一半」.
 
-## Structure (five packages share the same version number `0.38.5`)
+## Structure (five packages share the same version number `0.38.6`)
 
 ```
 packages/protocol   zero-dependency wire protocol (frame validation, capability/authority split)
 packages/bridge     dsh bridge plugin (WebSocket server + browser_* tools, runs inside dsh)
 extension           the Chrome/Firefox MV3 extension itself
+skills/             the troubleshooting skill your AI agent reads when the panel misbehaves:
+                    one symptom → one section → a repair, without the user opening devtools
 ```
 
 ## Compatibility range (all targets and minimum versions)
@@ -47,7 +49,8 @@ extension           the Chrome/Firefox MV3 extension itself
 | Target | Minimum version | Where this number comes from |
 |---|---|---|
 | **Operating system** | Windows / macOS / **Linux** — all supported (CI is Linux, so it is verified the most thoroughly) | The platform-specific code is confined to one place, `packages/bridge/src/browser-launch.ts`, which has to know where each platform keeps its browsers and profiles; build/benchmark tooling adds the Windows `.cmd` shim. Everything else is platform-neutral. CI's `ubuntu-latest` **is Linux**, and the full chain runs on it for every commit |
-| **dsh desktop** | Node **≥ 20** | `engines.node` in the root, bridge and extension manifests (the protocol package declares none, because it is a private workspace package with no scripts to run) |
+| **dsh desktop** | **any `0.2.x`** — declared as `>=0.2.0-rc.2 <0.3.0` and **optional**, verified against `0.2.1-rc.2` | dsh is the host and provides these packages at runtime, so the bridge declares them as **optional peers** with a range, never an exact pin. The range documents the supported line; `optional` is what actually keeps a host on a prerelease (`0.2.1-rc.2`, the current desktop release) installable, because semver's prerelease rule excludes such versions from every `0.2.x` range — `*` and `0.2.x` included. The runtime gate is a capability check (`gateway.wireStream`); a genuinely missing service fails loudly by name, and a missing agent registry degrades to a no-op |
+| **Node** | **≥ 20** | `engines.node` in the root, bridge and extension manifests (the protocol package declares none, because it is a private workspace package with no scripts to run) |
 | **Desktop Chrome / Chromium / Edge** | **116** | `minimum_chrome_version` in `extension/manifest.json` |
 | **Desktop Firefox** | **140.0** | `gecko.strict_min_version` in `extension/manifest.firefox.json` |
 | **Panel UI** | Chrome uses `side_panel`, Firefox uses `sidebar_action` | Both point at the same `control/index.html` |
@@ -70,7 +73,7 @@ ordinary session methods that `dsh web --host` exists to serve; what it cannot d
 
 | Dimension | Original | This version |
 |---|---|---|
-| Version | Root 0.2.1 / extension 0.3.1 / bridge 0.0.7, each drifting independently | Unified `0.38.5` — root package, protocol, bridge, extension and both manifests all agree |
+| Version | Root 0.2.1 / extension 0.3.1 / bridge 0.0.7, each drifting independently | Unified `0.38.6` — root package, protocol, bridge, extension and both manifests all agree |
 | Node | `^22.19 \|\| >=24` | `>=20` |
 | TypeScript | Split between extension 5.6 and bridge 6.0 | One toolchain; the extension's declared range is `^5.6`, the bridge's and the protocol's `^5.7`, and the lockfile resolves a single installed version |
 | Dependencies | 35 `@deepseek-ai/*` (RC) in the root package, node_modules at 600 MB | **0** dsh dependencies in the root package (its tests and typecheck are pure Node + a bundled tsc); the bridge ships with only `ws` + `@deepseek-ai/schemastery` and declares all of dsh as `peerDependencies` (at runtime it probes the host via `ctx.get()`, and bundles nothing); the extension has two panel-only runtime dependencies (`marked` + `dompurify`), both bundled into the panel build |

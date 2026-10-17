@@ -33,8 +33,16 @@ For the complete minimum versions and where each number comes from, see "Compati
 Open your browser's extension store page, click "Add to Chrome / Add to Firefox", and confirm.
 
 > ⚠️ When the store version is **not yet published** (under review), it cannot be found in the store. Until then, only developers can install it:
-> open "Developer mode" at `chrome://extensions` → "Load unpacked" → select the built
-> `extension/dist` directory. Regular users should wait until it is listed in the store before installing.
+> open "Developer mode" at `chrome://extensions` → "Load unpacked" → select **the folder that
+> contains `manifest.json`** (in a checkout that is `extension/dist`; from a Release download,
+> unzip `dsh-browser-crossplatform-<version>.zip` and select the unzipped folder).
+>
+> **Use the archive without `-store` in its name.** The `-store` build is the one you upload; its
+> manifest has **no `key`**, so side-loading it gives the extension an id that is *not* on the
+> bridge's allowlist — the connection is refused and the panel stays 「未连接」. The plain build
+> carries `key`, so its id is fixed and already allowed, and it connects with no token.
+>
+> Regular users should wait until it is listed in the store before installing.
 
 **It has to be the browser you actually use.** The extension is per-profile: installing it in one
 browser or one Chrome profile does nothing for another. If your default browser is Chrome but the
@@ -51,7 +59,7 @@ dsh plugin --profile desktop add dsh-browser-crossplatform
 **The profile name must match the one you actually use**: dsh **desktop** uses `desktop`; the command-line `dsh web` uses `web`.
 (If unsure, check the directory names under `~/.dsh/profiles/`.)
 
-After installing, **restart dsh once**. After the restart, the bridge plugin's settings page appears, titled 「**dsh 浏览器扩展（全端）的桌面端一半**」.
+After installing, **restart dsh once**. After the restart, the bridge plugin's settings page appears, titled 「**dsh 浏览器扩展（全平台）的桌面端一半**」.
 
 ## Step 3: confirm it is installed (30 seconds)
 
@@ -85,7 +93,7 @@ When you no longer need it, switch it back off.
 | Symptom | Most likely cause |
 |---|---|
 | The panel keeps showing "not connected" | Step 2 was not done, or **dsh was not restarted** afterwards |
-| 「dsh 浏览器扩展（全端）的桌面端一半」 is not listed in the plugin settings page | The `--profile` name is not the one your desktop uses |
+| 「dsh 浏览器扩展（全平台）的桌面端一半」 is not listed in the plugin settings page | The `--profile` name is not the one your desktop uses |
 | The panel connects, but the model says the page is empty | Try refreshing the page once and reading it again (restricted pages such as `chrome://` cannot be read; that is normal) |
 | Image viewing is enabled but it reports unavailable | The key from step 4 has not been configured yet |
 
@@ -127,6 +135,12 @@ In this order:
 2. **The bridge plugin is not installed yet** (step 2), or **dsh was not restarted** after installing it.
 3. **The extension is installed but disabled**, or was disabled by Chrome for running as an unpacked
    build. Enable it on the extensions page.
+4. **The extension's id is not in the bridge's allow-list**, so the token-free loopback connection is
+   refused and the socket closes with code `4002` (`bad token`). This is what a version mismatch looks
+   like: `extensionId` in the bridge config defaults to the ids this project knows, and an extension
+   built from other sources has a different one. It is invisible from the panel — the status stays
+   "not connected" — so the fix is either to install the extension from the store, or to add that
+   build's id to `extensionId` (visible at `chrome://extensions`, comma-separated for several).
 
 ### The browser was closed, and the model said it could not open it
 

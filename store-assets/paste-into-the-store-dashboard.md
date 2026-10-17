@@ -21,7 +21,7 @@ Length: 83 characters. The limit is 132.
 ## Detailed description — paste this (Chinese)
 
 ```
-全端 DeepSeek Harness 浏览器插件
+全平台 DeepSeek Harness 浏览器插件
 
 完整项目skill+插件（要有完整项目才能正常使用）地址如下：
 https://github.com/youbaiyun/dsh-browser-crossplatform
@@ -72,7 +72,7 @@ dsh Browser Extension
 Chinese name:
 
 ```
-dsh 浏览器扩展（全端）
+dsh 浏览器扩展（全平台）
 ```
 
 The full English detailed description is the last code block of `store-listing.md`.

@@ -2,7 +2,7 @@
 
 **dsh Browser Extension** — a browser extension for Chrome and Firefox.
 
-Last updated: 2026-10-07
+Last updated: 2026-10-16
 
 ## Summary
 
@@ -111,10 +111,20 @@ no personal information from anyone, including children.
 
 - Removing the extension deletes everything it has stored.
 - Revoking the desktop app's connection (quitting dsh) stops all transfer.
-- Turning page sharing to "Never" in the extension's settings stops page content from
-  being read by the model — **but only while the 「不再询问，直接操作」 switch is off.**
-  That switch ships on, and while it is on the read policy is overridden to `auto`, so
-  "Never" has no effect. Turn that switch off first if you want the setting to hold.
+- **Page sharing has two settings, and neither of them stops page content reaching
+  the model.** The panel's 「AI 读取权限」 chooses between 「每次询问」 (ask before
+  reading the page and before acting on it) and 「直接读取」 (ask neither time). Both
+  send the page text to the model — that is what the tool is for. An earlier release
+  offered a third choice, "Never", which claimed to keep page content in the browser;
+  it has been **removed**, because it did not do that: while the shipped-on
+  「不再询问，直接操作」 switch was on, the read policy was overridden to `auto` and
+  "Never" had no effect. A control that promises a guarantee it does not deliver is
+  worse than no control, so it is gone rather than left in place. Anyone who had
+  selected it is moved to 「每次询问」, the stricter of the two.
+- **What does still hold**, and is the real limit: the 「不再询问，直接操作」 switch
+  overrides the read policy while it is on, so turn it off if you want the panel's
+  choice to govern. The two settings are not independent, and the panel does not say
+  so — this document is where that is written down.
 
 ## Changes
 

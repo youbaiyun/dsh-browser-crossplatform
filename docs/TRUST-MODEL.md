@@ -149,8 +149,8 @@ without a prompt. Turning it off restores gate 3, and the choice is preserved pe
 so a user who turns it off keeps it off.
 
 It has a second effect that is easy to miss: while it is on, the tool dispatch mode is
-resolved as `sharePageContent: 'auto'`, which **overrides** the panel's 「让 AI 读取网页」
-setting. A user who chooses "ask me before reading the page" is not asked while
+resolved as `sharePageContent: 'auto'`, which **overrides** the panel's 「AI 读取权限」
+setting. A user who chooses 「每次询问：AI 读取网页和执行操作时都会询问」 is not asked while
 unrestricted access is on. The two settings are not independent, and the panel does not
 say so; this document is where that is written down.
 
