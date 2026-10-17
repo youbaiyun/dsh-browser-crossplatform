@@ -152,7 +152,7 @@ Notes specific to Firefox:
 
 ## After publishing
 
-- **Tag the release.** `git tag v0.38.6 && git push --tags` matches the manifest
+- **Tag the release.** `git tag v0.38.7 && git push --tags` matches the manifest
   version to a point in history, which is the only way to answer "what exactly is
   in the store?" later.
 - **Keep the version in one place in your head.** Seven files carry one version — the

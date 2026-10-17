@@ -11,7 +11,7 @@ process). If a value here disagrees with those, they win and this file is stale.
 
 | Thing | Where it is | Note |
 |---|---|---|
-| The archive to upload | `dsh-browser-crossplatform-0.38.6-store.zip` (repo root once built, ~100 KB; Firefox: `…-0.38.6-store-firefox.zip`) | Built by `pnpm --filter dsh-browser-extension run package`, which names each archive after the manifest inside it and refuses `\` entry names — the store rejects an archive whose entries are not `/`-separated. It needs **both** targets built (`dist/` and `dist-firefox/`) and fails if their versions disagree, so run `build` and `build:firefox` first |
+| The archive to upload | `dsh-browser-crossplatform-0.38.7-store.zip` (repo root once built, ~100 KB; Firefox: `…-0.38.7-store-firefox.zip`) | Built by `pnpm --filter dsh-browser-extension run package`, which names each archive after the manifest inside it and refuses `\` entry names — the store rejects an archive whose entries are not `/`-separated. It needs **both** targets built (`dist/` and `dist-firefox/`) and fails if their versions disagree, so run `build` and `build:firefox` first |
 | Store icon 128×128 | `extension/dist/assets/icons/icon128.png` | |
 | Screenshots | not produced yet; no `screenshots/` directory exists in this tree | The dashboard wants 1280×800 or 640×400, 1–5 images. Upload through the dashboard rather than committing them here |
 | Privacy policy URL | the public URL serving `PRIVACY.md` | The gist already used is fine — update its body to `PRIVACY.md`. Verified reachable without login |
@@ -207,6 +207,6 @@ creditworthiness or for lending.
   `extension/tests/versions.spec.ts` asserts all seven agree — following a shorter list
   leaves the suite red — and the packaging script names each archive after the
   manifest inside it. Then rebuild.
-- The published store version is `0.3.1`. This build is `0.38.6` — a rewrite that adds image
+- The published store version is `0.3.1`. This build is `0.38.7` — a rewrite that adds image
   recognition, the panel work, and the identity-bound loopback shortcut — so the next
-  submission is `0.38.6`, not `0.3.2`.
+  submission is `0.38.7`, not `0.3.2`.

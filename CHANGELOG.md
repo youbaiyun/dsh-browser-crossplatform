@@ -5,6 +5,57 @@ This project is a derivative of
 are listed only where this fork has something to say about them; see  
 [COPYRIGHT.md](COPYRIGHT.md) for which files belong to whom.
 
+## [0.38.7]
+
+A bridge-only release that fixes the one failure every fresh install eventually hit: the extension
+could not stay connected to the desktop bridge.
+
+Two independent defects were stacked on top of each other. First, the bridge mounted its discovery
+endpoint only on the host's own web port, which dsh chooses at random on every start (`19387`,
+`57342`, `60400`, `63571`, `50966` have all been observed on one machine); the extension can only
+probe a fixed list, so it connected only when the random value happened to be `19387`. Second — and
+this one kept the panel on 「未连接」 even after the first was fixed — every authenticated
+connection died immediately after `hello.ok`, because the bridge opened the Host's Remote streams
+without a Peer.
+
+That is the real origin of "installed but nothing connects"; the extension's display name and its
+manifest `key` have nothing to do with it, and the id this repository's `key` produces stays in the
+allowlist.
+
+### Fixed
+
+- **Remote streams now carry a real Host Peer.** dsh 0.2.x reads `peer.signal` (and
+  `peer.principal`) when opening `$events` and `session/follow`. The bridge passed `undefined`, so
+  the Host threw `Cannot read properties of undefined (reading 'signal')`, the bridge reported
+  `stream-failed`, and the socket closed with `1011` — the extension then reconnected in a tight
+  loop while the panel showed 「未连接」. The adapter now takes an owner Peer from
+  `connection.createPeer` (falling back to the shared `browserPeer` on hosts that lack it) and
+  releases only the Peer it created.
+- **The bridge now listens on the extension's fixed discovery ports.** It binds the first free port
+  from `3080 / 3081 / 3090 / 14389 / 43189 / 19387`, serves the same `/ext/bridge-config` document
+  there, and hands `/ext/bridge` upgrades to the same `BridgeServer`, so the token and origin
+  checks are not duplicated. If every port is taken it logs one warning; the host-port route keeps
+  working. `discoveryListener` (default on) and `discoveryPorts` expose the behaviour.
+- **One port list, not two.** `@dsh-browser/protocol` now exports `DISCOVERY_PORTS`; the bridge and
+  the extension both import it, so the two halves cannot drift apart.
+- **Mounting waits for the gateway services instead of failing silently.** When a dsh build
+  injects `typertGateway`/`connection` only after plugin load, the bridge now waits for them
+  (`ctx.inject`) rather than throwing and leaving the web server without `/ext/bridge-config`.
+  A one-shot guard prevents the route from being registered twice if a dependency is replaced.
+- **Stale docs corrected**: the plugin settings page title is 「dsh 浏览器设置」, and the install
+  examples name `0.38.7`.
+
+### Verification
+
+`packages/bridge` 263 passed (+1 skipped), `packages/protocol` 20, `extension` 548, all three
+typechecks green; four extension targets and the zips rebuilt. The built `lib/index.js` was started
+against port 3080 and served `{"wsUrl":"ws://127.0.0.1:3080/ext/bridge"}`, then released the port.
+The e2e harness now pins its test extension to its own bridge URL and skips the page server's port
+when choosing a discovery port, so a real desktop bridge on `3080` cannot steer the test browser to
+the wrong host.
+
+The **wire format is unchanged**: a `0.38.6` bridge and a `0.38.7` extension still interoperate.
+
 ## [0.38.6]
 
 A release in two halves. First, six defects that each pointed the model or the reader away from what  

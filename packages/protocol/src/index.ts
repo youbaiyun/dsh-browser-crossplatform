@@ -8,6 +8,16 @@
 
 export const BRIDGE_PATH = '/ext/bridge'
 export const BRIDGE_CONFIG_PATH = '/ext/bridge-config'
+
+/**
+ * 桌面端额外监听的固定端口，也是扩展逐个探测的列表。
+ *
+ * 宿主每次启动都换端口，扩展没有别的途径知道这次落在哪里，只能在固定几个端口上问
+ * `/ext/bridge-config`。两端共用这一份，避免各写一份之后慢慢漂移：扩展那边少一个
+ * 端口，用户看到的就是「未连接」，而日志里什么都不会有。
+ */
+export const DISCOVERY_PORTS = [3080, 3081, 3090, 14389, 43189, 19387] as const
+
 export const BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD = 'bridge.injectBrowserSnapshot'
 export const BRIDGE_SESSION_PURGE_METHOD = 'bridge.session.purge'
 

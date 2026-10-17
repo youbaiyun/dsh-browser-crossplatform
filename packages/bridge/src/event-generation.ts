@@ -6,7 +6,7 @@
  */
 
 import type { RespondResult } from '@dsh-browser/protocol'
-import { openWireStream, type TypertGatewayLike } from './dsh-gateway.ts'
+import { openWireStream, type PeerLike, type TypertGatewayLike } from './dsh-gateway.ts'
 import { isSessionSnapshot, type SessionSnapshot } from './session-history.ts'
 import type { HostEventFrame } from './host-api.ts'
 import { isRecord } from './host-api.ts'
@@ -66,6 +66,8 @@ export class EventGeneration {
 
   constructor(
     private readonly gateway: TypertGatewayLike,
+    /** 这些流所属的 Peer；Host 的 `$events` 和 Remote 流会读它的 signal。 */
+    private readonly peer: PeerLike | undefined,
     private readonly sendResult: SendRemoteEventResult,
     private readonly extensionSessions: ExtensionSessionRegistry,
     private readonly onHistoryCursor: (sessionId: string, cursor: number) => void,
@@ -179,6 +181,7 @@ export class EventGeneration {
           },
         },
         signal,
+        this.peer,
       )
       const iterator = source[Symbol.asyncIterator]()
       const first = await iterator.next()
@@ -279,7 +282,7 @@ export class EventGeneration {
 
   private async pumpRemoteEvents(): Promise<void> {
     try {
-      const source = await openWireStream(this.gateway, '$events', { args: {} }, this.signal)
+      const source = await openWireStream(this.gateway, '$events', { args: {} }, this.signal, this.peer)
       let ready = false
       for await (const value of source) {
         if (!ready) {

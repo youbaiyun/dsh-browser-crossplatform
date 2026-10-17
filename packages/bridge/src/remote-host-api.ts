@@ -15,7 +15,7 @@ import type {
 } from './host-api.ts'
 import { hostFailure, isRecord } from './host-api.ts'
 import { ExtensionSessionRegistry } from './extension-sessions.ts'
-import { openWireStream, type TypertGatewayLike, type HostConnectionLike } from './dsh-gateway.ts'
+import { createWirePeer, openWireStream, type HostConnectionLike, type TypertGatewayLike, type WirePeer } from './dsh-gateway.ts'
 import {
   oneShotSessionSnapshot,
   historyValue,
@@ -45,6 +45,8 @@ export function createRemoteHostApi(
 class RemoteHostApi implements BrowserHostApi {
   private readonly fetchHandler: ReturnType<HostConnectionLike['createSharedFetchHandler']>
   private readonly extensionSessions = new ExtensionSessionRegistry()
+  /** 每条进程内 wire 流都要出示的 Peer；由 Connection 服务造，卸载时释放。 */
+  private readonly wirePeer: WirePeer
   /** 每个 Session 已知的最后 session/follow 顶端；用来驱动 session/page 的 throughSeq。 */
   private readonly historyCursors = new Map<string, number>()
   private activeEvents: EventGeneration | undefined
@@ -54,6 +56,7 @@ class RemoteHostApi implements BrowserHostApi {
     connection: HostConnectionLike,
   ) {
     this.fetchHandler = connection.createSharedFetchHandler('/api')
+    this.wirePeer = createWirePeer(connection)
   }
 
   async call(call: HostRpcCall): Promise<HostRpcResult> {
@@ -97,6 +100,7 @@ class RemoteHostApi implements BrowserHostApi {
   async *events(signal: AbortSignal): AsyncIterable<HostEventFrame> {
     const generation = new EventGeneration(
       this.gateway,
+      this.wirePeer.peer,
       this.sendRemoteEventResult.bind(this),
       this.extensionSessions,
       this.noteHistoryCursor.bind(this),
@@ -118,6 +122,11 @@ class RemoteHostApi implements BrowserHostApi {
     const generation = this.activeEvents
     if (generation === undefined) return { accepted: false, reason: 'not-pending' }
     return generation.respond(rpcId, result, signal)
+  }
+
+  /** 释放本适配器自己造的 Peer。共享的 `browserPeer` 归 Connection 服务所有，不会在这里释放。 */
+  async dispose(): Promise<void> {
+    await this.wirePeer.dispose()
   }
 
   private async sessionHistory(call: HostRpcCall): Promise<HostRpcResult> {
@@ -151,7 +160,7 @@ class RemoteHostApi implements BrowserHostApi {
       }
 
       const snapshot = this.activeEvents === undefined
-        ? await oneShotSessionSnapshot(this.gateway, sessionId, call.signal, maxMessages)
+        ? await oneShotSessionSnapshot(this.gateway, sessionId, call.signal, this.wirePeer.peer, maxMessages)
         : await this.activeEvents.openSessionHistory(sessionId, call.signal, maxMessages)
       this.noteHistoryCursor(sessionId, snapshot.cursor)
       return { ok: true, value: historyValue(snapshot) }
@@ -256,7 +265,7 @@ class RemoteHostApi implements BrowserHostApi {
     const cached = this.historyCursors.get(sessionId)
     if (cached !== undefined) return cached
     const snapshot = this.activeEvents === undefined
-      ? await oneShotSessionSnapshot(this.gateway, sessionId, signal)
+      ? await oneShotSessionSnapshot(this.gateway, sessionId, signal, this.wirePeer.peer)
       : await this.activeEvents.openSessionHistory(sessionId, signal)
     this.noteHistoryCursor(sessionId, snapshot.cursor)
     const throughSeq = this.historyCursors.get(sessionId)
@@ -278,7 +287,7 @@ class RemoteHostApi implements BrowserHostApi {
     try {
       const controller = new AbortController()
       const signal = AbortSignal.any([call.signal, controller.signal])
-      const source = await openWireStream(this.gateway, 'workspace/follow', { args: {} }, signal)
+      const source = await openWireStream(this.gateway, 'workspace/follow', { args: {} }, signal, this.wirePeer.peer)
       const iterator = source[Symbol.asyncIterator]()
       try {
         const first = await iterator.next()

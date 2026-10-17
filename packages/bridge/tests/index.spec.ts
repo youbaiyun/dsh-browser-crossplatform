@@ -1,12 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
+import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { once } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { apply, assertPositiveInteger, buildVisionClient, BROWSER_PROMPT_MARKER_RULE, BROWSER_PROMPT_PREAMBLE, BROWSER_TASK_LIST_RULE, Config, DEFAULT_EXTENSION_IDS, resolveConfig, resolveVisionClient } from '../src/index.ts'
-import { VISION_MODEL } from '@dsh-browser/protocol'
+import { apply, assertPositiveInteger, buildVisionClient, BROWSER_PROMPT_MARKER_RULE, BROWSER_PROMPT_PREAMBLE, BROWSER_TASK_LIST_RULE, Config, DEFAULT_EXTENSION_IDS, DISCOVERY_PORTS, resolveConfig, resolveVisionClient, startDiscoveryListener } from '../src/index.ts'
+import type { BridgeServer } from '../src/server.ts'
+import { BRIDGE_CONFIG_PATH, BRIDGE_PATH, VISION_MODEL } from '@dsh-browser/protocol'
 
 /** 最小化的 context 桩：apply 在注册时只需要那几个 service。 */
 function stubContext(): Context {
@@ -70,7 +74,8 @@ describe('assertPositiveInteger', () => {
 })
 
 /** 合法的预算值（Loader 会套用 schema 默认值；手工构造的测试显式传入它们）。 */
-const VALID = { toolTimeoutMs: 90_000, snapshotMaxChars: 32_000, maxInteractiveItems: 60 }
+// `discoveryListener: false` 是测试专用的：apply 的用例不该真去绑 3080 那几个端口。
+const VALID = { toolTimeoutMs: 90_000, snapshotMaxChars: 32_000, maxInteractiveItems: 60, discoveryListener: false }
 
 /** 在配置 key 之前看图是关着的，所以它的默认值是无害的。 */
 const VISION_DEFAULTS = {
@@ -180,6 +185,10 @@ describe('config', () => {
       extensionId: DEFAULT_EXTENSION_IDS.join(','),
       ...VISION_DEFAULTS,
       ...LAUNCH_DEFAULTS,
+      // 默认在扩展探测的那几个固定端口上再开一个监听；关掉它，扩展就只能靠宿主端口
+      // 碰巧落进那份列表来连上。
+      discoveryListener: true,
+      discoveryPorts: [...DISCOVERY_PORTS],
     })
     expect(new Config().sessionWorkspacePath).toBe(dshHomePath('browser-sessions'))
     expect(new Config().sessionWorkspaceTitle).toBe('浏览器对话')
@@ -207,6 +216,8 @@ describe('config', () => {
       browserLaunchArgs: ['--no-first-run'],
       browserHeadless: true,
       browserLaunchTimeoutMs: 5_000,
+      discoveryListener: false,
+      discoveryPorts: [4_321],
     })).toEqual({
       token: 'fixed',
       toolTimeoutMs: 1,
@@ -229,6 +240,8 @@ describe('config', () => {
       browserLaunchArgs: ['--no-first-run'],
       browserHeadless: true,
       browserLaunchTimeoutMs: 5_000,
+      discoveryListener: false,
+      discoveryPorts: [4_321],
     })
     expect(new Config({ sessionWorkspacePath: '' }).sessionWorkspacePath).toBe('')
   })
@@ -327,9 +340,150 @@ describe('apply', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent registry'))
   })
 
+  it('waits for the gateway instead of throwing when dsh injects the services later', async () => {
+    // 新版 dsh 通过依赖注入暴露 gateway/connection，插件上下文里 `ctx.get` 可能先拿到
+    // undefined。原来这里直接 throw，插件于是静默不挂载——桌面端 web 服务上没有
+    // `/ext/bridge-config`，扩展只能显示「未连接」，用户和日志都看不到原因。
+    const ctx = stubContext()
+    const deps: string[][] = []
+    const callbacks: Array<() => void> = []
+    const realGateway = ctx.get('typertGateway')
+    const realConnection = ctx.get('connection')
+    let ready = false
+    ;(ctx as unknown as Record<string, unknown>).inject = (list: readonly string[], callback: () => void): void => {
+      deps.push([...list])
+      callbacks.push(callback)
+    }
+    ;(ctx as unknown as Record<string, unknown>).get = (key: string): unknown => {
+      if (key === 'typertGateway') return ready ? realGateway : undefined
+      if (key === 'connection') return ready ? realConnection : undefined
+      return undefined
+    }
+
+    const register = vi.spyOn(ctx.webServer, 'registerUpgrade')
+    await expect(apply(ctx, { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })).resolves.toBeUndefined()
+    // 没有抛错，而是声明了它需要的两个服务。
+    expect(deps[0]).toEqual(['typertGateway', 'connection'])
+    expect(register).not.toHaveBeenCalled()
+
+    // 宿主后来提供了服务 → 回调执行 → 桥接真的挂上。
+    ready = true
+    callbacks[0]!()
+    await vi.waitFor(() => { expect(register).toHaveBeenCalledTimes(1) })
+  })
+
   it('rejects invalid budgets loudly', async () => {
     await expect(apply(stubContext(), { ...VALID, toolTimeoutMs: 0 })).rejects.toThrow(/toolTimeoutMs/)
     await expect(apply(stubContext(), { ...VALID, snapshotMaxChars: -1 })).rejects.toThrow(/snapshotMaxChars/)
     await expect(apply(stubContext(), { ...VALID, snapshotMaxChars: 499 })).rejects.toThrow(/at least 500/)
+  })
+})
+
+/** 找一个当前空闲的端口，免得用例之间互相抢。 */
+async function freePort(): Promise<number> {
+  const probe = createHttpServer()
+  await new Promise<void>((done) => { probe.listen(0, '127.0.0.1', () => { done() }) })
+  const address = probe.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  await new Promise<void>((done) => { probe.close(() => { done() }) })
+  return port
+}
+
+describe('fixed-port discovery', () => {
+  it('serves the same discovery document and hands upgrades to the bridge', async () => {
+    const port = await freePort()
+    const handleUpgrade = vi.fn()
+    const warn = vi.fn()
+    const listener = startDiscoveryListener(
+      { handleUpgrade } as unknown as BridgeServer,
+      [port],
+      warn,
+    )
+    try {
+      await expect(listener.ready).resolves.toBe(true)
+      const response = await fetch(`http://127.0.0.1:${port}${BRIDGE_CONFIG_PATH}`)
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({
+        wsUrl: `ws://127.0.0.1:${port}${BRIDGE_PATH}`,
+      })
+
+      // 这个端口上只有发现端点，别的一律 404。
+      expect((await fetch(`http://127.0.0.1:${port}/api`)).status).toBe(404)
+
+      const socket = connect(port, '127.0.0.1')
+      await once(socket, 'connect')
+      socket.write(
+        `GET ${BRIDGE_PATH} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n`
+        + 'Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n'
+        + 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+        + `Origin: chrome-extension://${DEFAULT_EXTENSION_IDS[0]}\r\n\r\n`,
+      )
+      await vi.waitFor(() => { expect(handleUpgrade).toHaveBeenCalledTimes(1) })
+      socket.destroy()
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      await listener.close()
+    }
+
+    // 关闭后端口必须真的放回去，否则一次 dsh 重启就永久少一个发现端口。
+    const probe = createHttpServer()
+    await new Promise<void>((done, fail) => {
+      probe.once('error', fail)
+      probe.listen(port, '127.0.0.1', () => { done() })
+    })
+    await new Promise<void>((done) => { probe.close(() => { done() }) })
+  })
+
+  it('skips a taken port and uses the next one', async () => {
+    const first = await freePort()
+    let second = await freePort()
+    // 两次探测可能拿回同一个端口；那样就变成"全被占"，测不到"换下一个"。
+    while (second === first) second = await freePort()
+    const blocker = createHttpServer()
+    await new Promise<void>((done) => { blocker.listen(first, '127.0.0.1', () => { done() }) })
+    const warn = vi.fn()
+    const listener = startDiscoveryListener(
+      { handleUpgrade: vi.fn() } as unknown as BridgeServer,
+      [first, second],
+      warn,
+    )
+    try {
+      await expect(listener.ready).resolves.toBe(true)
+      const response = await fetch(`http://127.0.0.1:${second}${BRIDGE_CONFIG_PATH}`)
+      expect(response.status).toBe(200)
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      await listener.close()
+      await new Promise<void>((done) => { blocker.close(() => { done() }) })
+    }
+  })
+
+  it('rejects a port list it cannot bind rather than crashing the host', async () => {
+    const port = await freePort()
+    const blocker = createHttpServer()
+    await new Promise<void>((done) => { blocker.listen(port, '127.0.0.1', () => { done() }) })
+    const warn = vi.fn()
+    try {
+      const listener = startDiscoveryListener(
+        { handleUpgrade: vi.fn() } as unknown as BridgeServer,
+        [port],
+        warn,
+      )
+      await expect(listener.ready).resolves.toBe(false)
+      await listener.close()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('none of the discovery ports'))
+    } finally {
+      await new Promise<void>((done) => { blocker.close(() => { done() }) })
+    }
+  })
+
+  it('rejects a discovery port outside the valid range', () => {
+    expect(() => resolveConfig({ ...VALID, discoveryPorts: [0] })).toThrow(/discoveryPorts/)
+    expect(() => resolveConfig({ ...VALID, discoveryPorts: [70_000] })).toThrow(/discoveryPorts/)
+    expect(() => resolveConfig({ ...VALID, discoveryPorts: [1.5] })).toThrow(/discoveryPorts/)
+  })
+
+  it('keeps the extension probe list and the bridge default in step', () => {
+    expect([...DISCOVERY_PORTS]).toEqual([3080, 3081, 3090, 14389, 43189, 19387])
   })
 })

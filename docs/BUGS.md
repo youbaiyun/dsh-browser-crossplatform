@@ -520,6 +520,111 @@ if (!loopbackNoToken && !verifyToken(this.deps.token, frame.token)) {
 
 ---
 
+## BUG-006 — 桥接只挂在宿主的随机端口上，扩展永远探不到
+
+**状态**：已修（0.38.7）
+**首次发现**：2026-10-17，宿主端口 50966
+**影响**：扩展面板长期「未连接」；dsh 重启换了端口就复发
+
+### 症状
+
+- `http://127.0.0.1:50966/ext/bridge-config` 返回
+  `200 {"wsUrl":"ws://127.0.0.1:50966/ext/bridge"}`；
+- 扩展只探 `3080 / 3081 / 3090 / 14389 / 43189 / 19387`，六个端口全部 `ECONNREFUSED`；
+- 扩展设置里 `bridgeUrl` 是空字符串（自动发现开着），不是配置错了。
+
+### 根因
+
+发现端点只注册在宿主 webServer 上，而宿主端口每次启动都变（实测见过 19387、57342、
+60400、63571、50966）。扩展没有别的途径知道这次落在哪个端口上，只有撞上列表里的值才连得上。
+
+### 修复
+
+- `packages/bridge/src/index.ts`：按 `DISCOVERY_PORTS` 顺序绑第一个空闲端口，提供同一个
+  `/ext/bridge-config`，并把 `/ext/bridge` 的升级交给同一个 `BridgeServer`（认证与 Origin
+  白名单不复制一份）。全部端口被占时只记一条 warning，宿主端口那条路不受影响；
+- 端口表从两份副本收成一份：`packages/protocol/src/index.ts` 导出 `DISCOVERY_PORTS`，
+  bridge 与扩展都 import 它（测试仍然钉住具体数值，防的是有人无意改端口）；
+- 新配置 `discoveryListener`（默认开）与 `discoveryPorts`（默认与扩展列表一致）；
+- 「等服务就绪再挂载」的路径加了一次性守卫：依赖被替换时 inject 会重跑回调，不挡住就会把
+  同一条路由注册两遍。
+
+### 回归测试
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `packages/bridge/tests/index.spec.ts` → `fixed-port discovery > serves the same discovery document…` | 固定端口返回同一份文档、WS 升级交给 BridgeServer、关闭后端口真的释放 |
+| `… > skips a taken port and uses the next one` | 端口被占时换下一个 |
+| `… > rejects a port list it cannot bind rather than crashing the host` | 全被占时只告警，不抛 |
+| `… > keeps the extension probe list and the bridge default in step` | 桥接默认端口表与扩展探测表必须一致 |
+
+### 复核
+
+- `packages/bridge`：**263 passed**（+1 skipped），typecheck 通过；
+- `packages/protocol` 20 passed、`extension` 548 passed，无回归；
+- 构建后的 `lib/index.js` 在 3080 上起监听，实测 `/ext/bridge-config` 返回 200，关闭后释放端口；
+- **未验证**：运行中的桌面端要重启才会加载新的 `lib`，重启后的真实连接待确认。
+
+---
+
+## BUG-007 — Host 的 Remote 流没带 Peer，连上就断：`hello.ok` → `stream-failed` → WS 1011
+
+**状态**：已修（0.38.7）
+**首次发现**：2026-10-17，桌面端 0.2.x，扩展已能发现 3080
+**影响**：扩展反复重连、面板永远「未连接」；每次连接都在握手成功后立刻被关掉
+
+### 症状
+
+dsh 侧 `/ext/bridge-config` 已经在固定端口上返回 200，扩展也能连上，但连接一瞬间就断：
+
+```
+{"t":"hello.ok", ...}                                  ← 握手成功
+{"t":"error","code":"stream-failed",
+ "message":"TypeError: Cannot read properties of undefined (reading 'signal')"}
+WebSocket closed 1011 (event stream failed)            ← 立刻关掉
+```
+
+`Get-NetTCPConnection -LocalPort 3080` 会看到成百上千条 `TimeWait`：扩展在无限重连。
+
+### 根因
+
+dsh 0.2.x 的 `TypertGatewayWireStream.open(endpoint, payload, uplink, peer, signal)`
+在 `$events` 和 `session/follow` 里会读 `peer.signal` / `peer.principal` / `peer.interactions`。
+桥接的 `openWireStream` 一直把第四位传成 `undefined`，于是 Host 在 `openRemoteEvents` 里第一行就抛：
+
+```js
+const lifetime = AbortSignal.any([signal, registration.lifetime.signal, peer.signal])
+```
+
+（`packages/bridge/src/dsh-gateway.ts` 的注释其实早就写了这个症状，但只处理了参数个数，没处理 Peer。）
+
+### 修复
+
+- `packages/bridge/src/dsh-gateway.ts`：新增 `PeerLike` / `createWirePeer`；优先
+  `connection.createPeer({ principal: { kind: 'owner' } })`，旧宿主没有它时借用共享的
+  `connection.browserPeer`（借用不释放）；`openWireStream` 的第四位改为这个 Peer。
+- `packages/bridge/src/remote-host-api.ts`：适配器持有 Peer，`$events`、`session/follow`、
+  `workspace/follow` 全部带上它；新增 `dispose()` 只释放自己造的 Peer。
+- `packages/bridge/src/index.ts`：卸载时调用 `hostApi.dispose?.()`。
+- 顺带修 e2e：真实桌面端占了 3080 之后，测试桥接会顺延到 3081 与页面 server 撞车；现在跳过
+  `PAGE_PORT`，并把测试扩展的 `bridgeUrl` 钉到测试桥接，避免它去连真实的桌面端。
+
+### 回归测试
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `packages/bridge/tests/remote-host-api.spec.ts` → `hands the Connection Peer to $events…` | 五参数 open 收到的第四位就是 Peer；`dispose()` 释放它一次 |
+| `… > borrows the shared browser Peer when createPeer is absent…` | 回退到 `browserPeer`，且**不**释放借来的 Peer |
+| `tests/e2e/extension.e2e.spec.ts` | 真实浏览器 + 固定 `bridgeUrl` 的握手与工具调用 |
+
+### 复核
+
+- `packages/bridge`：**263 passed**（+1 skipped），typecheck 通过；
+- `packages/protocol` 20 passed、`extension` 548 passed，无回归；
+- **未验证**：这次同样要重启桌面端才会加载新 `lib`；重启后应看到连接稳定、`TimeWait` 不再暴涨。
+
+---
+
 ## 待补
 
 - `The controlled tab was closed.` 与 BUG-001 是否同源 —— 需要能区分「标签页真关了」和

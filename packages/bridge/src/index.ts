@@ -16,6 +16,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { createServer, type Server as HttpServer } from 'node:http'
+import type { Socket } from 'node:net'
 import { resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentRegistry } from '@deepseek-ai/dsh-agent'
@@ -37,6 +39,7 @@ import {
   BRIDGE_CONFIG_PATH,
   BRIDGE_PATH,
   DEFAULT_SNAPSHOT_MAX_CHARS,
+  DISCOVERY_PORTS,
   MIN_SNAPSHOT_MAX_CHARS,
 } from '@dsh-browser/protocol'
 import { withSessionDeferral } from './session-deferral.ts'
@@ -84,6 +87,18 @@ const SESSIONS_ROOT = dshHomePath('sessions')
 
 /** 默认：session 到第一条消息才真正创建（开了又关不留痕迹）。 */
 const DEFAULT_DEFER_SESSION_CREATE = true
+
+/**
+ * 扩展会去探测的固定端口，来自协议包（两端共用同一份）。
+ *
+ * **必须与 `extension/src/background/index.ts` 用同一个常量**：扩展不知道宿主这次
+ * 落在哪个端口上，只能挨个问这几个。dsh 每次启动都换随机端口（实测见过 19387、
+ * 57342、60400、63571、50966），所以桥接只挂在宿主端口上时，扩展只有在"碰巧等于
+ * 19387"的那几次才连得上——这就是「装上用不了」的真正来源。
+ *
+ * 这个监听与宿主端口并存：宿主那条照旧，扩展走这条。
+ */
+export { DISCOVERY_PORTS }
 
 /**
  * {@link Config.openPagesForUser} 的默认值。
@@ -285,6 +300,15 @@ export interface Config {
   browserHeadless?: boolean
   /** 启动后等扩展连上来的时长。默认 25000。 */
   browserLaunchTimeoutMs?: number
+  /**
+   * 是否在固定的发现端口上再开一个监听。默认开。
+   *
+   * dsh 每次启动都换随机端口，而扩展只认那几个固定端口；不额外监听，扩展就只能靠
+   * 「碰巧等于 19387」连上，这正是「装上用不了」的来源。
+   */
+  discoveryListener?: boolean
+  /** 发现监听依次尝试的端口，取第一个能绑上的。必须与扩展里那份列表一致。 */
+  discoveryPorts?: number[]
 }
 
 export const Config: z<Config> = z.object({
@@ -327,6 +351,10 @@ export const Config: z<Config> = z.object({
     .description('off 关闭思考块。纯识别任务里思考 token 比图片本身还贵。'),
   visionTimeoutMs: z.number().step(1).min(1).default(DEFAULT_VISION_TIMEOUT_MS)
     .description('单张图片识别的超时时间（毫秒）。'),
+  discoveryListener: z.boolean().default(true)
+    .description('是否额外在固定的发现端口上监听。dsh 每次启动都换随机端口，而扩展只探那几个固定端口；不额外监听，扩展就找不到桥接。'),
+  discoveryPorts: z.array(z.number().step(1).min(1).max(65535)).default([...DISCOVERY_PORTS])
+    .description('发现监听依次尝试的端口，取第一个空闲的。必须与扩展里的那份列表一致。'),
 })
 
 /** schemastery 给每个字段套上默认值之后的样子。 */
@@ -402,6 +430,8 @@ export function resolveConfig(config: Config): ResolvedConfig {
     browserLaunchArgs: config.browserLaunchArgs ?? [],
     browserHeadless: config.browserHeadless ?? false,
     browserLaunchTimeoutMs: config.browserLaunchTimeoutMs ?? DEFAULT_LAUNCH_TIMEOUT_MS,
+    discoveryListener: config.discoveryListener ?? true,
+    discoveryPorts: config.discoveryPorts ?? [...DISCOVERY_PORTS],
   }
   assertPositiveInteger('toolTimeoutMs', resolved.toolTimeoutMs)
   assertPositiveInteger('snapshotMaxChars', resolved.snapshotMaxChars)
@@ -413,6 +443,11 @@ export function resolveConfig(config: Config): ResolvedConfig {
   assertPositiveInteger('browserLaunchTimeoutMs', resolved.browserLaunchTimeoutMs)
   if (resolved.visionThinking !== 'off' && resolved.visionThinking !== 'low') {
     throw new Error("bridge-browser: visionThinking must be 'off' or 'low'")
+  }
+  for (const port of resolved.discoveryPorts) {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(`bridge-browser: discoveryPorts must be integers between 1 and 65535 (got ${String(port)})`)
+    }
   }
   return resolved
 }
@@ -522,12 +557,62 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
 
   const gateway = ctx.get('typertGateway') as unknown as GatewayCandidate | undefined
   const connection = ctx.get('connection') as unknown as HostConnectionLike | undefined
+  if (gateway !== undefined && hasRemoteWireStream(gateway) && connection !== undefined) {
+    // 服务已经就绪：原地挂载，保持同步语义（老宿主与测试都走这条）。
+    const tokenRes = await resolveToken(resolved.token)
+    // 在这里就解析，而不是留到 mount 里：读凭据是异步的，mount 不是。
+    const vision = await resolveVisionClient(ctx, resolved)
+    mountBridge(ctx, resolved, tokenRes, createRemoteHostApi(gateway, connection), vision)
+    return
+  }
+
+  // 服务还没就绪。新版 dsh 把 gateway/connection 放在**声明了依赖**的上下文里，插件
+  // 用 `ctx.get` 直接取可能拿到 `undefined`——原来的写法在这里直接 throw，结果是插件
+  // 静默不挂载：桌面端 web 服务上根本没有 `/ext/bridge-config`，扩展只能显示「未连接」，
+  // 用户看不到任何原因，日志里也没有一行。
+  //
+  // 所以改成声明依赖、等服务出现再挂。注入可用时优先走这条；老宿主没有 `inject` 时
+  // 仍然保留原来的明确报错，不把"版本不兼容"伪装成"等一会儿就好"。
+  const inject = (ctx as { inject?: (deps: readonly string[], callback: () => void) => unknown }).inject
+  if (typeof inject === 'function') {
+    ctx.logger.warn(
+      'browser bridge: waiting for the typertGateway/connection services; the bridge mounts as soon as dsh provides them',
+    )
+    let mounted = false
+    inject.call(ctx, ['typertGateway', 'connection'], () => {
+      // 依赖被替换时 inject 会再跑一次回调；桥接只能挂一次，否则同一条路由会注册两遍。
+      if (mounted) return
+      mounted = true
+      void mountWhenReady(ctx, resolved).catch((error: unknown) => {
+        ctx.logger.warn(`browser bridge: mounting failed: ${String(error)}`)
+      })
+    })
+    return
+  }
+
   if (gateway === undefined || !hasRemoteWireStream(gateway)) {
     throw new Error('bridge-browser: dsh 0.2.0-rc.1 or a compatible newer runtime is required (Gateway wireStream unavailable)')
   }
-  if (connection === undefined) throw new Error('bridge-browser: dsh connection service is required')
+  throw new Error('bridge-browser: dsh connection service is required')
+}
+
+/**
+ * 服务就绪之后真正挂载。与 {@link apply} 的就绪路径同义，只是多一层"还是拿不到就明说"。
+ *
+ * @param ctx - 插件上下文（已声明 typertGateway/connection 依赖）。
+ * @param resolved - 解析后的配置。
+ */
+async function mountWhenReady(ctx: Context, resolved: ResolvedConfig): Promise<void> {
+  const gateway = ctx.get('typertGateway') as unknown as GatewayCandidate | undefined
+  const connection = ctx.get('connection') as unknown as HostConnectionLike | undefined
+  if (gateway === undefined || !hasRemoteWireStream(gateway) || connection === undefined) {
+    // 声明了依赖还是拿不到：这次是真的不兼容，说出来别静默。
+    ctx.logger.warn(
+      'browser bridge: dsh never provided a usable typertGateway (wireStream) and connection; the bridge will not mount',
+    )
+    return
+  }
   const tokenRes = await resolveToken(resolved.token)
-  // 在这里就解析，而不是留到 mount 里：读凭据是异步的，mount 不是。
   const vision = await resolveVisionClient(ctx, resolved)
   mountBridge(ctx, resolved, tokenRes, createRemoteHostApi(gateway, connection), vision)
 }
@@ -648,6 +733,8 @@ function mountBridge(
   ctx.effect(() => ctx.webServer.registerUpgrade(route), 'bridge-browser: /ext/bridge upgrade route')
   // 异步 disposer：HMR/卸载时先等 bridge 完全关掉（socket、泵、acceptor 都静下来）再走。
   ctx.effect(() => () => server.close(), 'bridge-browser: bridge server')
+  // 适配器自己造的 Peer 要跟着卸载一起释放；借用共享 Peer 时这里是空操作。
+  ctx.effect(() => () => hostApi.dispose?.(), 'bridge-browser: host peer')
 
     // 零配置的发现端点：扩展抓一次就知道 bridge 的 WebSocket URL，
   // 不用任何手工配置。这个 URL 不带任何秘密（loopback 连接会跳过
@@ -661,6 +748,19 @@ function mountBridge(
     },
   }
   ctx.effect(() => ctx.webServer.register(configRoute), 'bridge-browser: /ext/bridge-config route')
+
+  // 固定端口上的同一个发现端点。宿主端口每次启动都变，扩展只能挨个问这几个固定端口。
+  // 失败只记日志：发现端口绑不上时，宿主端口那条路仍然可用（比如用户用 CLI 启动 dsh）。
+  if (resolved.discoveryListener) {
+    ctx.effect(() => {
+      const discovery = startDiscoveryListener(
+        server,
+        resolved.discoveryPorts,
+        message => { ctx.logger.warn(message) },
+      )
+      return () => discovery.close()
+    }, 'bridge-browser: fixed-port discovery listener')
+  }
 
   ctx.effect(() => {
     const detectedExtension = resolveExtensionPath(resolved.extensionPath)
@@ -723,6 +823,128 @@ function mountBridge(
   if (vision !== undefined && resolved.visionThinking === 'off') {
     checkThinkingIsOff(vision, (message) => { ctx.logger.warn(message) })
   }
+}
+
+/** 发现监听只绑 loopback：需要它的只有本机的扩展。 */
+const DISCOVERY_HOST = '127.0.0.1'
+
+/**
+ * 固定端口上的发现监听。
+ *
+ * `ready` 在监听真正建立（或确定失败）之后兑现；挂载路径不等它，扩展自己会重试。
+ * `close` 幂等，并会释放端口。
+ */
+export interface DiscoveryListener {
+  /** 是否真的绑上了一个端口。 */
+  readonly ready: Promise<boolean>
+  /** 关闭监听并释放端口。 */
+  close(): Promise<void>
+}
+
+/**
+ * 在固定端口上再开一个最小监听，服务同一个发现端点与 WS 升级。
+ *
+ * 只做两件事：`GET /ext/bridge-config` 返回本端口的 `wsUrl`；`/ext/bridge` 的升级交给
+ * 同一个 {@link BridgeServer}（认证和 Origin 白名单都在那里）。端口按顺序尝试，绑不上
+ * 就换下一个；全部被占时只记一条日志，宿主端口上那条路不受影响。
+ *
+ * @param server - 已经建好的 bridge。
+ * @param ports - 依次尝试的端口。
+ * @param warn - 失败时写日志的回调。
+ * @returns 监听句柄。
+ */
+export function startDiscoveryListener(
+  server: BridgeServer,
+  ports: readonly number[],
+  warn: (message: string) => void,
+): DiscoveryListener {
+  const sockets = new Set<Socket>()
+  let bound: HttpServer | undefined
+  let disposed = false
+
+  const ready = bindFirstFreePort(server, ports, sockets, warn).then((listening) => {
+    if (listening === undefined) return false
+    if (disposed) {
+      listening.close()
+      for (const socket of sockets) socket.destroy()
+      sockets.clear()
+      return false
+    }
+    bound = listening
+    return true
+  })
+
+  return {
+    ready,
+    async close() {
+      disposed = true
+      await ready
+      const listening = bound
+      bound = undefined
+      if (listening === undefined) return
+      for (const socket of sockets) socket.destroy()
+      sockets.clear()
+      await new Promise<void>((resolveClosed) => { listening.close(() => { resolveClosed() }) })
+    },
+  }
+}
+
+/** 依次试端口，返回第一个绑上的监听；一个都绑不上时返回 undefined。 */
+async function bindFirstFreePort(
+  server: BridgeServer,
+  ports: readonly number[],
+  sockets: Set<Socket>,
+  warn: (message: string) => void,
+): Promise<HttpServer | undefined> {
+  for (const port of ports) {
+    try {
+      return await listenDiscoveryPort(server, port, sockets, warn)
+    } catch (error) {
+      // 端口被别的程序占着是正常情况（3080 常常是 dsh CLI 自己），换下一个。
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') continue
+      warn(`browser bridge: cannot listen on discovery port ${port}: ${String(error)}`)
+    }
+  }
+  warn(
+    `browser bridge: none of the discovery ports (${ports.join(', ')}) is available; `
+      + 'the extension can only connect when the desktop web port happens to be one of them',
+  )
+  return undefined
+}
+
+/** 绑定一个发现端口：成功返回监听，失败抛错。 */
+function listenDiscoveryPort(
+  server: BridgeServer,
+  port: number,
+  sockets: Set<Socket>,
+  warn: (message: string) => void,
+): Promise<HttpServer> {
+  return new Promise<HttpServer>((resolveListen, rejectListen) => {
+    const http = createServer((req, res) => {
+      if (req.method === 'GET' && req.url === BRIDGE_CONFIG_PATH) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ wsUrl: `ws://${DISCOVERY_HOST}:${port}${BRIDGE_PATH}` }))
+        return
+      }
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end('not found')
+    })
+    http.on('upgrade', (req, socket, head) => {
+      if (req.url === BRIDGE_PATH) server.handleUpgrade(req, socket, head)
+      else socket.destroy()
+    })
+    http.on('connection', (socket) => {
+      sockets.add(socket)
+      socket.on('close', () => { sockets.delete(socket) })
+    })
+    http.once('error', rejectListen)
+    http.listen(port, DISCOVERY_HOST, () => {
+      http.off('error', rejectListen)
+      // 监听之后只剩运行期错误；记一行就好，别让宿主跟着炸。
+      http.on('error', (error) => { warn(`browser bridge: discovery listener failed: ${String(error)}`) })
+      resolveListen(http)
+    })
+  })
 }
 
 type GatewayCandidate = Pick<TypertGatewayLike, 'invoke'> & {

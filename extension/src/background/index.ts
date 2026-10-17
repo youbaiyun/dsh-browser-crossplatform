@@ -24,6 +24,7 @@
 import {
   BRIDGE_CONFIG_PATH,
   BRIDGE_PATH,
+  DISCOVERY_PORTS,
   VISION_MODEL,
   type BridgeCaps,
   type ServerFrame,
@@ -87,14 +88,8 @@ const TAB_AFFINITY_REBIND_TIMEOUT_MS = 10_000
 const LEGACY_RECENT_SESSION_STORAGE_KEY = 'dshRecentSessions'
 const LEGACY_LOCAL_URL = 'ws://127.0.0.1:3080'
 
-/**
- * 桌面 dsh 可能监听的本地端口：3080 是 CLI 的默认值，
- * 桌面应用则把自己的 loopback Web 端口写在设置里
- * （43189 是有文档记录的选择，19387 是实际环境里见到的值）。
- * 用户显式指定了 `bridgeUrl` 时，整份列表都会被跳过。
- */
-const DISCOVERY_PORTS = [3080, 3081, 3090, 14389, 43189, 19387]
-
+// `DISCOVERY_PORTS` 来自协议包：桌面端在同样的端口上监听，两边只有这一份列表。
+// 用户显式指定了 `bridgeUrl` 时，整份列表都会被跳过。
 let settings: Settings = { ...SETTINGS_DEFAULTS }
 let caps: BridgeCaps | null = null
 

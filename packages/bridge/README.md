@@ -5,7 +5,7 @@ token-authenticated WebSocket bridge on the desktop app's own webserver, exposes
 `browser_*` tools to the model, and relays image recognition to the model the user
 configured.
 
-Published as **`dsh-browser-crossplatform@0.38.6`**. Part of
+Published as **`dsh-browser-crossplatform@0.38.7`**. Part of
 [dsh-browser-crossplatform](https://github.com/youbaiyun/dsh-browser-crossplatform).
 Install it into a dsh profile rather than by hand:
 

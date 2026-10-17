@@ -22,7 +22,7 @@
 | **离线包**（自己加载 / 商店上传用）    | [Releases](https://github.com/youbaiyun/dsh-browser-crossplatform/releases) 里的两个 zip                                    |
 
 ```sh
-# 从 npm 装（已发布：dsh-browser-crossplatform@0.38.6）：
+# 从 npm 装（已发布：dsh-browser-crossplatform@0.38.7）：
 dsh plugin --profile desktop add dsh-browser-crossplatform   # 命令行版 dsh web 用 --profile web
 
 # 或者直接从这个仓库装，不经过 npm：
@@ -33,9 +33,9 @@ dsh plugin --profile desktop add link:<clone>/packages/bridge
 **一步步的傻瓜式步骤（含"怎么确认装好了"）见 [docs/INSTALL.md](docs/INSTALL.md)。**
 
 扩展本体从浏览器商店安装（或按下面的构建一节自行加载未打包版本）；上面的包是桌面端那一半，  
-插件设置页就在 dsh 里，标题是「dsh 浏览器扩展（全平台）的桌面端一半」。
+插件设置页就在 dsh 里，标题是「dsh 浏览器设置」。
 
-## 结构（五个包同一个版本号 `0.38.6`）
+## 结构（五个包同一个版本号 `0.38.7`）
 
 ```
 packages/protocol   零依赖的线上协议（帧校验、能力/授权分离）
@@ -74,7 +74,7 @@ Firefox for Android 没有侧边栏这种界面；而且桥接**在关键处只�
 
 | 维度         | 原版                                                                        | 本版                                                                                                                                                                                                 |
 | ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 版本         | 根 0.2.1 / 扩展 0.3.1 / 桥 0.0.7 各自漂移                                         | 统一 `0.38.6` —— 根包、协议、桥接、扩展与两个 manifest 全一致                                                                                                                                                         |
+| 版本         | 根 0.2.1 / 扩展 0.3.1 / 桥 0.0.7 各自漂移                                         | 统一 `0.38.7` —— 根包、协议、桥接、扩展与两个 manifest 全一致                                                                                                                                                         |
 | Node       | `^22.19 \|\| >=24`                                                        | `>=20`                                                                                                                                                                                             |
 | TypeScript | 扩展 5.6 与桥 6.0 分裂                                                          | 单一工具链：扩展声明 `^5.6`、桥与协议声明 `^5.7`，lockfile 只解析出一个已安装版本                                                                                                                                               |
 | 依赖         | 根包 35 个 `@deepseek-ai/*`（RC）、node_modules 600MB                           | 根包 **0 个** dsh 依赖（它的 typecheck/测试是纯 Node + 自带 tsc）；桥只有 `ws` 与 `@deepseek-ai/schemastery` 两个运行时依赖，dsh 全声明为 `peerDependencies`（运行时 `ctx.get()` 探测宿主，不内嵌）；扩展只有 `marked` + `dompurify` 两个面板依赖，且都打进面板产物 |

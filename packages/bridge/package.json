@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser-crossplatform",
-  "version": "0.38.6",
+  "version": "0.38.7",
   "description": "dsh 浏览器扩展（全平台）的桌面端一半：把浏览器扩展连到 dsh，提供 browser_* 工具，并在需要时替你识别页面上的图片。这是它的全部配置项。",
   "license": "MIT",
   "type": "module",

@@ -5,7 +5,7 @@
  * @module dsh-browser-crossplatform/src/session-history
  */
 
-import { openWireStream, type TypertGatewayLike } from './dsh-gateway.ts'
+import { openWireStream, type PeerLike, type TypertGatewayLike } from './dsh-gateway.ts'
 import { isRecord } from './host-api.ts'
 
 export interface SessionSnapshot {
@@ -22,6 +22,7 @@ export async function oneShotSessionSnapshot(
   gateway: TypertGatewayLike,
   sessionId: string,
   outerSignal: AbortSignal,
+  peer: PeerLike | undefined,
   maxMessages?: number,
 ): Promise<SessionSnapshot> {
   const controller = new AbortController()
@@ -38,6 +39,7 @@ export async function oneShotSessionSnapshot(
       },
     },
     signal,
+    peer,
   )
   const iterator = source[Symbol.asyncIterator]()
   try {

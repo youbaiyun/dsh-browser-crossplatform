@@ -95,11 +95,18 @@ function launchOptions(): LaunchPersistentContextOptions {
  * 这里必须先播种设置的原因。在同一次启动期间播种行不通：worker 在启动时只读一次
  * 设置，而一次 reload 会让它完全没有 worker。
  */
-async function seedSettings(profileDir: string): Promise<void> {
+/**
+ * 写扩展设置。
+ *
+ * @param profileDir - 一次性浏览器 profile。
+ * @param bridgeUrl - 本次测试的桥接地址。必须显式给出：开发机上真实的 dsh 桌面端也会
+ *   在 3080 上应答发现请求，扩展会先连上它，而不是这里的测试桥接。
+ */
+async function seedSettings(profileDir: string, bridgeUrl: string): Promise<void> {
   const context = await chromium.launchPersistentContext(profileDir, launchOptions())
   try {
     const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker', { timeout: 30_000 })
-    await worker.evaluate(async () => {
+    await worker.evaluate(async (url) => {
       const stored = await chrome.storage.local.get('dshSettings')
       const current = typeof stored.dshSettings === 'object' && stored.dshSettings !== null
         ? stored.dshSettings as Record<string, unknown>
@@ -107,6 +114,7 @@ async function seedSettings(profileDir: string): Promise<void> {
       await chrome.storage.local.set({
         dshSettings: {
           ...current,
+          bridgeUrl: url,
           visionTier: 'standard',
           sharePageContent: 'auto',
           // 否则来自 bridge 的工具调用会一直等一个没有测试能答的审批，而面板
@@ -115,7 +123,7 @@ async function seedSettings(profileDir: string): Promise<void> {
           autoOpenPanel: false,
         },
       })
-    })
+    }, bridgeUrl)
   } finally {
     await context.close()
   }
@@ -235,6 +243,9 @@ beforeAll(async () => {
   // socket 会变成一个 60 秒的“连不上”失败，而那个失败对原因只字不提。
   let boundPort = 0
   for (const candidate of DISCOVERY_PORTS) {
+    // PAGE_PORT 是给下面那个页面 server 的：桥接一旦占了它，两边的 listen 就必然有一个失败。
+    // 真实桌面端占住 3080 之后，这里会顺延到 3081——所以必须跳过，而不是靠运气。
+    if (candidate === PAGE_PORT) continue
     try {
       await new Promise<void>((resolveListen, rejectListen) => {
         const onError = (error: Error): void => { rejectListen(error) }
@@ -259,7 +270,7 @@ beforeAll(async () => {
 
   profile = await mkdtemp(join(tmpdir(), 'dsh-browser-extension-e2e-'))
   try {
-    await seedSettings(profile)
+    await seedSettings(profile, `ws://127.0.0.1:${String(boundPort)}/ext/bridge`)
     browser = await chromium.launchPersistentContext(profile, launchOptions())
   } catch (error: unknown) {
     console.warn(`SKIP: no browser that loads unpacked extensions is available (${String(error)})`)

@@ -1,6 +1,6 @@
 {
   "name": "dsh-browser",
-  "version": "0.38.6",
+  "version": "0.38.7",
   "description": "Text-only browser control for the dsh desktop app: an MV3 extension plus its bridge plugin.",
   "private": true,
   "license": "MIT",

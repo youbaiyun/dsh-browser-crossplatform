@@ -1,6 +1,6 @@
 {
   "name": "@dsh-browser/protocol",
-  "version": "0.38.6",
+  "version": "0.38.7",
   "description": "Zero-dependency wire contract shared by the bridge plugin and the browser extension.",
   "private": true,
   "type": "module",

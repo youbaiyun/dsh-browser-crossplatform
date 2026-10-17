@@ -3,7 +3,7 @@
   "name": "__MSG_extensionName__",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
-  "version": "0.38.6",
+  "version": "0.38.7",
   "browser_specific_settings": {
     "gecko": {
       "id": "dsh-browser-extension@youbaiyun.github.io",

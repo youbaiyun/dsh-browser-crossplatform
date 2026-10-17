@@ -41,6 +41,8 @@ export interface BrowserHostApi {
   call(call: HostRpcCall): Promise<HostRpcResult>
   events(signal: AbortSignal): AsyncIterable<HostEventFrame>
   respond(rpcId: string, result: RespondResult, signal: AbortSignal): Promise<unknown>
+  /** 释放适配器自己创建的资源（Peer）；旧实现可以没有。 */
+  dispose?(): Promise<void>
 }
 
 /** 把任何 Host 拒绝都转换成开放的 wire 失败词汇。 */

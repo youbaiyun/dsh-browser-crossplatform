@@ -4,6 +4,7 @@ import {
   type HostConnectionLike,
   type TypertGatewayLike,
 } from '../src/remote-host-api.ts'
+import type { PeerLike } from '../src/dsh-gateway.ts'
 import type { HostRpcCall } from '../src/host-api.ts'
 
 function call(method: string, payload: unknown, rpcId = 'rpc-1'): HostRpcCall {
@@ -19,6 +20,8 @@ function harness(options: {
   invoke?: TypertGatewayLike['invoke']
   open?: TypertGatewayLike['wireStream']['open']
   fetch?: (request: Request) => Promise<Response>
+  peer?: PeerLike
+  browserPeer?: PeerLike
 } = {}) {
   const invoke = vi.fn(options.invoke ?? (async () => ({ accepted: true })))
   const open = vi.fn(options.open ?? (async (_endpoint, _payload, _uplink, _peer, signal) => ({
@@ -46,6 +49,8 @@ function harness(options: {
   }
   const connection: HostConnectionLike = {
     createSharedFetchHandler: () => ({ fetch }),
+    ...(options.peer === undefined ? {} : { createPeer: vi.fn(() => options.peer as PeerLike) }),
+    ...(options.browserPeer === undefined ? {} : { browserPeer: options.browserPeer }),
   }
   return { api: createRemoteHostApi(gateway, connection), invoke, open, fetch, requestBodies }
 }
@@ -99,6 +104,59 @@ describe('dsh 0.2 Remote Host adapter', () => {
     controller.abort()
     await pending.catch(() => undefined)
     expect(open.mock.calls[0]?.[4]).toBeInstanceOf(AbortSignal)
+  })
+
+  it('hands the Connection Peer to $events, because the Host reads peer.signal', async () => {
+    // 没有这个 Peer 时，Host 的 openRemoteEvents 会抛
+    // `Cannot read properties of undefined (reading 'signal')`，桥接随即以 1011 关掉 socket，
+    // 扩展就会一直重连、面板永远停在「未连接」。
+    const dispose = vi.fn()
+    const peer = {
+      signal: new AbortController().signal,
+      principal: { kind: 'owner' },
+      interactions: 'answer',
+      dispose,
+    }
+    const open = vi.fn(async (_endpoint: string, _payload: unknown, _uplink: AsyncIterable<unknown>, seen: unknown, signal: AbortSignal) => {
+      expect(seen).toBe(peer)
+      return { async *[Symbol.asyncIterator]() { yield { type: 'ready', clientId: 'test', host: {} }; await abortWait(signal) } }
+    })
+    const { api } = harness({ open, peer })
+    const controller = new AbortController()
+    const iterator = api.events(controller.signal)[Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await vi.waitFor(() => expect(open).toHaveBeenCalled())
+    expect(open.mock.calls[0]?.[3]).toBe(peer)
+    controller.abort()
+    await pending.catch(() => undefined)
+    await api.dispose?.()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('borrows the shared browser Peer when createPeer is absent, and never disposes it', async () => {
+    // 旧一点的 0.2.x 只暴露共享的 browserPeer。那是连接服务的东西，插件只能借，
+    // 卸载时释放它会把整台桌面的浏览器连接一起踢掉。
+    const dispose = vi.fn()
+    const browserPeer = {
+      signal: new AbortController().signal,
+      principal: { kind: 'owner' },
+      interactions: 'answer',
+      dispose,
+    }
+    const open = vi.fn(async (_endpoint: string, _payload: unknown, _uplink: AsyncIterable<unknown>, seen: unknown, signal: AbortSignal) => {
+      expect(seen).toBe(browserPeer)
+      return { async *[Symbol.asyncIterator]() { yield { type: 'ready', clientId: 'test', host: {} }; await abortWait(signal) } }
+    })
+    const { api } = harness({ open, browserPeer })
+    const controller = new AbortController()
+    const iterator = api.events(controller.signal)[Symbol.asyncIterator]()
+    const pending = iterator.next()
+    await vi.waitFor(() => expect(open).toHaveBeenCalled())
+    expect(open.mock.calls[0]?.[3]).toBe(browserPeer)
+    controller.abort()
+    await pending.catch(() => undefined)
+    await api.dispose?.()
+    expect(dispose).not.toHaveBeenCalled()
   })
   it('preserves V3 durable streams and orders reconnect baselines before transient frames without advancing the durable cursor', async () => {
     const baseline = {
