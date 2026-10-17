@@ -35,11 +35,11 @@ describe('normalizeTrustedOrigin', () => {
     expect(normalizeTrustedOrigin('https://*.example.com/path')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://*.localhost')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://user:pass@*.example.com')).toBeUndefined()
-    // A bare public suffix is not a domain anyone controls. It is still accepted
-    // as a wildcard root because the extension deliberately ships no public
-    // suffix list (it cost ~100 KB of the control strip): `*.co.uk` covers only
-    // `co.uk` itself and its own subdomains, which is exactly what the user
-    // typed, and Chrome hands `co.uk` to its registry anyway.
+    // 光秃秃的公共后缀不是任何人能控制的域名。它仍被接受为
+    // 通配根，因为扩展刻意不内置公共后缀表
+    //（那要占掉控制条约 100 KB）：`*.co.uk` 只覆盖
+    // `co.uk` 本身和它自己的子域，而这正是用户
+    // 输入的东西，何况 Chrome 本来就会把 `co.uk` 交给注册局。
     expect(normalizeTrustedOrigin('https://*.co.uk')).toBe('https://*.co.uk')
   })
 
@@ -50,8 +50,8 @@ describe('normalizeTrustedOrigin', () => {
   })
 
   it('keeps a multi-label host out of the single-label wildcard case', () => {
-    // `*.com` would cover every .com site; the two-label rule refuses it while
-    // still accepting an ordinary two-label domain.
+    // `*.com` 会覆盖所有 .com 站点；双标签规则拒了它，
+    // 同时又仍接受普通的双标签域名。
     expect(normalizeTrustedOrigin('https://*.com')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://*.127.0.0.1')).toBeUndefined()
     expect(normalizeTrustedOrigin('https://*.example.com')).toBe('https://*.example.com')

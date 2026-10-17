@@ -4,15 +4,15 @@ import { WAIT_MAX_BUDGET_MS, runAction } from '../src/content/actions.ts'
 import type { ElementIds } from '../src/content/ids.ts'
 
 /**
- * The two capabilities whose *schema* existed long before their implementation:
- * filling a `<select>` or a checkbox/radio through `browser_type`, and waiting on
- * a `browser_wait` condition.
+ * 这两项能力的 *schema* 早就在了，实现却晚得多：
+ * 通过 `browser_type` 填 `<select>` 或复选框/单选按钮，以及等一个
+ * `browser_wait` 条件。
  *
- * Both are advertised to the model in `packages/bridge/src/tools.ts`, so a model
- * that follows the description reaches for them. Until these tests, the select
- * case threw `is not editable`, the checkbox branch wrote into `.value`, and a
- * wait condition was silently ignored — success reported for something that never
- * happened.
+ * 两者都在 `packages/bridge/src/tools.ts` 里向模型声明过，所以照着描述
+ * 行事的模型就会去用它们。在这些测试出现之前，select
+ * 分支会抛 `is not editable`，复选框分支会往 `.value` 里写，而
+ * wait 条件被悄悄忽略——对从没发生过的事情
+ * 报告成功。
  */
 
 const BUDGET = { maxItems: 20, maxForms: 10, maxChars: 2_000 }
@@ -73,7 +73,7 @@ describe('browser_type on a <select>', () => {
 
   it('lists the available options when nothing matches, instead of a dead end', async () => {
     const el = select()
-    // The labels are what make the list usable: `1. a` alone says nothing.
+    // 有标签这份列表才可用：只有 `1. a` 什么也说明不了。
     await expect(runAction('browser_type', { index: 1, text: 'nope' }, { ids: idsFor(el), budget: BUDGET }))
       .rejects.toThrow(/no option matching "nope".*Alpha.*Gamma/su)
   })
@@ -139,8 +139,8 @@ describe('browser_wait conditions', () => {
   })
 
   it('fails with the timeout code when the selector never appears', async () => {
-    // The whole point of a condition: "it never showed up" must not be reported
-    // as success, or the model waits forever on a page that will not change.
+    // 条件的全部意义就在这里：绝不能把「它一直没出现」报
+    // 成成功，否则模型会永远守在一个不会变化的页面上。
     await expect(runAction('browser_wait', { selector: '#never', ms: 300 }, context()))
       .rejects.toMatchObject({ code: 'timeout' })
   })
@@ -156,8 +156,8 @@ describe('browser_wait conditions', () => {
   })
 
   it('matches text after the same whitespace collapse the page text gets', async () => {
-    // `pageText` turns every whitespace run into a single space, so a needle with a
-    // newline or a double space in it could never match without the same treatment.
+    // `pageText` 会把每一段连续空白折成一个空格，所以带换行或
+    // 双空格的 needle 不做同样处理就永远匹配不上。
     const target = append(document.createElement('p'))
     target.textContent = 'Order confirmed'
     const result = await runAction('browser_wait', { text: 'Order\n  confirmed', ms: 2_000 }, context())
@@ -165,9 +165,9 @@ describe('browser_wait conditions', () => {
   })
 
   it('bounds the caller-supplied budget, so a wait cannot hold the slot forever', () => {
-    // Asserted on the constant rather than by waiting: an `ms` of `1e999` parses to
-    // Infinity through JSON, and the clamp is what stops that becoming a poll that
-    // never ends. Exercising it for real would mean a 60-second test.
+    // 断言那个常量，不靠等待：`1e999` 这样的 `ms` 经 JSON 解析会得到
+    // Infinity，钳制就是为了不让它变成一个永不结束的
+    // 轮询。真跑一遍就意味着一个 60 秒的测试。
     expect(WAIT_MAX_BUDGET_MS).toBe(60_000)
     expect(WAIT_MAX_BUDGET_MS).toBeLessThan(90_000)
   })

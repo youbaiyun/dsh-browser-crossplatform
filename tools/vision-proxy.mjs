@@ -1,26 +1,22 @@
 /**
- * A loopback pass-through for image recognition, so the extension can call a cloud
- * endpoint without a manifest change.
+ * 图像识别的回环透传代理，让扩展无需改动 manifest 就能调用云端端点。
  *
- * The extension's pages may only reach hosts listed in the manifest's
- * `content_security_policy.connect-src`, and that policy allows loopback —
- * `ws://127.0.0.1:*` and `http://127.0.0.1:*`, plain http only. Pointing the
- * extension at this proxy therefore needs no manifest edit, keeps the provider key
- * out of extension storage, and makes the provider's latency visible, which is the
- * number a recognition call is actually made of.
+ * 扩展的页面只能访问 manifest 的 `content_security_policy.connect-src` 里列出的主机，
+ * 而该策略允许回环地址——`ws://127.0.0.1:*` 和 `http://127.0.0.1:*`，且仅限明文 http。
+ * 因此把扩展指向这个代理既不用改 manifest，又能把提供方的 key 挡在扩展存储之外，
+ * 还让提供方的延迟变得可见——而一次识别调用真正取决于的正是这个数字。
  *
- * It forwards one shape only — `POST …/chat/completions` — because that is the only
- * request the extension makes. Anything else is refused rather than guessed at.
+ * 它只转发一种形状 —— `POST …/chat/completions` —— 因为扩展只发这一种请求。
+ * 其他请求一律拒绝，而不是靠猜。
  *
- * Nothing is logged but sizes, timings and status: request bodies carry the user's
- * images, and a proxy that prints them would put them in a terminal scrollback and
- * in whatever collects it.
+ * 日志除了大小、耗时和状态什么都不记：请求体里带着用户的图片，一个把它们打印出来的
+ * 代理，就等于把这些图片留在终端回滚缓冲区和任何收集它的地方。
  *
- * Usage:
+ * 用法：
  *   VISION_UPSTREAM=https://api.example.com/v1 VISION_KEY=sk-... \
  *     node tools/vision-proxy.mjs
  *
- * Then set the panel's cloud address to http://127.0.0.1:8080/v1
+ * 然后把面板的云端地址设为 http://127.0.0.1:8080/v1
  */
 
 import { createServer } from 'node:http'
@@ -35,7 +31,7 @@ if (UPSTREAM === '') {
   process.exit(2)
 }
 
-/** Read a request body with a hard cap, so a stray upload cannot exhaust memory. */
+/** 读取请求体时强制加上限，这样一个跑偏的上传无法耗尽内存。 */
 async function readBody(request, limit = 32 * 1024 * 1024) {
   const chunks = []
   let size = 0
@@ -76,8 +72,8 @@ const server = createServer((request, response) => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          // The proxy's key wins when it has one, so the extension can leave the
-          // key field empty and keep the secret out of its storage.
+          // 代理自己有 key 时以它为准，这样扩展可以把 key 字段留空，
+          // 把密钥挡在自己的存储之外。
           authorization: `Bearer ${KEY === '' ? (request.headers.authorization ?? '').replace(/^Bearer /, '') : KEY}`,
         },
         body: body.buffer,

@@ -1,112 +1,103 @@
 /**
- * Image inventory: which images a page has, where they are, and whether their
- * text alternatives already describe them.
+ * 图片清单：页面里有哪些图片、在哪儿，以及它们的文本替代是不是已经把内容说清楚了。
  *
- * The snapshot is text, so an image is otherwise invisible to the model — not
- * "hard to read", simply absent: `innerText`/`textContent` never include `alt`,
- * and the interactive selector does not match `img`. This module makes each
- * image a numbered, clickable, textually-annotated entry instead.
+ * 快照是纯文本，图片对模型本来就不存在——不是“难读”，而是根本没有：
+ * `innerText`/`textContent` 从不包含 `alt`，交互选择器也不匹配 `img`。
+ * 这个模块把每张图片变成一条带编号、可点击、带文本标注的条目。
  *
- * Two consequences are deliberate:
+ * 有两个后果是刻意为之：
  *
- * - Elements are returned so the caller can put them in the same id registry as
- *   interactive elements. That is what makes `[i12]` clickable without any
- *   coordinate math — the model addresses an image the same way it addresses a
- *   button, and positioning never depends on a model's pixel estimates.
- * - `textDescribed` records that the DOM already answers "what is this?" (alt,
- *   `aria-label`, `title`, `<figcaption>`, `<svg><text>`). Those images are
- *   still listed, because knowing one exists is useful, but they must not be
- *   sent for recognition: the answer is already in the text, and a model call
- *   would only add cost and a chance to contradict it.
+ * - 返回的是元素，调用方才能把它们放进和交互元素同一个 id 注册表。正因如此
+ *   `[i12]` 不用算任何坐标就能点——模型寻址图片和寻址按钮是一个路子，
+ *   定位也从不依赖模型的像素估算。
+ * - `textDescribed` 记的是 DOM 已经回答了“这是什么？”（alt、`aria-label`、
+ *   `title`、`<figcaption>`、`<svg><text>`）。这些图片照样列出来，
+ *   因为知道这儿有张图是有用的，但绝不能把它们送去识别：答案已经在文本里，
+ *   多一次模型调用只会多花钱，还多一次跟答案打架的机会。
  *
  * @module
  */
 
 import { isVisible, truncate } from './extract.ts'
 
-/** How an image was found, which decides how it can be read later. */
+/** 图片是怎么被发现的，这决定了以后能怎么读它。 */
 export type ImageKind = 'img' | 'background' | 'svg' | 'poster'
 
-/** One image found on the page. */
+/** 页面上发现的一张图片。 */
 export interface ImageCandidate {
-  /** The element that carries the image (the click target). */
+  /** 装着这张图片的元素（也就是点击目标）。 */
   element: Element
   kind: ImageKind
-  /** Best known absolute URL, or '' when the image has no fetchable address. */
+  /** 已知的最佳绝对 URL，图片没有可取地址时为 ''。 */
   src: string
-  /** Rendered (or intrinsic) size in CSS pixels; 0 when unmeasurable. */
+  /** CSS 像素的渲染尺寸（或固有尺寸）；量不出来时为 0。 */
   width: number
   height: number
-  /** alt / aria-label / title text, when present. */
+  /** alt / aria-label / title 文本，有的话。 */
   label: string
-  /** Short nearby text (caption or adjacent copy) for context. */
+  /** 用来做上下文的简短邻近文本（标题或旁边的文案）。 */
   near: string
-  /** Nearest heading above the image: the section it belongs to. */
+  /** 图片上方最近的一个标题：它所在的那块。 */
   heading: string
-  /** True when DOM text already describes this image. */
+  /** DOM 文本已经说清这张图片时为 true。 */
   textDescribed: boolean
   /**
-   * True when the browser tried to load this image and got nothing usable.
+   * 浏览器试过加载这张图片、却没拿到可用内容时为 true。
    *
-   * A failed image is worth reporting even though there is nothing to recognize:
-   * the page visibly shows a broken or alt-text box, and a model that is told
-   * "an image was here and did not load" stops inventing one. What is not
-   * reported is a failed image with no alt text — a bare broken box describes
-   * nothing and would only add noise on ad-heavy pages.
+   * 加载失败的图片就算没什么可识别的也值得报：页面上明明摆着一个损坏图标或替代文本框，
+   * 被告知“这儿本来有张图，但没加载出来”的模型，就不会凭空编一张。
+   * 没有 alt 文本的加载失败图片不报——一个光秃秃的损坏框什么都说不出来，
+   * 在广告多的页面上只是噪声。
    */
   failed: boolean
 }
 
-/** Below this, an image is a spacer, icon or sprite fragment. */
+/** 小于这个尺寸的，就是占位符、图标或雪碧图碎片。 */
 const MIN_IMAGE_SIDE = 32
 
 /**
- * The identity of one image: its absolute URL, or a placeholder for images that
- * have no address.
+ * 一张图片的身份：它的绝对 URL，没有地址的图片则用占位符。
  *
- * Defined once because two sides must agree on it exactly — the snapshot, which
- * reports identities so the background can look up a description, and the
- * describe action, which asks for one. Two copies of this rule would drift into
- * a cache that never hits.
+ * 只在这里定义一次，因为两侧必须完全一致——快照报出身份，background 才能靠它查描述；
+ * describe 操作则凭它请求描述。这条规则要是有第二份副本，就会慢慢飘成一个永远命不中的
+ * 缓存。
  *
- * @param src - absolute URL, or '' when the image has none.
- * @param index - the image's inventory index.
- * @returns the identity.
+ * @param src - 绝对 URL，图片没有地址时为 ''。
+ * @param index - 图片在清单里的索引。
+ * @returns 身份。
  */
 export function imageIdentity(src: string, index: number): string {
   return src !== '' ? src : `el:${String(index)}`
 }
 
 /**
- * How many elements to style-check while looking for background images.
+ * 找背景图时，最多对多少个元素做样式检查。
  *
- * A background image is only discoverable by reading computed style, which
- * forces layout for every candidate. Element count is therefore the wrong
- * bound on a huge page: the scan stops at a fixed number of elements instead of
- * scaling with the document.
+ * 背景图只能靠读计算样式找出来，而读计算样式会给每个候选元素强制一次布局。
+ * 所以在超大页面上，元素总数是个糟糕的上界：扫描改成在固定个数处停下，
+ * 不跟着文档规模一起涨。
  */
 const BACKGROUND_SCAN_LIMIT = 1500
 
-/** Background images kept per snapshot (they are the most speculative kind). */
+/** 每次快照最多留几张背景图（它们是最猜不准的一类）。 */
 const MAX_BACKGROUND_IMAGES = 20
 
-/** Characters of surrounding text kept per image. */
+/** 每张图片留多少字符的周边文本。 */
 const MAX_NEAR_CHARS = 60
 
-/** The element's own text, trimmed, for `near` and for "has copyable text". */
+/** 元素自身的文本，去掉首尾空白，给 `near` 和"有没有可复制的文本"用。 */
 function ownText(el: Element): string {
   return (el.textContent ?? '').replace(/\s+/g, ' ').trim()
 }
 
 /**
- * Short text that tells the model what an image is about.
+ * 一段简短文本，告诉模型这张图片是关于什么的。
  *
- * A caption is the author's own description, so it wins; otherwise the nearest
- * ancestor's text is used. Only visible text is considered: hidden captions
- * would describe an image the user cannot see.
+ * 标题（caption）是作者自己的描述，所以优先用它；没有就用最近祖先元素的文本。
+ * 只看可见文本：隐藏的标题描述的是用户看不到的图片。
  *
- * @param el - the image element.
- * @returns up to {@link MAX_NEAR_CHARS} characters, or ''.
+ * @param el - 图片元素。
+ * @returns 最多 {@link MAX_NEAR_CHARS} 个字符，或者 ''。
  */
 function nearbyText(el: Element): string {
   const figure = el.closest('figure')
@@ -124,7 +115,7 @@ function nearbyText(el: Element): string {
   return ''
 }
 
-/** Size in CSS pixels, preferring intrinsic dimensions for `<img>`. */
+/** CSS 像素的尺寸；`<img>` 优先用固有尺寸。 */
 function sizeOf(el: Element): { width: number; height: number } {
   const rect = el.getBoundingClientRect()
   const width = Math.round(rect.width)
@@ -132,7 +123,7 @@ function sizeOf(el: Element): { width: number; height: number } {
   return { width, height }
 }
 
-/** Attributes that already carry a text alternative. */
+/** 已经带着文本替代的那些属性。 */
 function labelOf(el: Element): string {
   for (const name of ['alt', 'aria-label', 'title']) {
     const value = el.getAttribute(name)
@@ -142,10 +133,10 @@ function labelOf(el: Element): string {
 }
 
 /**
- * The first `url(...)` of a computed `background-image`, if any.
+ * 计算后的 `background-image` 里的第一个 `url(...)`，有的话。
  *
- * @param el - element to inspect.
- * @returns the raw URL, or '' for gradients and `none`.
+ * @param el - 要检查的元素。
+ * @returns 原始 URL；渐变和 `none` 时为 ''。
  */
 function backgroundUrlOf(el: Element): string {
   const value = getComputedStyle(el).backgroundImage
@@ -155,11 +146,11 @@ function backgroundUrlOf(el: Element): string {
 }
 
 /**
- * Whether DOM text already answers what this image is.
+ * DOM 文本是不是已经把这张图片是什么说清楚了。
  *
- * @param kind - how the image was found.
- * @param el - the image element.
- * @returns true when recognition would add nothing.
+ * @param kind - 图片是怎么被发现的。
+ * @param el - 图片元素。
+ * @returns 识别带不来任何新信息时为 true。
  */
 function isTextDescribed(kind: ImageKind, el: Element): boolean {
   if (labelOf(el) !== '') return true
@@ -171,7 +162,7 @@ function isTextDescribed(kind: ImageKind, el: Element): boolean {
   return false
 }
 
-/** Absolute URL for a possibly relative attribute value. */
+/** 把可能是相对值的属性解析成绝对 URL。 */
 function absoluteUrl(value: string): string {
   if (value === '') return ''
   try {
@@ -182,43 +173,41 @@ function absoluteUrl(value: string): string {
 }
 
 /**
- * The nearest heading that precedes an element, in document order.
+ * 按文档顺序排在元素之前、离它最近的那个标题。
  *
- * This is the section an image sits under, which is the cheapest disambiguator
- * a page offers: "30%" means something different under "本季度营收" than under
- * "退款率". Document order rather than the ancestor chain, because headings are
- * commonly siblings of the section wrapper rather than its first child.
+ * 这就是图片所在的区块，也是页面能给出的最省事的消歧信息：“30%” 挂在
+ * “本季度营收”底下和挂在“退款率”底下，意思完全不同。用文档顺序而不是祖先链，
+ * 因为标题通常跟区块包裹元素是兄弟，而不是它的第一个子节点。
  *
- * @param el - the image element.
- * @param headings - the page's headings, in document order.
- * @returns the heading text, bounded, or '' when the image precedes every heading.
+ * @param el - 图片元素。
+ * @param headings - 页面里的所有标题，按文档顺序。
+ * @returns 标题文本（有上限）；图片排在所有标题之前时为 ''。
  */
 function headingOf(el: Element, headings: readonly Element[]): string {
   let found = ''
   for (const heading of headings) {
-    // FOLLOWING means `el` comes after `heading`; the list is ordered, so the
-    // last one that still precedes `el` is the nearest.
+    // FOLLOWING 表示 `el` 在 `heading` 之后；列表是有序的，
+    // 所以最后一个仍在 `el` 之前的就是最近的。
     if ((heading.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) break
     found = ownText(heading)
   }
   return truncate(found, MAX_NEAR_CHARS).text
 }
 
-/** Headings under a root, in document order. */
+/** 某个根底下的标题，按文档顺序。 */
 function headingsOf(root: Document | Element): Element[] {
   return [...root.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')]
 }
 
 /**
- * Whether the browser finished trying to load this image and produced no pixels.
+ * 浏览器是不是已经试完加载、却一个像素都没出。
  *
- * `complete` is required as well as a zero intrinsic size: before the browser has
- * tried, both are zero, and calling that "failed" would mark every image on a
- * page that is still loading. A non-browser DOM (the test environment) never sets
- * `complete`, so its images are never reported as failed.
+ * 除了固有尺寸为零，还要求 `complete`：浏览器动手之前两者都是零，光凭尺寸判“失败”，
+ * 会把还在加载的页面上的每张图片都标出来。非浏览器的 DOM（测试环境）从不设
+ * `complete`，所以它的图片永远不会被报成失败。
  *
- * @param el - the image element.
- * @returns true when the load is finished and yielded nothing.
+ * @param el - 图片元素。
+ * @returns 加载已经结束、什么都没拿到时为 true。
  */
 function failedToLoad(el: Element): boolean {
   if (el.tagName.toLowerCase() !== 'img') return false
@@ -226,7 +215,7 @@ function failedToLoad(el: Element): boolean {
   return image.complete === true && image.naturalWidth === 0
 }
 
-/** The candidate, or null when the element is unusable or too small. */
+/** 一张候选图片；元素不可用或太小时为 null。 */
 function candidate(
   kind: ImageKind,
   el: Element,
@@ -237,10 +226,9 @@ function candidate(
   const { width, height } = sizeOf(el)
   const label = labelOf(el)
   const failed = failedToLoad(el)
-  // The size floor drops spacers, icons and sprite fragments. A failed image is
-  // not one of those: its box collapses to the broken-image size, so the floor
-  // would hide a picture the author named. It is kept when it has a name, and
-  // only then.
+  // 尺寸下限滤掉占位符、图标和雪碧图碎片。加载失败的图片不在此列：
+  // 它的盒子会塌成损坏图片的大小，下限会把一张作者已经命名的图片藏掉。
+  // 所以只有它有名字时才留下。
   const tooSmall = width < MIN_IMAGE_SIDE || height < MIN_IMAGE_SIDE
   if (tooSmall && !(failed && label !== '')) return null
   return {
@@ -258,10 +246,10 @@ function candidate(
 }
 
 /**
- * Every image worth reporting, in document order.
+ * 每一张值得报出来的图片，按文档顺序。
  *
- * @param root - document (or region) to scan.
- * @returns the candidates, deduplicated by element.
+ * @param root - 要扫的 document（或区域）。
+ * @returns 候选项，按元素去重。
  */
 export function collectImages(root: Document | Element): ImageCandidate[] {
   const found: ImageCandidate[] = []
@@ -275,8 +263,8 @@ export function collectImages(root: Document | Element): ImageCandidate[] {
   }
 
   for (const el of root.querySelectorAll('img')) {
-    // `currentSrc` is the candidate the browser actually chose from `srcset`;
-    // `src` is only the fallback and may be a smaller variant.
+    // `currentSrc` 才是浏览器真从 `srcset` 里挑出来的那个；
+    // `src` 只是兜底，可能是更小的变体。
     const src = absoluteUrl((el as HTMLImageElement).currentSrc || el.getAttribute('src') || '')
     push(candidate('img', el, src, headings))
   }
@@ -286,7 +274,7 @@ export function collectImages(root: Document | Element): ImageCandidate[] {
   }
 
   for (const el of root.querySelectorAll('svg')) {
-    // A nested `<svg>` inside another one is part of its parent's rendering.
+    // 套在另一个 `<svg>` 里的 `<svg>`，属于父元素渲染的一部分。
     if (el.parentElement?.closest('svg') !== null && el.parentElement?.closest('svg') !== undefined) continue
     push(candidate('svg', el, '', headings))
   }

@@ -6,9 +6,9 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.ts'],
     environment: 'node',
-    // The worker-boot specs are ~370ms each when run alone, and the suite runs every
-    // file in parallel; the default five seconds is thin for the slowest of them on a
-    // loaded machine. A test that genuinely hangs still fails, just later.
+    // worker 启动的规格单独跑时每个约 370ms，而这套件会并行跑每个文件；
+    // 在一台有负载的机器上，默认的五秒对其中最慢的那个太紧了。
+    // 真正卡住的测试仍然会失败，只是更晚一些。
     testTimeout: 15_000,
     setupFiles: ['tests/setup.ts'],
   },

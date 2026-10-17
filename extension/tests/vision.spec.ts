@@ -31,13 +31,13 @@ const TARGET: RecognitionTarget = {
   kind: 'content',
 }
 
-/** Capture sent frames and hand back the ids, so a test can answer them. */
+/** 抓住已发出的帧并交回它们的 id，这样测试就能应答它们。 */
 function recorder(): { frames: ClientFrame[]; send: (frame: ClientFrame) => boolean } {
   const frames: ClientFrame[] = []
   return { frames, send: (frame) => { frames.push(frame); return true } }
 }
 
-/** The id of the nth image.call in the recorded frames. */
+/** 已录下的帧里第 n 个 image.call 的 id。 */
 function callId(frames: ClientFrame[], index = 0): string {
   const calls = frames.filter((frame): frame is Extract<ClientFrame, { t: 'image.call' }> => frame.t === 'image.call')
   const call = calls[index]
@@ -45,7 +45,7 @@ function callId(frames: ClientFrame[], index = 0): string {
   return call.id
 }
 
-/** Build a coordinator whose relay sends into `options.frames`. */
+/** 构造一个协调器，让它的中继把内容发到 `options.frames` 里。 */
 function coordinator(options: {
   frames: ClientFrame[]
   relay?: boolean
@@ -63,7 +63,7 @@ function coordinator(options: {
   }, options.limit ?? 2)
 }
 
-/** Wait until the coordinator has put at least one frame on the wire. */
+/** 等到协调器至少把一个帧放上线。 */
 async function dispatched(frames: ClientFrame[]): Promise<void> {
   await vi.waitFor(() => { expect(frames.length).toBeGreaterThanOrEqual(1) })
 }
@@ -185,8 +185,8 @@ describe('DirectRecognizer', () => {
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://api.test/v1/chat/completions')
     const body = JSON.parse(String(init.body)) as Record<string, unknown>
-    // The switches must actually be in the body: a provider that ignores them is
-    // only detectable if they were sent.
+    // 这些开关必须真的出现在请求体里：只有发出去过，
+    // 才能发现一个把它们忽略掉的 provider。
     expect(body).toMatchObject({ model: 'flash-vision', temperature: 0, max_tokens: MAX_DESC_CHARS, ...THINKING_OFF })
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer secret')
   })
@@ -247,7 +247,7 @@ describe('VisionCoordinator', () => {
     const outcome = await pending
     expect(outcome).toMatchObject({ ok: true, via: 'desktop', thinkingIgnored: false })
     if (!outcome.ok) throw new Error('expected a description')
-    // The page says 30%, the answer says 50%: the local check must catch it.
+    // 页面说 30%，答案说 50%：本地检查必须抓住它。
     expect(outcome.comparison.verdict).toBe('conflict')
     expect(outcome.comparison.conflicts[0]?.rule).toBe('percentage')
   })
@@ -273,7 +273,7 @@ describe('VisionCoordinator', () => {
     const first = vision.describe(TARGET, BYTES, signal)
     const second = vision.describe({ ...TARGET, identity: 'b' }, BYTES, signal)
     await dispatched(frames)
-    // The second waits for the slot rather than racing the desktop's own cap.
+    // 第二次会等槽位，不去抢桌面自己的上限。
     await new Promise((resolve) => { setTimeout(resolve, 5) })
     expect(frames).toHaveLength(1)
     vision.handleFrame({ t: 'image.result', id: callId(frames), ok: true, desc: 'A' })
@@ -310,8 +310,8 @@ describe('VisionCoordinator', () => {
     vision.handleFrame({ t: 'image.result', id: callId(frames), ok: true, desc: '季度营收折线图，达到 50%' })
     const outcome = await pending
     if (!outcome.ok) throw new Error('expected a description')
-    // The same answer is a conflict at the standard tier; the low tier buys
-    // cheapness by not checking, and must say that rather than report agreement.
+    // 同一个答案在标准档位下算冲突；低档位拿不检查
+    // 换便宜，所以必须把这点说出来，而不是报告一致。
     expect(outcome.comparison).toEqual({ verdict: 'uncertain', conflicts: [], basis: 'skipped', overlap: 0 })
     expect(describeOutcomeText(12, outcome)).toContain('skipped by the low tier')
   })
@@ -328,9 +328,9 @@ describe('VisionCoordinator', () => {
   })
 
   it('uses the direct path when the desktop cannot recognize images', async () => {
-    // The relay is preferred whenever it can answer, so this path exists for the
-    // deployments where it cannot — and it is unreachable unless the coordinator
-    // is actually given the endpoint, which is what this asserts.
+    // 只要中继能回答就优先用中继，所以这条路径是为
+    // 它做不到的部署准备的——而且除非真把端点
+    // 交给协调器，这条路径根本走不到，这正是这里要断言的。
     const urls: string[] = []
     const fetchImpl = vi.fn(async (url: string) => {
       urls.push(url)
@@ -355,11 +355,11 @@ describe('VisionCoordinator', () => {
   })
 
   it('posts to chat/completions, the way the desktop client does', async () => {
-    // Both transports read the same setting; reading it differently means a URL
-    // that works on one path 404s on the other.
+    // 两种传输读的是同一个设置；读法不同就意味着一个 URL
+    // 在一条路径上能用、在另一条上 404。
     expect(chatCompletionsUrl('https://api.test/v1')).toBe('https://api.test/v1/chat/completions')
     expect(chatCompletionsUrl('https://api.test/v1/')).toBe('https://api.test/v1/chat/completions')
-    // A user who pasted the full URL is not punished for it.
+    // 粘了完整 URL 的用户不该因此受罚。
     expect(chatCompletionsUrl('https://api.test/v1/chat/completions')).toBe('https://api.test/v1/chat/completions')
 
     const urls: string[] = []
@@ -386,9 +386,9 @@ describe('VisionCoordinator', () => {
     const outcome = await recognizer.describe(REQUEST, BYTES, new AbortController().signal)
     expect(outcome).toMatchObject({ ok: false, code: 'vision-failed', permanent: false })
     if (outcome.ok) throw new Error('expected a failure')
-    // The endpoint host needs no manifest entry now that `connect-src` allows
-    // `https:` and `http:`, so a failure here is the endpoint's rather than the
-    // extension's. A CSP hint would advise about a rule that is gone.
+    // 既然 `connect-src` 已经允许 `https:` 和 `http:`，端点主机就不再需要
+    // manifest 条目，所以这里失败是端点的问题，不是
+    // 扩展的问题。CSP 提示却会去建议一条已经不存在的规则。
     expect(outcome.message).toBe('Failed to fetch')
   })
 
@@ -411,8 +411,8 @@ describe('VisionCoordinator', () => {
 
 describe('marker summaries', () => {
   it('summarises a long description in a marker but answers with it whole', async () => {
-    // A snapshot repeats every marker, so the page text carries a summary while
-    // the description itself comes back whole from the call that asked for it.
+    // 快照会把每个标记都重复一遍，所以页面文本带着一份摘要，而
+    // 描述本身由发起请求的那次调用完整返回。
     const long = '细节'.repeat(200)
     const frames: ClientFrame[] = []
     const vision = coordinator({ frames })
@@ -431,8 +431,8 @@ describe('describeOutcomeText', () => {
   const consistent = { verdict: 'consistent' as const, conflicts: [], basis: 'text' as const, overlap: 0.8 }
 
   it('wraps the description in the untrusted boundary', () => {
-    // The description is a model's reading of an image nobody here wrote, so it
-    // travels inside the same boundary as page text.
+    // 描述是模型对一张这里没人写过的图片的解读，所以它
+    // 和页面文本走在同一条边界之内。
     const text = describeOutcomeText(12, { ok: true, desc: '一张折线图', comparison: consistent, via: 'desktop', reasoningTokens: 0, thinkingIgnored: false })
     expect(text).toContain('<UNTRUSTED_PAGE_CONTENT')
     expect(text).toContain('一张折线图')
@@ -454,7 +454,7 @@ describe('describeOutcomeText', () => {
   })
 
   it('says when nothing could be checked at all', () => {
-    // Reporting "consistent" here would claim a verification that never ran.
+    // 在这里报告「consistent」，就等于宣称做了一次根本没跑过的核验。
     const unchecked = describeOutcomeText(3, {
       ok: true,
       desc: '一台笔记本电脑',
@@ -474,7 +474,7 @@ describe('describeOutcomeText', () => {
     })
     expect(partial).toContain('nothing conclusive')
 
-    // A note is reported as an observation, and never as a verdict to obey.
+    // 备注只当成观察上报，绝不作为要遵从的裁定。
     const noted = describeOutcomeText(3, {
       ok: true,
       desc: '一台笔记本电脑',

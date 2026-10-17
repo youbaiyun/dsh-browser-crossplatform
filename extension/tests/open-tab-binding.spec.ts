@@ -12,7 +12,7 @@ function tab(tabId: number, title = `Tab ${tabId}`): AffinityTab {
   }
 }
 
-/** A controller following tab 1, i.e. after the first tool call bound it. */
+/** 一个跟着 tab 1 的 controller，也就是第一次工具调用绑定它之后的状态。 */
 function following(): TabAffinityController {
   const affinity = new TabAffinityController()
   affinity.observeActive(tab(1))
@@ -55,8 +55,8 @@ describe('bindOpenedTabAffinity', () => {
       controlled: { tabId: 42 },
       pinned: false,
     })
-    // Route-level target selection: later browser tools must hit the opened tab,
-    // not the still-visible active tab.
+    // 路由层的目标选择：后续 browser 工具必须打到新开的 tab，
+    // 而不是那个还可见的活动 tab。
     expect(affinity.resolveTarget()).toMatchObject({
       kind: 'target',
       tab: { tabId: 42 },
@@ -78,8 +78,8 @@ describe('bindOpenedTabAffinity', () => {
   })
 
   it('does not clear a user-visible tab that Chrome activated for the open', () => {
-    // Chrome already activated the new tab while the open was in flight, so the
-    // affinity controller observed it first; the bind must stay consistent.
+    // open 还在途中，Chrome 就已经激活了新 tab，
+    // 于是 affinity controller 先看到了它；绑定必须保持一致。
     const affinity = following()
     affinity.observeActive(tab(42, 'Docs'))
 

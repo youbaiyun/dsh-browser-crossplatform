@@ -6,7 +6,7 @@ import { buildSnapshot, renderSnapshot, type SnapshotBudget } from '../src/conte
 
 const BUDGET: SnapshotBudget = { maxItems: 9, maxForms: 5, maxChars: 6_000 }
 
-/** Replace the harness rectangle (200x40) with a specific size. */
+/** 把 harness 的矩形（200x40）换成指定尺寸。 */
 function stubRect(width: number, height: number): void {
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
     top: 0,
@@ -63,8 +63,8 @@ describe('collectImages', () => {
   })
 
   it('records the nearest heading above the image, not a later one', () => {
-    // "30%" means something different under each heading, so the section is the
-    // cheapest disambiguator the page offers.
+    // 「30%」在每个标题下的含义都不一样，所以 section 是页面上
+    // 最省事的消歧依据。
     document.body.innerHTML = `
       <h1>年度报告</h1>
       <section><h2>本季度营收</h2><img src="/a.png"></section>
@@ -115,15 +115,15 @@ describe('collectImages', () => {
 })
 
 describe('images that failed to load', () => {
-  /** Make an image look like a finished, failed load, the way a browser reports it. */
+  /** 让一张图片看起来像加载完成却失败了，就像浏览器报的那样。 */
   function markFailed(image: Element): void {
     Object.defineProperty(image, 'complete', { configurable: true, value: true })
     Object.defineProperty(image, 'naturalWidth', { configurable: true, value: 0 })
   }
 
   it('lists a failed image that has a text alternative, despite its collapsed box', () => {
-    // A broken image collapses to the broken-image size, so the size floor would
-    // hide a picture the author named.
+    // 破图会缩成破图图标那么大，所以尺寸下限会
+    // 把作者点名要的图片藏起来。
     document.body.innerHTML = '<img src="/missing.png" alt="营收趋势图">'
     markFailed(document.querySelector('img')!)
     stubRect(48, 21)
@@ -133,7 +133,7 @@ describe('images that failed to load', () => {
   })
 
   it('leaves a failed image with no text alternative out', () => {
-    // A bare broken box describes nothing and would only add noise.
+    // 一个光秃秃的破图框什么也描述不了，只会添噪声。
     document.body.innerHTML = '<img src="/missing.png">'
     markFailed(document.querySelector('img')!)
     stubRect(48, 21)
@@ -141,8 +141,8 @@ describe('images that failed to load', () => {
   })
 
   it('never mistakes a still-loading image for a failed one', () => {
-    // jsdom never finishes a load, which is exactly the state this guards:
-    // `complete` is false, so nothing is reported as failed.
+    // jsdom 永远不会让加载完成，而这正是这里要守住的状态：
+    // `complete` 是 false，所以不会有任何东西被报成失败。
     document.body.innerHTML = '<img src="/a.png" alt="图">'
     stubRect(48, 21)
     expect(collectImages(document)).toEqual([])
@@ -155,16 +155,16 @@ describe('images that failed to load', () => {
     const ids = new ElementIds()
     const view = buildSnapshot(ids, { budget: BUDGET }, null)
     expect(renderSnapshot(view, false)).toContain('[load-failed]')
-    // The background reads this to fill the marker, because a failed image is
-    // never requested and so never reaches the cache.
+    // 后台读它来填标记，因为失败的图片
+    // 永远不会被请求，也就永远不会进缓存。
     expect(view.images[0]?.unavailable).toBe('load-failed')
   })
 })
 
 describe('image inventory in the snapshot', () => {
   it('renders a data URL as its media type instead of the whole image', () => {
-    // The address of an inline image is the image. Rendering it whole would spend
-    // the character budget on base64 that says nothing the media type does not.
+    // 内联图片的地址就是图片本身。把整张图渲染出来会把
+    // 字符预算花在 base64 上，而它除了媒体类型说不出任何东西。
     document.body.innerHTML = `<img src="data:image/png;base64,${'A'.repeat(400)}" alt="内联图">`
     const ids = new ElementIds()
     const text = renderSnapshot(buildSnapshot(ids, { budget: BUDGET }, null), false)
@@ -182,10 +182,10 @@ describe('image inventory in the snapshot', () => {
 
     expect(view.images).toHaveLength(1)
     const [image] = view.images
-    // The point of sharing the registry: the click path resolves an image index
-    // to a real element, with no coordinate math anywhere.
+    // 共享注册表的意义就在于：点击路径把一个图片索引
+    // 解析成真实元素，全程不用任何坐标运算。
     expect(ids.elementByIndex(image.index)).toBe(document.getElementById('chart'))
-    // An image is not a control, so it must not appear in the interactive list.
+    // 图片不是控件，所以绝不能出现在可交互元素列表里。
     expect(view.items.some((item) => item.name === 'chart')).toBe(false)
   })
 
@@ -203,7 +203,7 @@ describe('image inventory in the snapshot', () => {
     const photo = view.images.find((image) => image.src.endsWith('/photo.jpg'))!
     expect(text).toContain(`[${chart.index}] img 200x40 "季度营收" text-described → /chart.png`)
     expect(text).toContain(`[${photo.index}] img 200x40 → /photo.jpg`)
-    // A described image must not be flagged as needing recognition.
+    // 已经描述过的图片绝不能被标成需要识别。
     expect(text).not.toContain(`[${photo.index}] img 200x40 text-described`)
   })
 

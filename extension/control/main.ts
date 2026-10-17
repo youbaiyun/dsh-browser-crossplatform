@@ -1,23 +1,19 @@
 /**
- * The side panel: a conversation with dsh, plus one settings sheet.
+ * 侧边面板：与 dsh 的一段对话，外加一张设置表。
  *
- * This is deliberately the same shape as the desktop client. The transcript is
- * the whole interface — your message, the model's reply rendered as Markdown,
- * and one quiet line for each tool it ran. The one addition to that shape is the
- * **task list** for a multi-step turn: the model writes the checklist it is about
- * to run and the panel shows it above the run with a per-task state, because a
- * list of tool calls alone cannot say what the job is or how much of it is left.
- * There is still no summary card, no progress bar and no artwork.
+ * 这里刻意沿用桌面客户端的形态。整个界面就是这份记录——你的消息、模型
+ * 渲染成 Markdown 的回复，以及每次工具调用各占一行安静说明。唯一多出来的
+ * 东西，是给多步回合准备的 **任务清单**：模型先写下要做的事，面板把它连同
+ * 每个任务的状态摆在这次运行上方，因为光看工具调用列表，说不清这活儿是什么、
+ * 还剩多少。这里依然没有摘要卡片、没有进度条，也没有插图。
  *
- * Two inputs share the composer:
- *   - a browser command (`browser_click {"index":3}`, `click index=3`, a URL) is
- *     executed by the extension itself, because the user typed it;
- *   - anything else is forwarded to the desktop dsh model, whose streamed reply
- *     is rendered here.
+ * 输入框同时管着两种输入：
+ *   - 浏览器命令（`browser_click {"index":3}`、`click index=3`、一个 URL）由扩展
+ *     自己执行，因为这是用户亲手敲的；
+ *   - 其他任何内容都转发给桌面端的 dsh 模型，流式回复在这里渲染。
  *
- * The page owns no policy: approvals, tab binding, and the unrestricted switch
- * all live in the background worker, and this file only renders what it is
- * handed.
+ * 本页面不掌握任何策略：审批、标签页绑定、不受限开关都在后台 worker 里，
+ * 这个文件只负责把交给它的内容渲染出来。
  *
  * @module
  */
@@ -30,7 +26,6 @@ import {
   type ControlMessage,
   type ControlRequest,
   type ControlState,
-  type SessionSummary,
   type Settings,
   type TimelineEntry,
 } from '../src/settings.ts'
@@ -43,14 +38,14 @@ import { icon, markerIcon, type IconName } from './icons.ts'
 import { controlCopy, describeOpenError, type ControlCopy } from './strings.ts'
 import { parsePlan, planProgress, type Plan } from '@dsh-browser/protocol'
 
-/** How long a reconnect waits before the page reports the worker as gone. */
+/** 页面报告 worker 已消失之前，等多久才重连。 */
 export const RECONNECT_DELAY_MS = 250
 
-/** Rows kept when only the legacy activity list is available. */
+/** 只有旧的 activity 列表可用时，留多少行。 */
 export const ACTIVITY_LIMIT = 200
 
 /* ------------------------------------------------------------------ *
- * Pure helpers
+ * 纯函数辅助
  * ------------------------------------------------------------------ */
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,22 +53,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Whether a scroller is close enough to its end to count as "following the tail".
+ * 一个滚动容器要离底端多近，才算"跟在尾部"。
  *
- * One threshold, shared: the streaming repaint and the full repaint must agree on what
- * "at the bottom" means, or a reader sitting near the end gets moved by one path and kept
- * still by the other.
+ * 两条路径共用一个阈值：流式重绘和整体重绘对"在底部"得有一致的判断，否则读者
+ * 明明快到底了，会被一条路径挪走、又被另一条留在原地。
  */
 function atBottom(scroller: Element): boolean {
   return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120
 }
 
-/** The connection word for one bridge state. */
+/** bridge 某种连接状态对应的状态词。 */
 export function bridgeStateText(state: ControlState['bridge'], copy: ControlCopy): string {
   return copy.bridge[state] ?? copy.bridge.stopped
 }
 
-/** One line naming what the worker controls. */
+/** 一行文字，说明这个 worker 控制的是什么。 */
 export function controlledTabText(affinity: TabAffinityState, copy: ControlCopy): string {
   const tab = affinity.controlled
   if (tab === null) return copy.tab.none
@@ -81,7 +75,7 @@ export function controlledTabText(affinity: TabAffinityState, copy: ControlCopy)
   return title === '' ? copy.tab.none : title
 }
 
-/** The decisions offered for one approval, in display order. */
+/** 一次审批可选的决定，按显示顺序排。 */
 export function approvalDecisions(request: ApprovalRequest): ApprovalDecision[] {
   const decisions: ApprovalDecision[] = ['deny', 'allow-once']
   if (request.kind !== 'action') decisions.push('always-allow-reads')
@@ -89,13 +83,13 @@ export function approvalDecisions(request: ApprovalRequest): ApprovalDecision[] 
   return decisions
 }
 
-/** Merge one activity push into the list, newest first, deduplicated by id. */
+/** 把一条 activity 推送并进列表：最新的在前，按 id 去重。 */
 export function mergeActivity(existing: ActivityEntry[], entry: ActivityEntry, limit = ACTIVITY_LIMIT): ActivityEntry[] {
   const merged = [entry, ...existing.filter((candidate) => candidate.id !== entry.id)]
   return merged.slice(0, Math.max(0, limit))
 }
 
-/** Merge an approval snapshot or live push, keyed by request id. */
+/** 把审批快照或实时推送并起来，按请求 id 做键。 */
 export function mergeApprovals(
   current: ReadonlyMap<string, ApprovalRequest>,
   incoming: readonly ApprovalRequest[],
@@ -109,7 +103,7 @@ export function mergeApprovals(
   return next
 }
 
-/** Pull plain text out of a dsh content-block array. */
+/** 从 dsh 的 content-block 数组里取出纯文本。 */
 export function textFromBlocks(blocks: unknown): string {
   if (!Array.isArray(blocks)) return ''
   const parts: string[] = []
@@ -121,11 +115,10 @@ export function textFromBlocks(blocks: unknown): string {
 }
 
 /**
- * The assistant text carried by one `session/event`.
+ * 一个 `session/event` 里带的 assistant 文本。
  *
- * A tool-calling turn also emits `assistant/message` events whose content is
- * only `tool_use` blocks; those must not blank the reply, so an all-empty result
- * returns `undefined` rather than an empty string.
+ * 会调用工具的回合还会发 `assistant/message` 事件，里面只有 `tool_use`
+ * block；这类事件不能把回复清空，所以结果全空时返回 `undefined`，而不是空字符串。
  */
 export function assistantTextFromEvent(event: unknown): string | undefined {
   if (!isRecord(event) || event.type !== 'assistant/message') return undefined
@@ -135,7 +128,7 @@ export function assistantTextFromEvent(event: unknown): string | undefined {
   return text.trim() === '' ? undefined : text
 }
 
-/** Whether a `user/message` event is a real turn rather than an injected reminder. */
+/** 判断一个 `user/message` 事件是真回合，还是注入的提醒。 */
 export function isUserAuthoredMessage(event: unknown): boolean {
   if (!isRecord(event) || event.type !== 'user/message') return false
   const data = isRecord(event.data) ? event.data : undefined
@@ -144,14 +137,14 @@ export function isUserAuthoredMessage(event: unknown): boolean {
   return source?.kind === 'user'
 }
 
-/** A readable label for one tool name. */
+/** 某个工具名对应的可读标签。 */
 export function toolLabel(tool: string | undefined, copy: ControlCopy): string {
   if (tool === undefined || tool === '') return copy.timeline.tool
   const bare = tool.startsWith('browser_') ? tool.slice('browser_'.length) : tool
   return bare.replace(/_/g, ' ')
 }
 
-/** Human wording for one step state, used in the tool line's title only. */
+/** 步骤状态的白话说法，只用在工具行的 title 上。 */
 export function stateText(state: TimelineEntry['state'], locale: UiLocale): string {
   const zh = locale === 'zh'
   switch (state) {
@@ -164,29 +157,7 @@ export function stateText(state: TimelineEntry['state'], locale: UiLocale): stri
   }
 }
 
-/** A readable label for one conversation, for the picker. */
-export function sessionLabel(session: SessionSummary, copy: ControlCopy): string {
-  const title = session.title.trim()
-  const name = title === '' ? copy.settings.conversationUntitled : title
-  // The opening prompt is what actually distinguishes two conversations, because
-  // titles collide by design — the desktop names a conversation after its subject, so
-  // two conversations about the same video get near-identical names. It is dropped
-  // only when it would merely repeat the title.
-  const preview = session.preview.trim()
-  const parts = [name]
-  if (preview !== '' && preview !== name) parts.push(preview)
-  // The running marker comes before the timestamp, so a narrowed picker truncates the
-  // timestamp rather than the facts that identify the conversation.
-  if (session.running) parts.push(copy.settings.conversationRunning)
-  if (session.updatedAt > 0) {
-    const when = new Date(session.updatedAt)
-    const stamp = `${when.getMonth() + 1}/${when.getDate()} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`
-    parts.push(stamp)
-  }
-  return parts.join(' · ')
-}
-
-/** Every row of the transcript, oldest first. */
+/** 记录里的每一行，最早的排在最前。 */
 export function timelineFromState(state: ControlState): TimelineEntry[] {
   if (state.timeline.length > 0) return state.timeline
   return state.activity.slice().reverse().map((entry) => ({
@@ -201,7 +172,7 @@ export function timelineFromState(state: ControlState): TimelineEntry[] {
 }
 
 /* ------------------------------------------------------------------ *
- * DOM construction
+ * DOM 构建
  * ------------------------------------------------------------------ */
 
 interface ElementOptions {
@@ -213,10 +184,10 @@ interface ElementOptions {
 }
 
 /**
- * Build one element.
+ * 构建一个元素。
  *
- * `text` always goes through `textContent`. The one place that assigns HTML is
- * the assistant bubble, and that path sanitizes with DOMPurify first.
+ * `text` 一律走 `textContent`。整个文件里给 HTML 赋值的只有 assistant 气泡，
+ * 那条路径会先用 DOMPurify 消毒。
  */
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, options: ElementOptions = {}): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
@@ -240,26 +211,26 @@ function iconButton(name: IconName, label: string, onClick: () => void): HTMLBut
 }
 
 /* ------------------------------------------------------------------ *
- * Port client
+ * Port 客户端
  * ------------------------------------------------------------------ */
 
 interface PendingCall {
   resolve: (value: { sessionId?: string }) => void
   reject: (error: Error) => void
   /**
-   * Guard against a worker that never answers.
+   * 防止 worker 永远不回话。
    *
-   * A dropped `session.result` used to leave the promise pending forever, and whatever was
-   * waiting on it stayed waiting: a picker stuck on "loading", a send button stuck disabled.
-   * A rejection the caller can handle is strictly better than a promise that never settles.
+   * 以前一个被丢掉的 `session.result` 会让 promise 一直 pending，等它的人也就
+   * 一直等下去：选择器卡在"loading"，发送按钮卡在 disabled。让调用方能处理的
+   * rejection，总好过一个永不 settle 的 promise。
    */
   timer: ReturnType<typeof setTimeout>
 }
 
-/** How long one `session.*` request may go unanswered before it is failed. */
+/** 一次 `session.*` 请求多久没回应就算失败。 */
 export const CALL_TIMEOUT_MS = 15_000
 
-/** Port client for the `dsh-control` channel, with one reconnect attempt. */
+/** `dsh-control` 通道的 Port 客户端，带一次重连尝试。 */
 export class ControlPort {
   private port: chrome.runtime.Port | null = null
   private retry: ReturnType<typeof setTimeout> | null = null
@@ -274,7 +245,7 @@ export class ControlPort {
     return this.port !== null
   }
 
-  /** Open the port, retrying once when the disconnect was not our own doing. */
+  /** 打开端口；断连不是我们自己造成时，重试一次。 */
   connect(allowRetry = true): void {
     if (this.port !== null) return
     if (typeof chrome === 'undefined' || chrome.runtime?.connect === undefined) {
@@ -291,7 +262,7 @@ export class ControlPort {
     this.port = port
     this.onStatusChange(true)
     port.onMessage.addListener((message: unknown) => this.deliver(message))
-    // A worker that woke up just before this page opened already sent its push.
+    // worker 如果在这页面打开前刚醒来，它的推送已经发过了。
     this.post({ type: 'state.request' })
     port.onDisconnect.addListener(() => {
       if (this.port !== port) return
@@ -306,7 +277,7 @@ export class ControlPort {
     })
   }
 
-  /** Send one control request; a dead port reports failure instead of throwing. */
+  /** 发一条控制请求；端口已死就报失败，不抛异常。 */
   post(message: ControlRequest): boolean {
     const port = this.port
     if (port === null) return false
@@ -321,7 +292,7 @@ export class ControlPort {
     }
   }
 
-  /** Send a request that is answered with a `session.result` frame. */
+  /** 发一条以 `session.result` 帧作答的请求。 */
   call(message: ControlRequest): Promise<{ sessionId?: string }> {
     const id = crypto.randomUUID()
     return new Promise((resolve, reject) => {
@@ -342,13 +313,13 @@ export class ControlPort {
     this.retry = null
     const port = this.port
     this.port = null
-    // Settle anything still in flight. Leaving these pending meant a caller could wait for
-    // an answer that can no longer arrive — the panel is going away.
+    // 把在飞的东西全部结清。让它们一直 pending，调用方就可能永远等一个
+    // 不会来的回答——面板正在消失。
     this.failAll(new Error('panel closed'))
     try {
       port?.disconnect()
     } catch {
-      // Already gone.
+      // 早就没了。
     }
   }
 
@@ -408,7 +379,7 @@ export class ControlPort {
 }
 
 /* ------------------------------------------------------------------ *
- * Payload validation
+ * 载荷校验
  * ------------------------------------------------------------------ */
 
 function stringOr(value: unknown, fallback: string): string {
@@ -515,43 +486,47 @@ function parseControlState(value: unknown): ControlState | null {
     timeline: Array.isArray(value.timeline)
       ? value.timeline.map(parseTimelineEntry).filter((entry): entry is TimelineEntry => entry !== null)
       : [],
-    // Absent or malformed reads as null, which the panel shows as "not allowed":
-    // an unreadable policy must not look like permission.
+    // 缺失或格式不对都当作 null，面板会显示成"不允许"：
+    // 一份读不出来的策略，绝不能看起来像许可。
     policy: isRecord(value.policy) && typeof value.policy.openPagesForUser === 'boolean'
       ? { openPagesForUser: value.policy.openPagesForUser }
       : null,
     replaced: value.replaced === true,
-    // A string or nothing; anything else is treated as no error, so a malformed
-    // push cannot put a non-sentence in front of the user.
+    // 拒绝原因只用面板自己的一句话说，不把服务器的原始字符串摊给用户看；这里只判断
+    // "有没有被拒绝过"。形状不对就当没有，免得一次坏推送在面板上留一条假警告。
+    bridgeRejection: isRecord(value.bridgeRejection) && typeof value.bridgeRejection.code === 'number'
+      ? { code: value.bridgeRejection.code, reason: typeof value.bridgeRejection.reason === 'string' ? value.bridgeRejection.reason : '' }
+      : null,
+    // 是字符串就留下，什么都没有也算；其他任何东西一律当作没有错误，这样一次
+    // 格式错误的推送就没法把半句话摆到用户面前。
     followError: typeof value.followError === 'string' && value.followError !== '' ? value.followError : null,
   }
 }
 
 /* ------------------------------------------------------------------ *
- * Application
+ * 应用
  * ------------------------------------------------------------------ */
 
 interface RunState {
-  /** Text the model has produced for the current turn. */
+  /** 模型为当前回合已经写出的文本。 */
   assistantText: string
   /**
-   * The task list this turn announced, once it has announced one.
+   * 本回合宣布过的清单，只要它宣布过。
    *
-   * The model re-emits the checklist with boxes ticked as it advances, so this
-   * holds the most complete version seen rather than the newest: a streaming
-   * fragment would otherwise replace a finished list with a partial one.
+   * 模型推进时会重发带勾选框的清单，所以这里存的是见过的
+   * 最完整那版，而不是最新那版：否则一个流式片段就会把已完成的清单
+   * 盖成残缺的一份。
    */
   plan: Plan | null
 }
 
 /**
- * Keep the more complete of two versions of the same checklist.
+ * 同一份清单的两个版本，留更完整的那个。
  *
- * The model writes the list, then writes it again with boxes ticked. While the
- * second copy streams in it is initially *shorter* than the first, so "newest
- * wins" would visibly truncate the task list on every update. The longer list is
- * the same plan; only when both are equally long is the newer one the truthful
- * one, because that is when the boxes carry progress.
+ * 模型先写一遍清单，再带着勾选框写一遍。第二份在流式传输的过程中
+ * 起初比第一份 *更短*，所以"最新者胜"会在每次更新时明显地把清单截断。
+ * 更长的那份就是同一个计划；只有当两者一样长时，更新的那份才算数，
+ * 因为那时候方框才带上了进度。
  */
 export function preferPlan(current: Plan | null, candidate: Plan | null): Plan | null {
   if (candidate === null) return current
@@ -576,57 +551,50 @@ export class App {
   private activity: ActivityEntry[] = []
   private run: RunState = { assistantText: '', plan: null }
   /**
-   * Whether a streaming repaint is already queued for this frame.
+   * 这一帧有没有排上一次流式重绘。
    *
-   * A reply can arrive at hundreds of deltas per second, and each repaint renders the whole
-   * accumulated text (Markdown parse + sanitize + innerHTML). Doing that per delta made the
-   * work quadratic in the reply length, so the panel fell permanently behind — it never
-   * caught up, which is why it looked frozen rather than slow. Coalescing to one repaint per
-   * frame keeps the cost linear in the reply length.
+   * 一条回复每秒可能来几百个 delta，每次重绘都要渲染整段已累积文本（Markdown 解析 +
+   * 消毒 + innerHTML）。每个 delta 都这么干，工作量就随回复长度二次增长，面板
+   * 永远落在后面——再也追不上，所以它看起来像卡死，而不是像变慢。合并成
+   * 每帧一次，开销就跟回复长度保持线性。
    */
   private streamRepaintQueued = false
   /**
-   * What the settings sheet was last drawn from, so a state push can skip rebuilding it.
+   * 设置表上次是照什么画出来的，好让一次 state 推送能跳过重建。
    *
-   * Only the fields the sheet actually reads go in — see `refreshSettingsSheet`.
+   * 只放这张表真正会读的字段——见 `refreshSettingsSheet`。
    */
   private settingsFingerprint: string | null = null
   /**
-   * The conversation the live reply belongs to.
+   * 这条实时回复属于哪段会话。
    *
-   * `run.assistantText` describes one conversation's in-flight reply, so it has to be dropped
-   * when the panel is pointed at a different one. Without this the half-written answer of the
-   * conversation you left kept rendering inside the one you switched to — with a blinking
-   * caret, as though it were still arriving.
+   * `run.assistantText` 说的是某段会话正在飞的回复，所以面板一转向别的会话，
+   * 它就必须被丢掉。不这么做，你离开的那段会话写到一半的答案会继续渲染在你切过去的
+   * 那段会话里——还带着闪烁的光标，好像它还在不断到达。
    */
   private runSessionId: string | null = null
   private backgroundDown = false
   private notice: string | null = null
   private composerError: string | null = null
   private settingsOpen = false
-  /** Desktop conversations, fetched on demand for the session picker. */
-  private sessions: SessionSummary[] = []
-  private sessionsLoading = false
   private draft = ''
   private busy = false
   /**
-   * Transcript scroll to restore after the next full repaint.
+   * 下一次整体重绘之后要恢复的记录滚动位置。
    *
-   * `render()` replaces the whole tree, which destroys the scroller and resets its position
-   * to the top. So the position is captured before the rebuild and re-applied after. This
-   * used to be a `pinnedScroll = true` flag that nothing ever cleared, so every one of the
-   * many full repaints scrolled the reader to the bottom — including repaints triggered by
-   * a connection update while they were reading history.
+   * `render()` 会换掉整棵树，滚动器随之被销毁、位置回到顶部，所以位置要在重建前
+   * 捕获、重建后再套回去。这里原来是一个 `pinnedScroll = true` 标志，却没有任何东西
+   * 清过它，于是每次整体重绘都把读者拽到底部——包括他们在翻历史时
+   * 由一次连接更新触发的那次重绘。
    *
-   * `null` means "at the bottom", which is also the state to start in.
+   * `null` 表示"在底部"，起始状态也正是它。
    */
   private restoreScroll: number | null = null
   /**
-   * Re-clamps the reading cap when the panel is resized.
+   * 面板尺寸变化时重新钳制阅读宽度上限。
    *
-   * The cap is a maximum column width, so it has to follow the panel: dragging the side panel
-   * narrower while a wide cap was applied is what left the content laid out past the edge and
-   * invisible.
+   * 这个上限只是最大列宽，所以得跟着面板走：套着很宽的上限把侧边面板拖窄，
+   * 内容就会被排到边界之外，于是看不见——原因就在这里。
    */
   private widthObserver: ResizeObserver | null = null
 
@@ -640,14 +608,14 @@ export class App {
   start(): void {
     document.title = this.copy.documentTitle
     document.documentElement.lang = this.locale
-    // Apply the cap before the first paint. It used to be applied only when a `state` push
-    // arrived, so the panel opened with the stylesheet's default cap (640px) and stayed there
-    // until the worker answered — and forever if it never did. In a 360px panel that is
-    // content laid out wider than the panel, which is the blank-panel bug.
+    // 第一次绘制之前就先套上这个上限。它原来只在一次 `state` 推送到达时才套，于是面板
+    // 带着样式表的默认上限（640px）打开，一直停在那儿等 worker 作答——worker 要是从不
+    // 作答，就永远停着。在一个 360px 的面板里，那意味着内容被排得比面板还宽，也就是那个
+    // 空白面板 bug。
     this.applyReadWidth()
     this.render()
     this.port.connect()
-    // The user drags the side panel, so the cap has to be re-applied whenever it changes.
+    // 侧边面板是用户拖出来的，所以它一变，这个上限就得重新套一遍。
     if (typeof ResizeObserver !== 'undefined') {
       this.widthObserver = new ResizeObserver(() => { this.applyReadWidth() })
       this.widthObserver.observe(this.root)
@@ -655,25 +623,22 @@ export class App {
   }
 
   /**
-   * Apply the reading cap.
+   * 套上阅读宽度上限。
    *
-   * The panel's width is the browser's business — the user drags it and the
-   * browser remembers it — so this only bounds how wide a text column may grow.
-   * A narrower panel is always used in full.
+   * 面板多宽是浏览器的事——用户拖，浏览器记——所以这里只管一个文本列最宽
+   * 能到多少。更窄的面板永远按全宽用。
    */
   private applyReadWidth(): void {
     const width = this.state?.settings.readWidth ?? SETTINGS_DEFAULTS.readWidth
-    // The cap has to be clamped to the panel, not written through.
+    // 这个上限必须钳到面板宽度，不能直接写进去。
     //
-    // The value is a *maximum* reading width, and the panel is whatever width the user
-    // dragged it to. Setting `--panel-max` to 640 in a 360px panel made every text column
-    // 640px wide inside a 360px box; the content was laid out past the right edge and the
-    // transcript's `overflow-x: hidden` clipped it, which is what "the panel is blank"
-    // turned out to be. The comment below always claimed the narrower panel wins — now the
-    // code does too.
-    // A panel that has not been laid out yet reports 0. Falling back to the raw configured cap
-    // there would re-create the very overflow this clamps: a hidden panel would get
-    // `--panel-max: 640px` and paint its content wider than itself the moment it appeared.
+    // 这个值只是*最大*阅读宽度，而面板宽度是用户拖出来的。在一个 360px 的面板里把
+    // `--panel-max` 设成 640，每个文本列就在 360px 的盒子里宽达 640px；内容排到
+    // 右边界之外，被记录的 `overflow-x: hidden` 裁掉——这就是"面板是空白的"最后
+    // 查出来的原因。下面的注释一直说更窄的面板优先——现在代码也这么做了。
+    // 还没完成布局的面板会报 0。这时候回退到原始配置的上限，就把这个钳制正要
+    // 躲开的溢出又造了出来：一个隐藏的面板拿到 `--panel-max: 640px`，一露头就把内容画得
+    // 比自身更宽。
     const measured = this.root.clientWidth
     const available = measured > 0 ? measured : Math.min(width, SETTINGS_DEFAULTS.readWidth)
     document.documentElement.style.setProperty('--panel-max', `${Math.min(width, available)}px`)
@@ -694,7 +659,7 @@ export class App {
         if (parsed === null) return
         this.state = parsed
         this.backgroundDown = false
-        // A different conversation means the previous one's in-flight reply is no longer ours.
+        // 会话一换，上一段会话正在飞的回复就不归我们了。
         const sessionId = parsed.session.id
         if (sessionId !== this.runSessionId) {
           this.runSessionId = sessionId
@@ -709,17 +674,15 @@ export class App {
         this.activity = parsed.activity.slice(0, ACTIVITY_LIMIT)
         if (parsed.session.turn === 'idle' && !parsed.session.pendingPrompt) this.busy = false
         this.applyReadWidth()
-        // Repaint what the state can change, not the whole panel. A full rebuild replaces the
-        // composer too, and the composer holds the reader's focus and their half-typed
-        // message: with a state push every 50 ms while a reply streams, rebuilding it threw
-        // away every keystroke typed during a turn. Both parts below are cheap and neither
-        // touches the composer or the settings sheet.
+        // 只重绘这次 state 能改的东西，而不是整个面板。整体重建会把输入框一起换掉，可输入框
+        // 握着读者的焦点和他们打了一半的消息：回复流式到达时每 50 ms 就推一次 state，
+        // 重建它等于把一个回合里敲的每个键都扔掉。下面这两块都很便宜，也都不碰输入框
+        // 和设置表。
         this.replaceHeader()
         this.renderTranscript()
         this.refreshSettingsSheet()
-        // The turn flag arrives in `state` too, and when it flips the send button has to become
-        // a stop button (or back). Without this the button kept the previous turn's shape until
-        // some other event happened to refresh it.
+        // 回合标志也随 `state` 一起到，它一翻转，发送按钮就得变成停止按钮（或者变回来）。
+        // 少了这一步，按钮会一直保持上一个回合的样子，直到别的什么事件碰巧把它刷新。
         this.refreshComposerAction()
         return
       }
@@ -739,17 +702,9 @@ export class App {
       case 'session.event':
         this.applySessionEvent(message.sessionId, message.event)
         return
-      // These three answer a request the reader made, so they land while the reader may be
-      // typing — a settings change echoes a result, the picker returns a list, a rebind
-      // answers. All they change is the notice, the conversation list or the composer error,
-      // so none of them needs the full rebuild that used to replace the textarea.
-      case 'session.list':
-        this.sessionsLoading = false
-        if (message.ok) this.sessions = message.sessions
-        else this.composerError = message.error
-        this.refreshForTurn()
-        this.refreshSettingsSheet()
-        return
+      // 这两个都在回应读者发出的请求，所以落地时读者可能正在打字——设置变更回一个
+      // 结果，重新绑定给一个答复。它们改的只是提示或输入框错误，所以都不需要那个
+      // 过去会换掉 textarea 的整体重建。
       case 'settings.result':
         this.notice = message.ok ? null : message.error
         this.refreshForTurn()
@@ -763,11 +718,10 @@ export class App {
 
   private applyStream(raw: unknown): void {
     if (!isRecord(raw)) return
-    // The panel renders exactly one live reply — one `run.assistantText` and one streaming
-    // bubble — so it accepts only its own conversation's deltas. Under 「工作区内」 the worker
-    // forwards the mirrored conversations too (tagging them with `attributeTo`), and their
-    // rows still arrive through `state.timeline`; only their *live text* is skipped here,
-    // because there is nowhere to put a second conversation's half-written reply.
+    // 面板只渲染一条实时回复——一个 `run.assistantText`、一个流式气泡——所以它只认
+    // 自己这段会话的 delta。在「工作区内」模式下，worker 也会转发镜像过来的会话（打上
+    // `attributeTo` 标记），它们的行照样走 `state.timeline` 进来；这里只跳过它们的
+    // *实时文本*，因为一段会话写到一半的回复没有地方放。
     const sessionId = typeof raw.sessionId === 'string' ? raw.sessionId : ''
     const active = this.state?.session.id ?? null
     if (active !== null && sessionId !== active) return
@@ -796,10 +750,9 @@ export class App {
   }
 
   private applySessionEvent(sessionId: string, event: unknown): void {
-    // Turn flags belong to the panel's own conversation. A mirrored conversation's turn
-    // events arrive too (「工作区内」), and applying them here would make the panel claim a
-    // turn is running — and swap the send button for a stop button — because some other
-    // conversation started one. Its rows still reach the transcript through `state.timeline`.
+    // 回合标志只属于面板自己这段会话。镜像过来的会话也会送来回合事件（「工作区内」），
+    // 在这儿套用它们，面板就会声称有回合在跑——还把发送按钮换成停止按钮——只因
+    // 为别的会话起了一个回合。它的行照样通过 `state.timeline` 进记录。
     const active = this.state?.session.id ?? null
     if (active !== null && sessionId !== active) return
     if (!isRecord(event)) return
@@ -819,9 +772,8 @@ export class App {
     const text = assistantTextFromEvent(event)
     if (text !== undefined) {
       this.run.assistantText = text
-      // The turn's task list, if the model announced one. Parsed from the same
-      // text the bubble renders, so what the user reads and what the checklist
-      // shows can never disagree.
+      // 本回合的清单，前提是模型宣布过一份。它和气泡渲染的是同一段文本，
+      // 所以用户读到的和清单显示的永远不会打架。
       this.run.plan = preferPlan(this.run.plan, parsePlan(text))
       this.renderStreaming()
     }
@@ -858,19 +810,18 @@ export class App {
     if (intent.kind === 'command') this.runCommand(intent)
     else if (intent.kind === 'open') this.runOpen(intent)
     else if (intent.kind === 'error') {
-      // A malformed directive is between the user and the parser. Sending the
-      // explanation to the model would be worse than useless: it would look like
-      // an instruction, and the user would be waiting for a reply about it.
+      // 格式出错的指令只发生在用户和解析器之间。把这句解释发给模型，比没用还糟：
+      // 它看起来像一条指令，用户会一直等着它得到回复。
       this.composerError = describeOpenError(this.locale, intent.error)
       this.refreshComposerMeta()
     } else void this.runPrompt(intent.text)
   }
 
   /**
-   * Run an `@open` directive: the extension opens it, not the model.
+   * 执行一条 `@open` 指令：开页面的是扩展，不是模型。
    *
-   * The point of the directive is that "open this so I can watch" must not
-   * depend on the model agreeing, so nothing here goes through the session.
+   * 这条指令的意义就在于，"打开这个让我看看"不能取决于模型同不同意，
+   * 所以这里没有任何东西经过会话。
    */
   private runOpen(intent: Extract<InputIntent, { kind: 'open' }>): void {
     const echo = intent.echo
@@ -896,7 +847,7 @@ export class App {
       })
   }
 
-  /** Execute a browser command the user typed; the typed command is the consent. */
+  /** 执行用户敲的一条浏览器命令；敲下它本身就是同意。 */
   private runCommand(intent: Extract<InputIntent, { kind: 'command' }>): void {
     const echo = intent.echo
     this.busy = true
@@ -910,20 +861,20 @@ export class App {
       .catch((error: unknown) => {
         this.busy = false
         this.composerError = error instanceof Error ? error.message : String(error)
-        // Keep the text so a rejected command can be corrected, not retyped.
+        // 把这段文本留下，这样被拒的命令还能改，不用重敲一遍。
         this.draft = echo
         this.refreshForTurn()
       })
   }
 
-  /** Forward natural language to the desktop dsh model. */
+  /** 把自然语言转发给桌面端 dsh 模型。 */
   private async runPrompt(text: string): Promise<void> {
     this.busy = true
     this.composerError = null
     this.refreshForTurn()
     try {
-      // Read the session once: every await below can be interleaved with a
-      // `state` push, and a prompt must never be sent for a null session.
+      // 会话只读一次：下面每个 await 都可能和一次 `state` 推送交错，
+      // 而 prompt 绝不能发给 null 会话。
       let sessionId = this.state?.session.id ?? null
       if (sessionId === null) {
         const created = await this.port.call({ type: 'session.create' })
@@ -957,9 +908,9 @@ export class App {
 
   private render(): void {
     const draft = this.draft
-    // The old scroller is about to be discarded, so read it before the swap: what the reader
-    // was looking at has to survive the rebuild. The remembered value is only a fallback for
-    // the case with no DOM at all (the first paint), because live DOM beats a stale number.
+    // 旧的滚动器马上要被丢掉，所以替换之前先读它：读者正在看的东西得在重建里活
+    // 下来。记住的那个值只是完全没有 DOM 时（第一次绘制）的兜底，活的 DOM 总比过期的
+    // 数字强。
     const previous = this.root.querySelector('.transcript')
     const restore = previous === null
       ? this.restoreScroll
@@ -976,15 +927,11 @@ export class App {
     if (this.settingsOpen) shell.append(this.settingsSheet())
     this.root.replaceChildren(shell)
     this.draft = draft
-    const input = this.root.querySelector<HTMLTextAreaElement>('.composer__input')
-    if (input !== null) {
-      // Re-assert the value: any repaint must not leave stale text in the box,
-      // and the placeholder stays where it belongs — in the attribute.
-      input.value = this.draft
-      this.autoGrow(input)
-    }
-    // `null` means the reader was at the bottom, which is the only case that follows the
-    // tail; anywhere else keeps them exactly where they were reading.
+    // 把这个值重新写回去：任何重绘都不该在框里留下过期文本，placeholder 要留在它该在的
+    // 地方——attribute 里。
+    this.refreshComposerValue()
+    // `null` 表示读者本来就在底部，也只有这个状态会跟着尾部走；别的位置都把他们留在
+    // 正在读的地方。
     this.restoreScroll = restore
     if (restore === null) transcript.scrollTop = transcript.scrollHeight
     else transcript.scrollTop = restore
@@ -994,18 +941,22 @@ export class App {
     if (this.backgroundDown) {
       inner.append(this.noticeNode(this.copy.common.reconnectFailed, null, 'alert', true))
     }
-    // Another browser holds the connection. Say so plainly and offer the only
-    // way back: the extension will not reclaim the slot by itself, because two
-    // open browsers doing that would evict each other in a loop.
+    // 另一个浏览器占着连接。照实说出来，并给出唯一一条回去的路：扩展不会自己把位置
+    // 抢回来，因为两个开着的浏览器这么干会互相把对方踢掉，转成死循环。
     if (this.state?.replaced === true) {
       inner.append(this.noticeNode(this.copy.bridge.replaced, null, 'alert', true, {
         label: this.copy.bridge.reclaim,
         onClick: () => { this.port.post({ type: 'bridge.reclaim' }) },
       }))
     }
-    // A follow that failed is why the transcript above can be empty while the
-    // desktop app shows a conversation; without saying so, "not following" and
-    // "nothing to show" look the same.
+    // 连接被 bridge 明确拒绝：装错构建、扩展 id 不在白名单、或令牌不对。这一类失败和
+    // "桌面端没开"长得一模一样，却只有它是用户自己能修的，所以必须点名说出来。
+    const rejection = this.state?.bridgeRejection
+    if (rejection !== null && rejection !== undefined && this.state?.bridge !== 'connected') {
+      inner.append(this.noticeNode(this.copy.common.bridgeRejected, null, 'alert', true))
+    }
+    // 跟随失败，正是上面记录会空着、而桌面应用却显示着一段会话的原因；
+    // 不说清楚这一点，"没有跟随"和"没有东西可显示"看起来一模一样。
     const followError = this.state?.followError
     if (followError !== null && followError !== undefined) {
       inner.append(this.noticeNode(followError, null, 'info', false))
@@ -1018,9 +969,8 @@ export class App {
     }
     for (const request of this.approvals.values()) inner.append(this.approvalNode(request))
 
-    // The task list sits above the run: it is what the user watches to see the
-    // request being worked through, so it must not scroll away behind the
-    // individual tool steps that implement it.
+    // 清单摆在这次运行上方：用户就是看着它了解请求处理到哪一步了，所以它绝不能
+    // 被下面那些实现它的单步工具顶得滚走。
     const plan = this.run.plan
     if (plan !== null) inner.append(this.planNode(plan))
 
@@ -1037,11 +987,10 @@ export class App {
   }
 
   /**
-   * Repaint the header in place.
+   * 原地重绘页头。
    *
-   * The header is the only other part of the panel that renders from `state`, so a state
-   * push repaints it and the transcript and leaves the composer alone — replacing the
-   * composer is what lost the reader's focus and typing.
+   * 页头是面板里另一处从 `state` 渲染的地方，所以一次 state 推送重绘它和记录，把输入框
+   * 放在一边——换掉输入框才是弄丢焦点和输入的原因。
    */
   private replaceHeader(): void {
     const existing = this.root.querySelector('.header')
@@ -1053,21 +1002,42 @@ export class App {
   }
 
   /**
-   * Repaint what a turn boundary changes, without rebuilding the composer.
+   * 只重绘回合边界会改的东西，不重建输入框。
    *
-   * `turn/start` and `turn/end` used to call the full `render()`, which replaced the
-   * textarea and dropped the reader's focus and typing at the exact moment they were
-   * composing their next message (and again when the reply finished). Everything a turn
-   * change can affect is the header, the transcript, the send/stop button and the meta line;
-   * the textarea itself is untouched by all of it.
+   * `turn/start` 和 `turn/end` 以前会调完整的 `render()`，它替换 textarea，正好在读者
+   * 写下一段消息时把焦点和输入丢掉（回复结束时再丢一次）。一个回合变化
+   * 能影响的无非是页头、记录、textarea 的*值*、发送/停止按钮和元信息行；textarea
+   * *元素* 本身不受其中任何一项影响。
    */
   private refreshForTurn(): void {
     this.replaceHeader()
     this.renderTranscript()
+    // 放在动作按钮之前：每个调用方都已经写好新的 `draft`，所以输入框会在回合变化的那个
+    // tick 上同步过去，绝不会晚于反映它的按钮。
+    this.refreshComposerValue()
     this.refreshComposerAction()
   }
 
-  /** Swap the send button for a stop button, or back, keeping the textarea in place. */
+  /**
+   * 把 `this.draft` 重新写回实时 textarea，并重跑一次自动增高。
+   *
+   * textarea 有意活过整个回合——换掉它才是弄丢焦点和输入的原因——但这也意味着
+   * 它是局部重绘里唯一不重建的节点，所以它会留着最后敲进去的内容。`submit()` 在
+   * promise（`runPrompt`、`runCommand`、`runOpen`）里清空 `this.draft`，少了这一步，刚发出去的
+   * 那句话就还留在框里：看起来像这次发送没发生，再按一次 Enter 就发两遍。
+   *
+   * 只在值确实不同时才写，能让多余的 no-op 重绘不去动光标——这很重要，因为读者
+   * 可能已经在写下一条消息了。
+   */
+  private refreshComposerValue(): void {
+    const input = this.root.querySelector<HTMLTextAreaElement>('.composer__input')
+    if (input === null) return
+    if (input.value === this.draft) return
+    input.value = this.draft
+    this.autoGrow(input)
+  }
+
+  /** 把发送按钮换成停止按钮，或者换回来，同时让 textarea 留在原地。 */
   private refreshComposerAction(): void {
     const existing = this.root.querySelector('#composer-action')
     if (existing === null) {
@@ -1094,12 +1064,11 @@ export class App {
   }
 
   /**
-   * Coalesce streaming repaints to one per frame.
+   * 把流式重绘合并成每帧一次。
    *
-   * Deltas can arrive far faster than the display refreshes, so repainting on every one
-   * repeated identical work and let the queue grow without bound. Setting a flag and
-   * repainting on the next animation frame makes the cost depend on the reply length
-   * instead of on the arrival rate.
+   * delta 到的速度可能远快过显示器刷新，所以来一个重绘一次只是重复同样的活儿，
+   * 还让队列无界地涨。立个标志、留到下一个动画帧再重绘，开销就取决于回复长度，
+   * 而不是到达速率。
    */
   private renderStreaming(): void {
     if (this.streamRepaintQueued) return
@@ -1110,38 +1079,36 @@ export class App {
     })
   }
 
-  /** Repaint only the streaming reply, which is the common case while it types. */
+  /** 只重绘那条正在流式的回复，这是它打字时的常态。 */
   private repaintStreaming(): void {
-    // The task list changes on the same event as the text, so it is refreshed
-    // with the bubble rather than waiting for a full transcript repaint.
+    // 清单和文本在同一个事件里变，所以它跟着气泡一起刷新，不用等一次完整的
+    // 记录重绘。
     this.paintPlan()
-    // Both the synthetic row and a durable running row carry this hook, so the typing
-    // reply is found whichever one the worker produced.
+    // 合成行和仍在运行的持久行都带这个钩子，所以不管 worker 给出的是哪一种，
+    // 正在打字的回复都能被找到。
     const bubble = this.root.querySelector('[data-streaming] .msg__text')
     if (bubble === null) {
-      // Nothing is streaming on screen yet. A full rebuild is correct here (the row is
-      // about to appear) and it happens once per reply rather than once per frame.
+      // 屏幕上还没有东西在流式。这里整体重建是对的（这一行马上要出现），
+      // 而且是每条回复一次，不是每帧一次。
       this.renderTranscript()
       return
     }
-    // Read the text to show from the row, not from `run.assistantText`: the durable row is
-    // the committed text plus this attempt, so using the attempt alone would drop what came
-    // before it. A reply queued for a row that is not in the transcript yet keeps the text
-    // already on screen rather than blanking it.
+    // 要显示的文本从行里读，不从 `run.assistantText` 读：持久行是已提交文本加上
+    // 这一次尝试，只取这一次尝试会丢掉它前面的内容。为一条还没进记录的行排队的
+    // 回复，会保住屏幕上已有的文本，而不是清空它。
     const row = this.transcriptRows().find((entry) => this.isStreamingRow(entry))
     if (row === undefined) return
 
     if (bubble.textContent !== row.text) {
       bubble.replaceChildren(...this.assistantBubbleChildren(row.text, true))
     }
-    // Follow the tail only if the reader had not left it. Read before the write above would
-    // be ideal, but the scroll offset is unaffected by replacing the bubble's own children
-    // (only its height changes), so this stays a single flush.
+    // 只有读者本来没离开尾部，才跟着尾部走。在写之前读会更理想，但滚动偏移不受
+    // 替换气泡子节点的影响（变的只是它的高度），所以这里等一次刷新就行。
     const transcript = this.root.querySelector('.transcript')
     if (transcript !== null && atBottom(transcript)) transcript.scrollTop = transcript.scrollHeight
   }
 
-  /** Repaint the task list in place, inserting it when the turn announces one. */
+  /** 原地重绘清单，本回合宣布过一份就把它插进去。 */
   private paintPlan(): void {
     const inner = this.root.querySelector('.transcript__inner')
     if (inner === null) return
@@ -1153,8 +1120,8 @@ export class App {
     }
     const next = this.planNode(plan)
     if (existing === null) {
-      // Before every request row, so the list reads as "here is the job" and the
-      // steps below it are visibly working through it.
+      // 放在每行请求之前，这样这份清单读起来就像"这就是那件活儿"，下面的
+      // 步骤显然正在一步步做完它。
       const first = inner.querySelector('.msg--user')
       if (first === null) inner.append(next)
       else inner.insertBefore(next, first)
@@ -1164,11 +1131,10 @@ export class App {
   }
 
   /**
-   * The turn's checklist: one row per task, with the state the model last wrote.
+   * 本回合的清单：每个任务一行，带模型最后写下的状态。
    *
-   * This is the panel's answer to "how far along is it?" that a tool log cannot
-   * give — the log shows the steps that ran, this shows the job they belong to,
-   * including the parts not started yet and the ones that failed.
+   * 这是面板对"做到哪一步了？"的回答，工具日志答不上来——日志显示跑过哪些
+   * 步骤，这里显示它们属于哪件活儿，包括还没开始的和失败的部分。
    */
   private planNode(plan: Plan): HTMLElement {
     const wrap = el('section', { className: 'plan' })
@@ -1180,9 +1146,9 @@ export class App {
         el('span', {
           className: 'plan__count',
           text: this.copy.plan.progress
-            // Only genuinely finished tasks count as done. Lumping failures in
-            // with them produced "5/5 done" beside two rows marked failed, which
-            // is the panel telling the user something it can see is untrue.
+            // 只有真正完成的任务才算已完成。把失败也算进去，就会在两行标着失败
+            // 的任务旁边显示"5/5 已完成"，那就是面板在说一件它自己都看得出不成立的
+            // 事。
             .replace('{done}', String(progress.done))
             .replace('{failed}', String(progress.failed))
             .replace('{total}', String(progress.total)),
@@ -1208,9 +1174,8 @@ export class App {
   private header(): HTMLElement {
     const state = this.state
     const bridge = state?.bridge ?? 'stopped'
-    // The panel's own title is already shown by the browser's side-panel chrome,
-    // so the header carries only what changes: the page under control, the
-    // connection, and the settings entry.
+    // 面板标题已经由浏览器的侧边面板外框显示了，所以页头只放会变的东西：
+    // 受控页面、连接状态、设置入口。
     const pill = el('span', {
       className: 'header__tab',
       attributes: { title: state === null ? this.copy.common.reconnecting : this.copy.tab.controlled },
@@ -1230,9 +1195,8 @@ export class App {
       }))
     }
     const settingsButton = iconButton('settings', this.copy.settings.heading, () => { this.toggleSettings(true) })
-    // A stable hook: the only other way to name this button is its label, which
-    // changes with the UI language, and a test that finds it by text would break
-    // on a machine that reports a different one.
+    // 留一个稳定的钩子：不然只能靠标签认出这个按钮，而标签随界面语言
+    // 变，靠文本找它的测试换一台报别的语言的机器就挂。
     settingsButton.dataset.role = 'settings'
     actions.append(settingsButton)
 
@@ -1258,25 +1222,25 @@ export class App {
   }
 
   /**
-   * Build the settings rows into an existing body.
+   * 把设置行建进一个已经有的主体里。
    *
-   * Split out so a state push can refresh the rows — the connection badge among them —
-   * without rebuilding the sheet, which would lose its scroll position and close any open
-   * dropdown. Only the body is replaced; the header and its close button stay put.
+   * 单独拆出来，是为了让一次 state 推送能刷新这些行——包括里面的连接徽章——
+   * 而不重建整张表：重建会丢掉滚动位置，还会关掉已经打开的下拉。被换掉的只有
+   * 主体；页头和它的关闭按钮留在原地。
    */
   private fillSettingsBody(body: Element): void {
     const settings = this.state?.settings ?? normalizeSettings(undefined)
-    // Only choices the user can actually make: the bridge address, the token,
-    // and the approval-notification fallback are all decided for them by the
-    // Chrome-over-loopback path. An installed troubleshooting skill covers the
-    // cases where a human has to intervene.
+    // 只留下用户真正能做的选择：bridge 地址、token、审批通知的兜底，
+    // Chrome-over-loopback 这条路已经替他们定好了。需要
+    // 人介进来的情况，由一个已安装的排查技能覆盖。
     body.replaceChildren(
-      this.openPagesSetting(),
+      this.connectionSetting(),
       this.sharingSetting(settings),
       this.conversationSetting(settings),
       this.tabSwitchSetting(settings),
       this.visionSetting(settings),
-      this.switchSetting(this.copy.settings.autoOpen, settings.autoOpenPanel, this.copy.settings.autoOpenHelp, (checked) => {
+      // 这一行没有说明文字：标签本身已经问得很清楚了，多一句解释只是噪音。
+      this.switchSetting(this.copy.settings.autoOpen, settings.autoOpenPanel, undefined, (checked) => {
         this.sendSettings({ autoOpenPanel: checked })
       }),
       this.switchSetting(this.copy.settings.unrestricted, settings.unrestrictedBrowserAccess, this.copy.settings.unrestrictedHelp, (checked) => {
@@ -1290,28 +1254,19 @@ export class App {
   }
 
   /**
-   * Refresh the open settings sheet, but only when something it draws has changed.
+   * 刷新已经打开的设置表，但只在它画出来的东西变了的时候。
    *
-   * Every `state` push used to rebuild the sheet, and pushes arrive every 50 ms while a reply
-   * streams. The sheet holds four `<select>`s and two switches, so rebuilding it twenty times
-   * a second destroyed the focused control and closed any open dropdown — the sheet was
-   * unusable during exactly the moment someone would reach for it. Nothing it draws depends
-   * on the transcript, so the comparison below is the whole set of inputs.
+   * 以前每一次 `state` 推送都重建这张表，而回复流式到达时每 50 ms 就推一次。
+   * 表里有四个 `<select>` 和两个开关，每秒重建二十次会把拿到焦点的控件毁掉、把
+   * 打开的下拉关掉——这张表偏偏就在有人要动它的时候变得没法用。它画出来的东西
+   * 只取决于设置与策略，所以下面这次比较就是全部的输入。
    */
   private refreshSettingsSheet(): void {
     const body = this.root.querySelector('.sheet__body')
     if (body === null) return
-    // Everything `fillSettingsBody` reads, not just the settings. The conversation picker also
-    // draws from the fetched list and its loading flag, so leaving those out meant the reply to
-    // `session.list` was swallowed by this guard: the sheet was never redrawn with the options,
-    // and a `<select>` holding only its placeholder never fires `change` — the picker latched on
-    // 「正在读取…」 with no way out.
     const fingerprint = JSON.stringify({
       settings: this.state?.settings ?? null,
       policy: this.state?.policy ?? null,
-      sessions: this.sessions.length,
-      sessionsLoading: this.sessionsLoading,
-      pinnedSessionId: this.state?.settings.pinnedSessionId ?? null,
     })
     if (fingerprint === this.settingsFingerprint) return
     this.settingsFingerprint = fingerprint
@@ -1319,12 +1274,11 @@ export class App {
   }
 
   /**
-   * How far image recognition goes.
+   * 图像识别做到什么程度。
    *
-   * The only control this feature needs here. Where the call goes — the desktop, or
-   * an endpoint the browser reaches itself — is deployment configuration, not a
-   * question for a settings sheet: the desktop's base URL and model already have
-   * defaults, and being asked for a model id is not a choice, it is a chore.
+   * 这个功能在这里只需要这一个控件。调用发到哪儿——桌面端，还是浏览器
+   * 够得着的一个 endpoint——属于部署配置，不该由设置表来问：桌面端的 base URL
+   * 和模型都有默认值，而被问一个 model id 不算选择，是件杂务。
    */
   private visionSetting(settings: Settings): HTMLElement {
     const select = el('select', { className: 'select', attributes: { 'aria-label': this.copy.settings.visionTier } })
@@ -1347,18 +1301,20 @@ export class App {
   }
 
   /**
-   * Which desktop conversation the panel talks to.
+   * 面板在和桌面端的哪段会话对话。
    *
-   * The target is chosen, never inferred. The desktop publishes no "session I am
-   * viewing" signal, so a mode that guessed from recent activity would deliver a
-   * message into the wrong conversation without saying so.
+   * 三档：在浏览器工作区里新建一段、接着上一段、或镜像全部工作区。目标只能选，从不推断 ——
+   * 桌面端没发出任何"我正在查看的会话"信号，所以一个靠最近活动去猜的模式，会不声不响地把
+   * 消息投到错的会话里。
+   *
+   * 后两档原先各有一个手选的会话下拉（`pinned` 那档）。它已经删掉了：那套手选 id 和
+   * 「上次那段」已经记住的 id 是同一件事的两处真相来源，合并之后不再需要选。
    */
   private conversationSetting(settings: Settings): HTMLElement {
-    const pinned = settings.sessionScope === 'pinned'
     const select = el('select', { className: 'select', attributes: { 'aria-label': this.copy.settings.conversation } })
     for (const [value, label] of [
       ['fresh', this.copy.settings.conversationFresh],
-      ['pinned', this.copy.settings.conversationPinned],
+      ['last', this.copy.settings.conversationLast],
       ['workspace', this.copy.settings.conversationWorkspace],
     ] as const) {
       const option = el('option', { text: label, attributes: { value } })
@@ -1366,73 +1322,18 @@ export class App {
       select.append(option)
     }
     select.addEventListener('change', () => {
-      if (select.value === 'fresh') {
-        void this.port.call({ type: 'session.select', id: '', scope: 'fresh', sessionId: null })
-        return
-      }
-      if (select.value === 'workspace') {
-        // No target to pick: the mode mirrors whatever the desktop's browser workspace
-        // holds, and the worker reads that set itself. Asking for the conversation list
-        // here would be the wrong list — it is every conversation, not the group.
-        void this.port.call({ type: 'session.select', id: '', scope: 'workspace', sessionId: null })
-        return
-      }
-      // Switching to "continue" needs a target: ask for the list and let the
-      // picker below do the choosing rather than defaulting to something.
-      this.requestSessions()
-      this.render()
+      // 三档都不需要目标：`workspace` 镜像的集合由 worker 自己去读，另外两档用记住的那段对话。
+      // `select.value` 就是上面那三个字面量之一，这里的断言只是把它带回联合类型。
+      void this.port.call({ type: 'session.select', id: '', scope: select.value as Settings['sessionScope'], sessionId: null })
     })
-
-    const row = this.settingRow(this.copy.settings.conversation, select, this.copy.settings.conversationHelp)
-    if (!pinned) return row
-
-    // The picker, shown only while "continue a conversation" is selected.
-    const picker = el('select', { className: 'select', attributes: { 'aria-label': this.copy.settings.conversationPick } })
-    const chosen = this.sessions.some((session) => session.sessionId === settings.pinnedSessionId)
-    if (!chosen) {
-      const placeholder = el('option', {
-        text: this.sessionsLoading ? this.copy.settings.conversationLoading : this.copy.settings.conversationNone,
-        attributes: { value: '' },
-      })
-      placeholder.selected = true
-      picker.append(placeholder)
-    }
-    for (const session of this.sessions) {
-      const option = el('option', { text: sessionLabel(session, this.copy), attributes: { value: session.sessionId } })
-      if (session.sessionId === settings.pinnedSessionId) option.selected = true
-      picker.append(option)
-    }
-    picker.addEventListener('change', () => {
-      if (picker.value === '') return
-      // `follow` is what makes the panel show a conversation the desktop app is
-      // driving: binding alone renders an empty transcript, because the worker
-      // drops any event whose Session is not the one it is bound to.
-      void this.port.call({ type: 'session.select', id: '', scope: 'pinned', sessionId: picker.value, follow: true })
-    })
-    row.append(el('div', { className: 'setting__actions', children: [picker] }))
-    return row
-  }
-
-  /** Ask the worker for the desktop's recent conversations. */
-  private requestSessions(): void {
-    if (this.sessionsLoading) return
-    this.sessionsLoading = true
-    void this.port.call({ type: 'session.list', id: '' })
-      .catch(() => {
-        // The list result carries a failure the worker answers with, but the call itself can
-        // fail too — a dead port rejects immediately. Without clearing the flag here, that
-        // early return above latched forever and the picker stayed on "loading" with no way
-        // back for the rest of the panel's life.
-        this.sessionsLoading = false
-        this.refreshSettingsSheet()
-      })
+    return this.settingRow(this.copy.settings.conversation, select, this.copy.settings.conversationHelp)
   }
 
   /**
-   * How a manual tab switch resolves.
+   * 手动切一次标签页之后，事情怎么收尾。
    *
-   * This used to be an in-transcript prompt on every switch, which the user
-   * asked to move here: once the answer is known, being asked again is noise.
+   * 这以前是每次切换时写在记录里的一段提示，用户要求挪到这里：答案已经知道了，
+   * 再问一次就是噪音。
    */
   private tabSwitchSetting(settings: Settings): HTMLElement {
     const select = el('select', { className: 'select', attributes: { 'aria-label': this.copy.settings.tabSwitch } })
@@ -1474,11 +1375,9 @@ export class App {
   }
 
   private emptyNode(): HTMLElement {
-    // One line, nothing else: the panel is for talking, not for tutorials.
-    return el('div', {
-      className: 'empty',
-      children: [el('div', { className: 'empty__title', text: this.copy.empty.title })],
-    })
+    // 空着就是空着：面板是拿来对话的，不是拿来上教程的，也不是拿来报「准备就绪」的。
+    // 保留这个空节点（而不是不渲染）是为了让 `.empty` 的留白仍然把记录区撑开。
+    return el('div', { className: 'empty' })
   }
 
   private noticeNode(
@@ -1540,17 +1439,16 @@ export class App {
 
   private approvalNode(request: ApprovalRequest): HTMLElement {
     const card = el('div', { className: 'approval' })
-    // Say what is being asked before saying what it would do. Without this line
-    // the card opened with the tool's own summary ("点击元素 [3]"), which reads
-    // like machine output and leaves the user to work out that they are being
-    // asked a question at all.
+    // 先说清楚在问什么，再说它会做什么。没有这一行，卡片一打开就是工具自己的摘要
+    // （"点击元素 [3]"），读着像机器输出，用户还得自己反应过来：原来这是在问我一个
+    // 问题。
     card.append(el('p', {
       className: 'approval__ask',
       text: request.kind === 'read' ? this.copy.approval.askRead : this.copy.approval.askAction,
     }))
     card.append(el('p', { className: 'approval__summary', text: request.summary }))
-    // The origin is stated in words, not as a tag: it is the one fact that
-    // decides the answer, so it reads as a sentence next to the summary.
+    // 来源写成文字，不做成标签：它是决定答案的那个事实，就该读起来像
+    // 摘要旁边的一句话。
     const origins = request.origins.length === 0
       ? this.copy.approval.unknownOrigin
       : request.origins.join(' · ')
@@ -1586,13 +1484,13 @@ export class App {
   private assistantBubbleChildren(text: string, streaming: boolean): Node[] {
     const nodes: Node[] = []
     if (streaming) {
-      // While the reply types, show it as plain text. Rendering Markdown here would re-parse
-      // and re-sanitize the entire reply once per delta, which is what made a long answer
-      // freeze the panel; the finished reply is rendered properly one line below.
+      // 回复还在打字时按纯文本显示。这里渲染 Markdown 会让每个 delta 都把整条回复
+      // 重新解析、重新消毒一遍，长答案冻住面板就是这个原因；已完成的回复在下一行
+      // 走正常的渲染。
       if (text !== '') nodes.push(el('div', { text }))
     } else if (hasMarkdownContent(text)) {
       const html = el('div')
-      // The only innerHTML in this file, and the input is sanitized markdown.
+      // 这个文件里唯一一处 innerHTML，输入是消过毒的 markdown。
       html.innerHTML = renderMarkdown(text)
       nodes.push(...html.childNodes)
     }
@@ -1606,21 +1504,20 @@ export class App {
     bubble.append(...this.assistantBubbleChildren(row.text, streaming))
     return el('div', {
       className: streaming ? 'msg msg--assistant msg--streaming' : 'msg msg--assistant',
-      // A durable row that is still running is marked so the streaming repaint can find it
-      // and update its text in place, rather than rebuilding the whole transcript.
+      // 仍在运行的持久行会打个标记，好让流式重绘找到它、原地更新文本，
+      // 而不是重建整份记录。
       attributes: streaming ? { 'data-streaming': 'true' } : {},
       children: [bubble],
     })
   }
 
   /**
-   * Whether a row is the reply currently being typed.
+   * 判断一行是不是那条正在输入的回复。
    *
-   * There are two ways a row can be streaming, and treating only the first as streaming was
-   * the reason a long reply stayed slow: the worker creates a durable `assistant` row on the
-   * first delta and updates it `running` for the whole turn, so the synthetic row below is
-   * never added and the durable one — which is the *normal* case in the real app — was being
-   * rendered as finished Markdown on every frame.
+   * 一行有两种方式算作流式中，只认第一种正是长回复一直很慢的原因：
+   * worker 在第一个 delta 就建一条持久的 `assistant` 行，整个回合都把它更新成
+   * `running`，于是下面那条合成行从来没被加上，而那条持久行——它在真实应用里才是*正常*
+   * 情况——每帧都被当成已完成的 Markdown 渲染。
    */
   private isStreamingRow(row: TimelineEntry): boolean {
     if (row.id === STREAMING_ID) return true
@@ -1670,7 +1567,7 @@ export class App {
     return wrapper
   }
 
-  /** The transcript rows, with the in-flight reply appended while it streams. */
+  /** 记录里的各行，流式中的那条回复在传输期间追加在后面。 */
   private transcriptRows(): TimelineEntry[] {
     const settled = this.state !== null
       ? timelineFromState(this.state)
@@ -1683,9 +1580,8 @@ export class App {
           at: entry.at,
           callId: entry.id,
         }))
-    // The durable assistant row only arrives at the end of the turn, so the live
-    // text is shown as one synthetic row until then. Once the durable row
-    // exists, it is the one rendered: the answer never appears twice.
+    // 持久的 assistant 行要等回合结束才到，所以在那之前，实时文本显示为一条合成
+    // 行。持久行一出现就渲染它：答案永远不会出现两次。
     if (this.run.assistantText.trim() === '') return settled
     if (settled.some((row) => row.kind === 'assistant')) return settled
     return [...settled, {
@@ -1698,10 +1594,10 @@ export class App {
   }
 
   /**
-   * The composer's send-or-stop control.
+   * 输入框的发送或停止控件。
    *
-   * Split out because a turn boundary changes only this button, and swapping the whole
-   * composer to get it would replace the textarea the reader is typing in.
+   * 单独拆出来，是因为回合边界只改这一个按钮，为了拿到它去换掉整个输入框，就会换掉
+   * 读者正在打字的那个 textarea。
    */
   private composerAction(): HTMLButtonElement {
     const button = this.runIsActive()
@@ -1718,7 +1614,7 @@ export class App {
           children: [icon('send', 16)],
         })
     if (this.busy) button.setAttribute('disabled', 'true')
-    // Marked so a turn boundary can find and replace exactly this node.
+    // 打个标记，好让回合边界能找到并精确替换这一个节点。
     button.id = 'composer-action'
     return button
   }
@@ -1734,8 +1630,7 @@ export class App {
         placeholder: this.copy.composer.placeholder,
       },
     })
-    // Explicitly empty: the placeholder is an attribute, and the box must never
-    // open with text already in it.
+    // 显式清空：placeholder 是一个 attribute，这个框绝不能一打开里面就有文本。
     input.value = this.draft
     input.addEventListener('input', () => {
       this.draft = input.value
@@ -1756,11 +1651,10 @@ export class App {
   }
 
   /**
-   * Grow the input to fit its draft, up to a fixed cap.
+   * 让输入框长到刚好装下草稿，最多长到一个固定上限。
    *
-   * The cap matches `max-height` in the stylesheet. A viewport fraction was
-   * wrong here: the same draft took a different amount of the panel depending on
-   * the window size, and a tall window let the input crowd out the conversation.
+   * 这个上限和样式表里的 `max-height` 对齐。这里用视口比例是错的：同一份草稿会随窗口
+   * 大小占掉面板的不同比例，窗口一高，输入框就把对话挤出去了。
    */
   private autoGrow(input: HTMLTextAreaElement): void {
     const MAX_INPUT_HEIGHT = 160
@@ -1776,13 +1670,12 @@ export class App {
   }
 
   /**
-   * The one line under the composer.
+   * 输入框下面的那一行。
    *
-   * Empty unless there is something to say: a ready panel shows no syntax
-   * tutorial, and a typed draft only reports a problem (a failed send, or a
-   * model request while the bridge is down). The one exception is a draft that
-   * starts with `@`, because a directive cannot be guessed — showing the formula
-   * while it is being typed is the only place it can be learned.
+   * 没话说就是空的：就绪的面板不显示语法教程，已输入的草稿也只在有
+   * 问题时才报（一次发送失败，或者 bridge 断开时的一次模型请求）。唯一的例外是以
+   * `@` 开头的草稿，因为指令猜不出来——在输入的过程中显示它的格式，是唯一
+   * 能学到它的地方。
    */
   private composerMetaChildren(): Node[] {
     if (this.composerError !== null) {
@@ -1791,12 +1684,10 @@ export class App {
     const draft = this.draft.trim()
     if (draft.startsWith('@')) {
       const intent = classifyInput(draft)
-      // A half-written directive is shown as a quiet hint — it is a reminder of
-      // the shape, not a complaint — while a real mistake is shown as an error.
-      // The distinction comes from the parser (`isSoftOpenError`), not from the
-      // wording: deciding it by testing whether the message began with a
-      // particular Chinese phrase meant the hint vanished in English, and the
-      // browser would have been right to complain in Chinese.
+      // 写了一半的指令按安静的提示显示——是格式提醒，不是抱怨
+      // ——真正的错误才按错误显示。这个区分来自解析器（`isSoftOpenError`），
+      // 不看措辞：靠判断消息是不是以某个中文短语开头，意味着这个提示在
+      // 英文下会消失，而浏览器本来就有理由用中文抱怨。
       if (intent.kind === 'error') {
         const className = isSoftOpenError(intent.error) ? 'composer__hint' : 'composer__error'
         return [el('span', { className, text: describeOpenError(this.locale, intent.error) })]
@@ -1817,34 +1708,48 @@ export class App {
   }
 
   /**
-   * The panel's view of the desktop app's "open pages for the user" switch.
+   * 面板对桌面应用"为用户打开页面"这个开关的看法。
    *
-   * The badge reports the *connection*, not the value. Before a handshake there
-   * is no policy at all, and labelling that "not allowed" made a healthy
-   * extension look broken — so the badge says 已连接/未连接, and whether pages
-   * may be opened is told by the help line, which is where that belongs.
+   * 徽章报的是*连接*，不是那个值。握手之前根本还没有任何策略，把那种状态标成
+   * "不允许"会让一个好好的扩展看起来是坏的——所以徽章只说 已连接/未连接，页面
+   * 能不能被打开由帮助行交代，那才是它该待的地方。
    *
-   * Read-only on purpose. The desktop app owns the setting, so the panel states
-   * it and says where to change it, rather than offering a control the app would
-   * immediately overwrite.
+   * 有意做成只读。这个设置归桌面应用，所以面板只把它说出来、告诉你去哪儿改，而不是
+   * 给一个会被应用立刻覆盖掉的控件。
    */
-  private openPagesSetting(): HTMLElement {
-    const policy = this.state?.policy ?? null
-    const connected = policy !== null
-    const allowed = policy?.openPagesForUser === true
-    const help = policy === null
-      ? this.copy.settings.openPagesUnknown
-      : allowed ? this.copy.settings.openPagesOnHelp : this.copy.settings.openPagesOffHelp
+  /**
+   * 设置面板第一行：**连接状态**，只读。
+   *
+   * 它原先叫 `openPagesSetting`，却用 `policy !== null` 判断「已连接」——那问的是
+   * 「宿主有没有下发 policy」，不是「扩展连上没有」。两件事通常同时为真，所以错得
+   * 不明显；但一边是连接事实、一边是桌面端的策略字段，任一为假就会显示反的状态。
+   * 现在按 `state.bridge` 如实显示，和顶部状态点同一个来源、同一套颜色。
+   */
+  private connectionSetting(): HTMLElement {
+    const bridge = this.state?.bridge ?? null
+    // 徽章只放短语；「要先打开 dsh」这类整句留给下面的说明行与 title，别挤进徽章。
+    const short = bridge === null
+      ? this.copy.settings.connectionOff
+      : bridge === 'connected'
+        ? this.copy.settings.connectionOn
+        : bridge === 'stopped' ? this.copy.settings.connectionOff : this.copy.settings.connectionConnecting
+    // 三种情况分开说：连上了、明确断了、还没收到任何 state。「断了」和「还没消息」
+    // 原因相同但严重程度不同，用同一句话会让"刚打开面板"和"连接掉了"看起来一样。
+    const help = bridge === null
+      ? this.copy.settings.connectionUnknown
+      : bridge === 'stopped' ? this.copy.settings.connectionOffHelp : this.copy.settings.connectionHelp
     return el('div', {
       className: 'setting',
       children: [
         el('div', {
           className: 'setting__row',
           children: [
-            el('div', { className: 'setting__label', text: this.copy.settings.openPages }),
+            el('div', { className: 'setting__label', text: this.copy.settings.connection }),
             el('span', {
-              className: connected ? 'badge badge--on' : 'badge',
-              text: connected ? this.copy.settings.openPagesOn : this.copy.settings.openPagesOff,
+              className: bridge === 'connected' ? 'badge badge--on' : 'badge',
+              // 状态点是给眼睛的，这枚徽章是配给它的字；两者读同一个值。
+              text: short,
+              attributes: { title: help },
             }),
           ],
         }),
@@ -1858,7 +1763,6 @@ export class App {
     for (const [value, label] of [
       ['ask', this.copy.settings.sharingAsk],
       ['auto', this.copy.settings.sharingAuto],
-      ['off', this.copy.settings.sharingOff],
     ] as const) {
       const option = el('option', { text: label, attributes: { value } })
       if (settings.sharePageContent === value) option.selected = true
@@ -1871,17 +1775,23 @@ export class App {
   }
 
 
-  private settingRow(label: string, control: Node, help: string): HTMLElement {
+  /**
+   * 一行设置：标签 + 控件，下面跟一句说明。
+   *
+   * `help` 是可选的。没有说明时不渲染空的 `.setting__help`——留一个空 div 只会多出一段
+   * 没有内容的行距，看着像漏了字。（那条 CSS 用了 `pre-wrap`，正是靠它渲染多行说明。）
+   */
+  private settingRow(label: string, control: Node, help?: string): HTMLElement {
+    const row = el('div', { className: 'setting__row', children: [el('div', { className: 'setting__label', text: label }), control] })
     return el('div', {
       className: 'setting',
-      children: [
-        el('div', { className: 'setting__row', children: [el('div', { className: 'setting__label', text: label }), control] }),
-        el('div', { className: 'setting__help', text: help }),
-      ],
+      children: help === undefined || help === ''
+        ? [row]
+        : [row, el('div', { className: 'setting__help', text: help })],
     })
   }
 
-  private switchSetting(label: string, checked: boolean, help: string, onChange: (checked: boolean) => void): HTMLElement {
+  private switchSetting(label: string, checked: boolean, help: string | undefined, onChange: (checked: boolean) => void): HTMLElement {
     const input = el('input', { attributes: { type: 'checkbox', 'aria-label': label } })
     input.checked = checked
     input.addEventListener('change', () => { onChange(input.checked) })
@@ -1892,7 +1802,7 @@ export class App {
     return this.settingRow(label, control, help)
   }
 
-  /** Mark the page as detached from the worker without inventing any state. */
+  /** 把页面标成与 worker 断开，不臆造任何状态。 */
   markOffline(): void {
     if (this.backgroundDown) return
     this.backgroundDown = true
@@ -1900,10 +1810,10 @@ export class App {
   }
 }
 
-/** The synthetic row id for the reply that is still streaming. */
+/** 仍在流式的那条回复用的合成行 id。 */
 const STREAMING_ID = '__streaming__'
 
-/** Attach the page to a document. Used by the entry point and by tests. */
+/** 把页面挂到 document 上。入口点和测试都用它。 */
 export function mountControlPage(
   root: HTMLElement,
   locale: UiLocale = getUiLocale(),
@@ -1926,10 +1836,9 @@ function main(): void {
   const root = document.getElementById('control-root')
   if (root !== null) {
     const mounted = mountControlPage(root)
-    // A handle on the live panel. There is no devtools path into a side panel's
-    // module scope, so without this the running UI cannot be inspected or driven
-    // from the page console — which is how the layout measurement script feeds it
-    // real content instead of injecting HTML that bypasses the render path.
+    // 一个通向实时面板的句柄。没有 devtools 路径能进侧边面板的模块作用域，所以没有
+    // 它的话，运行中的界面就没法从页面控制台里检查或驱动——布局测量脚本正是靠它
+    // 喂真实内容，而不是注入绕过渲染路径的 HTML。
     ;(globalThis as { __dshPanel?: unknown }).__dshPanel = mounted
   }
 }

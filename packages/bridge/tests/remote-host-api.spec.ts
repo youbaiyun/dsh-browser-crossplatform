@@ -157,10 +157,9 @@ describe('dsh 0.2 Remote Host adapter', () => {
   })
 
   it('refuses to follow without a Session, and says so when it cannot follow at all', async () => {
-    // Two refusals worth pinning, because both are silent failures otherwise:
-    // a missing Session must be a bad request rather than an accepted no-op, and
-    // a deployment with no event generation must say that instead of returning a
-    // success that streams nothing.
+    // 有两种拒绝值得钉住，因为否则它们都是静默失败：缺少 Session 必须是
+    // bad request，而不是一个被接受的空操作；一个没有事件生成的部署必须说明这一点，
+    // 而不是返回一个什么都不流出的成功。
     const { api } = harness()
     await expect(api.call(call('session.follow', {}))).resolves.toMatchObject({
       ok: false,
@@ -173,15 +172,13 @@ describe('dsh 0.2 Remote Host adapter', () => {
   })
 
   it('validates an unfollow request, and refuses only what is genuinely malformed', async () => {
-    // The keep-list is the whole request, so a caller that lost track still converges on
-    // the right set. Malformed entries inside it are skipped rather than failing: this
-    // method exists to release resources, and refusing it would leave them held — the
-    // opposite of what it is for. Only a payload that is not an object at all, or a
-    // `keep` that is not a list, is a real mistake.
+    // keep 列表就是整个请求，所以一个跟丢了的调用方仍然会收敛到正确的集合上。
+    // 里面畸形的条目会被跳过而不是判失败：这个方法存在就是为了释放资源，拒绝它反而
+    // 会让资源一直被占着——正好和它的用途相反。只有根本不是对象的 payload，或者不是
+    // 列表的 `keep`，才算真正的错误。
     //
-    // Asserted through the rejection paths, which need no event generation to reach: the
-    // acceptance path is covered where the streams actually exist, in the follower test
-    // above, and the counting itself is one `Set` in the implementation.
+    // 通过拒绝路径来断言，因为它们不需要事件生成就能到达：接受路径由上面那个
+    // follower 测试在实际存在流的地方覆盖，而计数本身在实现里就是一个 `Set`。
     const { api } = harness()
     await expect(api.call(call('session.unfollow', 'nope'))).resolves.toMatchObject({
       ok: false,
@@ -191,8 +188,8 @@ describe('dsh 0.2 Remote Host adapter', () => {
       ok: false,
       error: { code: 'bad-request', message: expect.stringContaining('must be an array') },
     })
-    // A deployment that cannot stream has nothing to release, and says so rather than
-    // reporting success. Reachable here because the check precedes the event generation.
+    // 一个没法流式传输的部署没有任何东西可释放，它会说出来，而不是报一个成功。
+    // 这里能到达是因为这个检查发生在事件生成之前。
     await expect(api.call(call('session.unfollow', { keep: [] }))).resolves.toMatchObject({
       ok: false,
       error: { message: expect.stringContaining('cannot stream') },
@@ -538,10 +535,9 @@ describe('dsh 0.2 Remote Host adapter', () => {
   })
 
   it('follows several Sessions at once, as whole-workspace mirroring needs', async () => {
-    // One follower per Session, not one per connection. With a single slot, asking to
-    // follow a second conversation aborted the first - so 「工作区内」, which follows a
-    // whole workspace, ended up streaming exactly one conversation out of many while
-    // the panel looked like it was working.
+    // 每个 Session 一个 follower，而不是每条连接一个。只有一个槽位时，请求跟随
+    // 第二段对话会中止第一段——于是跟随整个工作区的「工作区内」最终只流出众多对话
+    // 中的一段，而面板看起来还像在正常工作。
     let releaseA!: () => void
     let releaseB!: () => void
     let aClosed = false
@@ -568,8 +564,8 @@ describe('dsh 0.2 Remote Host adapter', () => {
           async *[Symbol.asyncIterator]() {
             try {
               yield { type: 'snapshot', cursor: -1, records: [], hasMore: false }
-              // Held open deliberately: whether the other Session survives must not
-              // depend on this one having finished.
+              // 刻意保持打开：另一个 Session 能不能活下来，绝不能取决于这一个
+              // 是否已经结束。
               await (first ? gateA : gateB)
               yield {
                 type: 'event',
@@ -597,16 +593,16 @@ describe('dsh 0.2 Remote Host adapter', () => {
     await expect(api.call(call('session.follow', { sessionId: 'session-a' }))).resolves.toMatchObject({ ok: true })
     await expect(api.call(call('session.follow', { sessionId: 'session-b' }))).resolves.toMatchObject({ ok: true })
 
-    // Both were opened, and following the second did not close the first.
+    // 两个都被打开了，而且跟随第二个没有关掉第一个。
     expect(opened).toEqual(['session-a', 'session-b'])
     expect(aClosed).toBe(false)
 
-    // Re-asking for a Session already followed does not reopen it: the extension asks
-    // on every refresh tick.
+    // 重新请求一个已经在跟随的 Session 不会重新把它打开：扩展每个刷新周期都会
+    // 请求一次。
     await expect(api.call(call('session.follow', { sessionId: 'session-a' }))).resolves.toMatchObject({ ok: true })
     expect(opened).toEqual(['session-a', 'session-b'])
 
-    // And each one's events arrive, so neither stream was left behind.
+    // 而且两者的事件都会到达，所以哪一条流都没有被落下。
     releaseA()
     releaseB()
     await vi.waitFor(() => {
@@ -668,7 +664,7 @@ describe('dsh 0.2 Remote Host adapter', () => {
         }
       },
     })
-    // Extension ownership is claimed only after a successful prompt/create.
+    // 只有在 prompt/create 成功之后才声明扩展的所有权。
     await expect(api.call(call('session.prompt', {
       sessionId: 'session-1',
       mode: 'queue',

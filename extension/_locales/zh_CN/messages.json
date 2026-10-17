@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "dsh 浏览器扩展（全端）"
+    "message": "dsh 浏览器扩展（全平台）"
   },
   "extensionDescription": {
     "message": "dsh 桌面端的浏览器执行器：模型以文本读取并操作你正在用的页面，保留登录态，不截图；看图功能可选，会把图交给桌面端配置的模型（默认 deepseek-flash）。"

@@ -1,16 +1,12 @@
 /**
- * Best-effort workspace grouping for sessions created through the browser
- * bridge.
+ * 给通过浏览器 bridge 创建的 session 做尽力而为的工作区分组。
  *
- * The wrapper touches exactly one request: an implicit `session.create`, which
- * it gives the browser group's workspace id. Explicit workspace choices and
- * every other gateway method pass through untouched — including the
- * `workspace.create` and `workspace.rename` calls this module makes on its own
- * behalf, which are issued through the same API and must not be intercepted.
+ * 这个包装层只碰一种请求：隐式的 `session.create`，它会带上浏览器分组的 workspace id。
+ * 显式的 workspace 选择、以及其它所有 gateway 方法都原样透传——包括本模块为自己发起的
+ * `workspace.create` 和 `workspace.rename` 调用，它们走同一个 API，绝不能被拦下来。
  *
- * Grouping is best-effort by design. A failure returns the original call
- * ungrouped rather than failing the prompt, because a conversation the user can
- * still have is worth more than a tidy list.
+ * 分组按设计就是尽力而为。失败时返回未分组的原始调用结果，而不是让这次提示失败，因为
+ * 一个用户还能接着用的会话，比一份整齐的列表更值钱。
  *
  * @module dsh-browser-crossplatform/src/session-workspace
  */
@@ -23,22 +19,20 @@ import { isRecord } from './host-api.ts'
 type Warn = (message: string) => void
 
 /**
- * Give the browser-conversation group a name a user will recognise.
+ * 给浏览器对话分组起一个用户认得出的名字。
  *
- * The desktop derives a new workspace's title from its directory, and the bridge
- * registers a directory called `browser-sessions` — so the group appears under
- * that name. Nothing in the interface renames a workspace, and nothing tells the
- * user the group exists, so conversations look lost: they are saved, in a group
- * whose name reads like an internal detail.
+ * 桌面端会照目录推导新工作区的标题，而 bridge 注册的目录叫 `browser-sessions`——于是这个
+ * 分组就以那个名字出现。界面里没有任何地方能给工作区改名，也没有任何地方告诉用户这个分组
+ * 存在，于是对话看起来就像丢了：它们其实都存着，只是存进了一个名字读起来像内部细节的
+ * 分组。
  *
- * A title is a presentation concern, so a failure here is reported and otherwise
- * ignored. The grouping still works; only the label stays as the directory name.
+ * 标题是呈现层的事，所以这里的失败只上报、其余忽略。分组照旧生效，只是标签还是目录名。
  *
- * @param api - Injected gateway API implementation.
- * @param workspaceId - the workspace to name.
- * @param currentTitle - its title as the desktop reported it.
- * @param desiredTitle - the name to apply, or an empty string to leave it alone.
- * @param warn - Logger for a failure that does not stop grouping.
+ * @param api - 注入的 gateway API 实现。
+ * @param workspaceId - 要命名的工作区。
+ * @param currentTitle - 桌面端报告的它的标题。
+ * @param desiredTitle - 要应用的名字，空字符串表示不改。
+ * @param warn - 用来记录“不影响分组”的失败的日志器。
  */
 async function nameWorkspace(
   api: BrowserHostApi,
@@ -57,9 +51,9 @@ async function nameWorkspace(
       signal: new AbortController().signal,
     })
     if (response.ok) return
-    // A conflict is the expected case when the user already made a workspace with
-    // this name. Renaming is a convenience, so losing the race is not an error
-    // worth failing over — the conversations are grouped either way.
+    // 用户已经建过同名工作区时，冲突就是预期内的。改名只是图个方便，
+    // 所以争输了也不值得当成错误处理——不管哪种情况，
+    // 对话都已经分好组了。
     warn(
       `browser bridge: could not name the session workspace "${desiredTitle}" `
       + `(${response.error.code}: ${response.error.message}); it keeps its directory name`,
@@ -70,20 +64,18 @@ async function nameWorkspace(
 }
 
 /**
- * Add a dedicated Workspace to implicit session creation without making
- * grouping a session-creation dependency. The first implicit create mkdirs
- * and registers the configured path; that result, including failure, is
- * cached for the wrapper lifetime.
+ * 给隐式 session 创建挂上一个专用 Workspace，同时不让分组变成 session 创建的前提。
+ * 第一次隐式 create 会 mkdir 并注册配置的路径；这次的结果——包括失败——会在包装器的
+ * 整个生命周期里缓存住。
  *
- * @param api - Injected gateway API implementation.
- * @param workspacePath - Dedicated directory, or an empty string to opt out.
- * @param workspaceTitle - Display name for the group, or an empty string to keep
- *   the name the desktop derives from the directory. A title is needed because
- *   that derived name is the directory's, so a fresh install shows
- *   "browser-sessions" — an internal-sounding label the user has no reason to
- *   open, and no way to rename from the interface.
- * @param warn - Logger called once when grouping cannot be established.
- * @returns the original API for opt-out, otherwise an API with wrapped session creation.
+ * @param api - 注入的 gateway API 实现。
+ * @param workspacePath - 专用目录，空字符串表示不这么做。
+ * @param workspaceTitle - 分组的显示名，空字符串表示保留桌面端从目录推导出的名字。之所以
+ *   需要一个标题，是因为推导出来的名字就是目录名，全新安装于是会显示
+ *   "browser-sessions"——一个听起来很内部的标签，用户没理由打开它，也没法在界面上给它
+ *   改名。
+ * @param warn - 分组建不起来时调一次的日志器。
+ * @returns 退出该行为时返回原来的 API，否则返回一个包装了 session 创建的 API。
  */
 export function withSessionWorkspace(
   api: BrowserHostApi,

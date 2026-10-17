@@ -1,13 +1,13 @@
-# Your patch layer for this dsh profile, applied after every bundle layer:
-# a top-level YAML array of loader patch entries (id-targeted config
-# overrides, disables, and insert lists; `!!js` expressions allowed).
+# 这个 dsh profile 的补丁层，在每个 bundle 层之后应用：
+# 一个顶层 YAML 数组，存放 loader 补丁条目（按 id 定位的配置覆盖、
+# 禁用，以及插入列表；允许 `!!js` 表达式）。
 #
-# This copy is a sanitized template: every machine-specific absolute path has
-# been replaced with a placeholder. Replace them before restoring the file —
-# see README-what-these-are-and-how-to-restore.md, which also lists the
-# placeholder convention:
-#   <DSH_HOME>       your dsh home (default ~/.dsh, %USERPROFILE%\.dsh on Windows)
-#   <WORKSPACE_DIR>  any directory you actually use as a workspace
+# 这份副本是脱敏模板：所有机器相关的绝对路径都已替换成占位符。
+# 恢复文件之前先把它们换掉——参见
+# README-what-these-are-and-how-to-restore.md，那份文档里也写了
+# 占位符约定：
+#   <DSH_HOME>       你的 dsh 主目录（默认 ~/.dsh，Windows 上是 %USERPROFILE%\.dsh）
+#   <WORKSPACE_DIR>  任何你真的拿来当工作区用的目录
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:

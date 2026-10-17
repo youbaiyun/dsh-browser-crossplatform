@@ -1,6 +1,6 @@
 /**
- * One authenticated extension connection's event streams, its active Session
- * follower, and the forwarded Host waterfalls it answers.
+ * 一条已认证扩展连接名下的事件流、它当前活跃的 Session follower，以及它要应答的那些
+ * 被转发的 Host waterfall。
  *
  * @module dsh-browser-crossplatform/src/event-generation
  */
@@ -18,11 +18,10 @@ interface PendingQuestion {
 }
 
 /**
- * One Session being read on this connection.
+ * 这条连接正在读取的一个 Session。
  *
- * Its own abort controller is what makes the followers independent: stopping one — a
- * conversation leaving the mirrored set, or being replaced — must not disturb the
- * others. Nothing here is shared, deliberately.
+ * 它自带的 abort controller 正是让各个 follower 彼此独立的东西：停掉其中一个——某个会话
+ * 离开被镜像的集合，或者被顶替——都不能影响其它 follower。这里刻意不共享任何状态。
  */
 interface SessionFollower {
   readonly controller: AbortController
@@ -48,7 +47,7 @@ export type RemoteEventOutcome =
     }
   }
 
-/** One authenticated extension connection's event streams and its Session followers. */
+/** 一条已认证扩展连接的事件流及其 Session follower。 */
 export class EventGeneration {
   private readonly lifetime = new AbortController()
   private readonly signal: AbortSignal
@@ -57,11 +56,10 @@ export class EventGeneration {
   private readonly pendingQuestions = new Map<string, PendingQuestion>()
   private clientId: string | undefined
   /**
-   * One follower per Session, keyed by Session id.
+   * 每个 Session 一个 follower，用 Session id 做键。
    *
-   * A map rather than a single slot: 「工作区内」 mirrors a whole workspace, and with one
-   * slot each follow aborted the one before it — so nineteen conversations produced one
-   * live stream and eighteen silent ones.
+   * 用 map 而不是单个槽位：「工作区内」镜像的是整个工作区，只有一个槽位时，每次 follow
+   * 都会中止前一个——于是十九个会话只有一条活跃流，另外十八条悄无声息。
    */
   private readonly followers = new Map<string, SessionFollower>()
   private disposed = false
@@ -93,19 +91,16 @@ export class EventGeneration {
   }
 
   /**
-   * Follow one Session, opening its stream if this connection is not already reading it.
+   * 跟随一个 Session；这条连接还没在读它的话，就把它的流打开。
    *
-   * One follower **per Session**, not one follower per connection. A single slot was
-   * enough while the panel mirrored exactly one conversation, but 「工作区内」 mirrors a
-   * whole workspace: with a single slot each `session.follow` aborted the previous
-   * follower, so asking for nineteen conversations left exactly one streaming and the
-   * panel silently showed one conversation out of nineteen.
+   * 是**每个 Session** 一个 follower，不是每条连接一个。面板只镜像一个会话时，单个槽位
+   * 够用；但「工作区内」镜像整个工作区：只有单个槽位时，每次 `session.follow` 都会中止
+   * 上一个 follower，请求十九个会话只剩一条在推流，面板悄无声息地只显示十九个里的一个。
    *
-   * Idempotent for the same Session, so a caller may ask repeatedly — the extension
-   * does, on every refresh tick.
+   * 对同一个 Session 是幂等的，调用方可以反复请求——扩展就是这样，每个刷新周期请求一次。
    *
-   * @param sessionId - the Session to read.
-   * @param callSignal - the caller's cancellation.
+   * @param sessionId - 要读取的 Session。
+   * @param callSignal - 调用方的取消信号。
    */
   async ensureSessionFollow(sessionId: string, callSignal: AbortSignal): Promise<void> {
     const existing = this.followers.get(sessionId)
@@ -114,14 +109,12 @@ export class EventGeneration {
   }
 
   /**
-   * Stop following the Sessions that are not in the given set.
+   * 不再跟随不在给定集合里的那些 Session。
    *
-   * Called when the mirrored set shrinks — a conversation left the workspace, or the
-   * user switched back to a single-conversation mode — so the bridge stops reading
-   * Sessions nobody is looking at, instead of streaming them for the connection's
-   * lifetime.
+   * 镜像集合缩小时调用——某个会话离开了工作区，或者用户切回了单会话模式——bridge 就不再
+   * 读取没人在看的 Session，而不是整条连接活着的时候一直为它们推流。
    *
-   * @param keep - Sessions to keep following.
+   * @param keep - 需要继续跟随的 Session。
    */
   retainSessionFollows(keep: ReadonlySet<string>): void {
     for (const [sessionId, follower] of [...this.followers]) {
@@ -164,14 +157,14 @@ export class EventGeneration {
     callSignal: AbortSignal,
     maxMessages?: number,
   ): Promise<SessionSnapshot> {
-    // Replaces any existing follower *for this Session only*. Every other Session keeps
-    // streaming, which is what makes a whole-workspace mirror possible.
+    // 只替换*这个 Session*已有的 follower。其它所有 Session 继续推流，
+    // 整个工作区镜像正是靠这一点才成立。
     this.followers.get(sessionId)?.controller.abort(new Error('browser bridge Session follower reopened'))
     const controller = new AbortController()
     const follower: SessionFollower = { controller }
     this.followers.set(sessionId, follower)
     const signal = AbortSignal.any([this.signal, callSignal, controller.signal])
-    /** Whether this follower is still the Session's current one. */
+    /** 这个 follower 是否仍是该 Session 当前的那一个。 */
     const current = (): boolean => this.followers.get(sessionId) === follower
     try {
       const source = await openWireStream(this.gateway,
@@ -200,9 +193,8 @@ export class EventGeneration {
       }
       this.onHistoryCursor(sessionId, first.value.cursor)
       const snapshotId = first.value.assistantStream === undefined ? undefined : crypto.randomUUID()
-      // Publish the reconnect prefix before any suffix chunks. RPC responses
-      // and pushed events can otherwise race, dropping the beginning of an
-      // already-running attempt when the panel reopens its history.
+      // 先发重连前缀，再发后面任何分块。否则 RPC 响应和推送事件可能抢起来，
+      // 面板重开历史时就丢掉某个已经在跑的尝试的开头。
       if (first.value.assistantStream !== undefined) {
         this.queue.push({
           rpcId: crypto.randomUUID(),
@@ -224,8 +216,8 @@ export class EventGeneration {
         ...(snapshotId === undefined ? {} : { snapshotId }),
       }
     } catch (error: unknown) {
-      // Only this Session's entry, and only if it is still ours: a follower that was
-      // replaced by a newer one must not remove its successor's registration.
+      // 只删这个 Session 的条目，而且只在它仍然归我们时：一个已经被更新的 follower
+      // 顶替掉的 follower，不能把继任者的注册删掉。
       if (current()) this.followers.delete(sessionId)
       throw error
     }
@@ -238,20 +230,19 @@ export class EventGeneration {
     signal: AbortSignal,
   ): Promise<void> {
     /**
-     * Whether this follower is still the Session's current one.
+     * 这个 follower 是否仍是该 Session 当前的那一个。
      *
-     * Answered from the follower itself, never from a counter shared by the whole
-     * connection. A shared counter made every other Session look replaced the moment a
-     * new one was followed, so a workspace mirror kept exactly one stream alive — the
-     * same failure as the single abort slot, reached a different way.
+     * 由 follower 自己回答，绝不用整条连接共享的计数器。共享计数器会让其它每个 Session
+     * 在新会话被跟随的那一刻就显得已经被替换，于是工作区镜像只剩一条流——和单个 abort
+     * 槽位同样的故障，只是走了另一条路。
      */
     const current = (): boolean => this.followers.get(sessionId) === follower
     try {
       while (!signal.aborted) {
         const next = await iterator.next()
-        // Abort is advisory to an AsyncIterator: a buffered frame may still resolve
-        // after this follower was replaced. Never let that superseded stream update the
-        // extension's state for a Session someone else is now reading.
+        // 对 AsyncIterator 来说 abort 只是建议性的：这个 follower 被顶替之后，某个已缓冲
+        // 的帧仍可能 resolve。绝不能让那条已被取代的流去更新扩展里某个正由别人读取的
+        // Session 的状态。
         if (signal.aborted || !current()) break
         if (next.done) break
         if (isRecord(next.value) && next.value.type === 'assistant-stream' && isRecord(next.value.frame)) {
@@ -277,8 +268,8 @@ export class EventGeneration {
         throw new Error('session/follow ended unexpectedly')
       }
     } catch (error: unknown) {
-      // A stream that was deliberately stopped — replaced, or no longer watched — must
-      // not fail the connection's queue: the abort is the expected outcome, not a fault.
+      // 被刻意停掉的流——已被顶替，或不再被关注——不能让连接的队列报错：abort 是
+      // 预期中的结果，不是故障。
       if (!signal.aborted && current()) this.queue.fail(error)
     } finally {
       await iterator.return?.()
@@ -339,8 +330,8 @@ export class EventGeneration {
       }
       return
     }
-    // Desktop-owned sessions keep the native waterfall. Only forward questions
-    // for sessions the extension successfully created or prompted.
+    // 桌面端自有的 session 保留原生 waterfall。只有扩展成功创建、或成功发过提示的
+    // session，才替它转发问题。
     if (!shouldBridgeOwnQuestion({
       hasExtensionConnection: true,
       sessionId: value.agentId,

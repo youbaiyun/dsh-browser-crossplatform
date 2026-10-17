@@ -16,7 +16,7 @@ describe('ImageCache', () => {
     const cache = new ImageCache()
     cache.noteFailure('blob-1', true)
     expect(cache.shouldAttempt('blob-1')).toBe(false)
-    // Permanence is not a count: no number of snapshots makes a blob URL readable.
+    // 持久不靠计数：再多快照也不能让一个 blob URL 变得可读。
     cache.noteFailure('blob-1', true)
     expect(cache.shouldAttempt('blob-1')).toBe(false)
   })
@@ -33,7 +33,7 @@ describe('ImageCache', () => {
     const cache = new ImageCache(200, 1)
     cache.noteFailure('later', false)
     expect(cache.shouldAttempt('later')).toBe(false)
-    // A description that arrives anyway (another tab recognised it) must win.
+    // 仍然到达的描述（另一个标签页认出了它）必须胜出。
     cache.set('later', '一台笔记本电脑')
     expect(cache.get('later')?.desc).toBe('一台笔记本电脑')
   })
@@ -68,9 +68,9 @@ describe('ImageCache', () => {
 
   describe('persistence', () => {
     it('carries descriptions and failures across a worker restart', () => {
-      // Chrome may stop the worker between two tool calls; without this, the one
-      // lever that measurably shortens a recognition would depend on that not
-      // happening.
+      // Chrome 可能在两次工具调用之间停掉 worker；没有这段逻辑，那个
+      // 唯一能实测缩短识别耗时的杠杆，就得指望
+      // 这件事不发生。
       const first = new ImageCache()
       first.set('a', '一只蓝黑相间的豆娘', 'desktop')
       first.noteFailure('b', true, 'vision-unclear')
@@ -82,7 +82,7 @@ describe('ImageCache', () => {
       expect(restarted.shouldAttempt('a')).toBe(false)
       expect(restarted.failureOf('b')).toBe('vision-unclear')
       expect(restarted.shouldAttempt('b')).toBe(false)
-      // One transient failure of the two allowed: still worth one more try.
+      // 允许的两次瞬时失败里的一次：还值得再试。
       expect(restarted.shouldAttempt('c')).toBe(true)
     })
 
@@ -93,7 +93,7 @@ describe('ImageCache', () => {
       expect(cache.restore({ descriptions: 'nope', failureCounts: 7 })).toBe(false)
       expect(cache.restore({ descriptions: [['a']], failureCounts: [] })).toBe(false)
       expect(cache.size).toBe(0)
-      // A believable entry among unbelievable ones is kept.
+      // 一堆不可信的条目里，那个可信的会被留下。
       expect(cache.restore({
         descriptions: [['a', { desc: 'ok', via: 'desktop' }], ['b', { nope: true }]],
         failureCounts: [['c', 1], ['d', 'x']],
@@ -113,13 +113,13 @@ describe('ImageCache', () => {
     })
 
     it('bounds the failure tables, which only shrink when an image later succeeds', () => {
-      // Descriptions were bounded from the start; the two failure maps were not, and
-      // every entry in them is part of the payload that gets written to disk.
+      // 描述从一开始就有上限；两张失败映射表却没有，而
+      // 其中每一条都属于最终要写到磁盘上的载荷。
       const cache = new ImageCache(3, 2)
       for (let i = 0; i < 10; i += 1) cache.noteFailure(`transient-${String(i)}`, false)
       for (let i = 0; i < 10; i += 1) cache.noteFailure(`permanent-${String(i)}`, true, 'load-failed')
       expect(cache.stats()).toEqual({ described: 0, unavailable: 3, retrying: 3 })
-      // The newest survive; the oldest are what the bound drops.
+      // 最新的留下来；被上限丢掉的是最旧的。
       expect(cache.failureOf('permanent-9')).toBe('load-failed')
       expect(cache.failureOf('permanent-0')).toBeUndefined()
       expect(cache.shouldAttempt('transient-9')).toBe(true)
@@ -136,8 +136,8 @@ describe('ImageCache', () => {
     })
 
     it('restores a snapshot that carries only permanent failures', () => {
-      // The "nothing believable here" check used to look at descriptions and counts
-      // alone, so a store holding just settled failures was silently dropped.
+      // 「这里没有可信内容」这项检查以前只看描述和计数，
+      // 所以一个只装着已结算失败的存储会被悄悄丢掉。
       const cache = new ImageCache()
       expect(cache.restore({
         descriptions: [],

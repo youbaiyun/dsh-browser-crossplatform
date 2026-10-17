@@ -1,12 +1,10 @@
 /**
- * File-level removal of one session's durable storage under the dsh home.
+ * 在 dsh home 下按文件删掉某个 session 的持久化存储。
  *
- * The gateway exposes no session.delete, so the bridge performs the removal
- * itself: this module archives the session under exclusive write ownership,
- * then removes its durable data while retaining the kernel lock's pathname.
- * Session ids are validated against the persisted shape, only data within
- * exact-name directories two levels below the sessions root is removed, and
- * running sessions are refused before anything touches the disk.
+ * gateway 没有暴露 session.delete，bridge 就自己来：本模块先拿到独占写所有权，归档该
+ * session，再删掉它的持久化数据，同时留下内核锁的路径名。session id 按持久化形态校验，
+ * 只删 sessions 根目录往下两层、且目录名完全相符的目录里的数据，而且在碰磁盘之前就把
+ * 仍在运行的 session 拒掉。
  *
  * @module dsh-browser-crossplatform/src/session-purge
  */
@@ -14,10 +12,10 @@
 import { lstat, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
-/** Stable failure codes surfaced to the panel. Open set: callers must tolerate growth. */
+/** 暴露给面板的稳定失败码。开放集合：调用方必须能容忍以后新增的。 */
 export type SessionPurgeErrorCode = 'not-found' | 'running' | 'invalid-id' | 'internal'
 
-/** Error thrown by {@link purgeSessionFiles}; the server turns it into a wire error. */
+/** {@link purgeSessionFiles} 抛出的错误，服务端会把它转成 wire 错误。 */
 export class SessionPurgeError extends Error {
   constructor(
     readonly code: SessionPurgeErrorCode,
@@ -29,35 +27,33 @@ export class SessionPurgeError extends Error {
   }
 }
 
-/** Persisted session ids are `session-` plus one lowercase UUID. */
+/** 持久化的 session id 是 `session-` 加一个小写 UUID。 */
 const SESSION_ID_PATTERN = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
-/** POSIX flock is attached to this inode; unlinking it defeats exclusion. */
+/** POSIX flock 挂在这个 inode 上；把它 unlink 掉就等于破坏了互斥。 */
 const SESSION_LOCK_FILENAME = 'session.lock'
 
-/** Dependencies purging needs from the plugin. */
+/** 清理时要从插件拿到的依赖。 */
 export interface SessionPurgeDeps {
-  /** The dsh sessions root (`dshHomePath('sessions')`). */
+  /** dsh 的 sessions 根目录（`dshHomePath('sessions')`）。 */
   sessionsRoot: string
-  /** Session ids currently running; purging any of these is refused. */
+  /** 当前正在运行的 session id；清理其中任何一个都会被拒绝。 */
   runningSessionIds: ReadonlySet<string>
   /**
-   * Claim the runtime's exclusive write ownership (including its kernel lock).
-   * The returned handle must remain held until removal finishes. Opening a
-   * read handle, checking for a lock file, or checking only Agent status does
-   * not provide exclusion: idle Agents and other processes can own the log.
+   * 取得运行时的独占写所有权（含它的内核锁）。返回的句柄要一直拿在手里，直到删除结束。
+   * 开个读句柄、看一眼锁文件在不在、或者只查 Agent 状态，都不构成互斥：空闲的 Agent 和
+   * 其它进程同样可能握着这份日志。
    */
   acquireOwnership(sessionId: string): Promise<{ close(): Promise<void> }>
-  /** Archive while the durable session still exists and exclusive ownership is held. */
+  /** 在持久化 session 还在、且独占所有权仍握在手里的时候做归档。 */
   archiveSession(sessionId: string): Promise<void>
 }
 
 /**
- * Validate one session id against the persisted shape. Rejects everything
- * that could escape the sessions root (separators, dot segments) before any
- * filesystem call sees it.
- * @param sessionId - untrusted id from the panel.
- * @returns the id when well-formed.
- * @throws SessionPurgeError with code `invalid-id` otherwise.
+ * 按持久化形态校验一个 session id。在任何文件系统调用看到它之前，就把可能逃出 sessions
+ * 根目录的输入（分隔符、点段）统统拒掉。
+ * @param sessionId - 来自面板的不可信 id。
+ * @returns 形态合法时返回该 id。
+ * @throws 否则抛出 code 为 `invalid-id` 的 SessionPurgeError。
  */
 export function assertPurgeableSessionId(sessionId: string): string {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
@@ -67,11 +63,11 @@ export function assertPurgeableSessionId(sessionId: string): string {
 }
 
 /**
- * Permanently delete a session's data, keeping its directory and lock inode.
- * The runtime refuses ambiguous duplicate session identities across workspaces.
- * @param deps - root and running-set inputs.
- * @param sessionId - validated session id.
- * @returns nothing; throws {@link SessionPurgeError} on refusal or failure.
+ * 永久删掉某个 session 的数据，但留下它的目录和锁 inode。
+ * 跨工作区出现、含义不明的重复 session 标识，运行时会拒掉。
+ * @param deps - 根目录与运行中集合等输入。
+ * @param sessionId - 已校验的 session id。
+ * @returns 无返回值；被拒绝或失败时抛出 {@link SessionPurgeError}。
  */
 export async function purgeSessionFiles(deps: SessionPurgeDeps, sessionId: string): Promise<void> {
   assertPurgeableSessionId(sessionId)
@@ -89,8 +85,8 @@ export async function purgeSessionFiles(deps: SessionPurgeDeps, sessionId: strin
 
   const targets: string[] = []
   for (const workspace of workspaces) {
-    // path.join is safe here: the id pattern above excludes separators and
-    // dot segments, so the joined segment cannot escape the workspace dir.
+    // 这里用 path.join 是安全的：上面的 id 模式已经排除了分隔符和点段，
+    // 拼出来的片段逃不出工作区目录。
     const candidate = path.join(deps.sessionsRoot, workspace, sessionId)
     try {
       if (!(await lstat(candidate)).isDirectory()) continue
@@ -110,8 +106,8 @@ export async function purgeSessionFiles(deps: SessionPurgeDeps, sessionId: strin
   try {
     ownership = await deps.acquireOwnership(sessionId)
   } catch (error: unknown) {
-    // Match the public error identity across independently loaded runtime
-    // copies without depending on a private JSONL lock implementation.
+    // 运行时可能被加载了多份副本，所以匹配用公开的错误身份，
+    // 不依赖私有的 JSONL 锁实现。
     if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
       throw new SessionPurgeError(
         'running',
@@ -123,13 +119,13 @@ export async function purgeSessionFiles(deps: SessionPurgeDeps, sessionId: strin
   let failure: unknown
   let archived = false
   try {
-    // The public archive API checks existence. Calling it after deletion
-    // succeeds only accidentally when its header cache already knows this id.
+    // 公开的 archive API 会检查存在性。删完之后再调它，只有当它的头部缓存里
+    // 已经知道这个 id 时，才会意外地成功。
     await deps.archiveSession(sessionId)
     archived = true
     for (const target of targets) {
       if (!(await lstat(target)).isDirectory()) throw new Error(`session directory changed: ${target}`)
-      // Re-scan after write-open: opening an old log may materialize V3.
+      // 打开写入之后再扫一遍：打开一份旧日志可能会生成 V3。
       for (const entry of await readdir(target)) {
         if (entry === SESSION_LOCK_FILENAME) continue
         await rm(path.join(target, entry), { recursive: true, force: true })

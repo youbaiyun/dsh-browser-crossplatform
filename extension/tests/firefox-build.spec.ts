@@ -24,8 +24,8 @@ async function readJson<T>(relativePath: string): Promise<T> {
 }
 
 /**
- * Both builds' licence files. Skipped rather than failed when the extension has not
- * been built in this checkout: the assertion is about what a build ships.
+ * 两个构建各自的许可证文件。这个 checkout 里还没构建过
+ * 扩展时，跳过而不是失败：这条断言讲的是一个构建会附带什么。
  */
 const BUILD_LICENCES = ['../dist/LICENSE', '../dist-firefox/LICENSE']
 const hasBuilds = BUILD_LICENCES.every((path) => existsSync(new URL(path, import.meta.url)))
@@ -40,27 +40,27 @@ describe('Firefox build contract', () => {
 
     expect(firefoxManifest.version).toBe(packageManifest.version)
     expect(firefoxManifest.version).toBe(chromeManifest.version)
-    // The three above must agree — that is the invariant this test exists for.
-    // The literal value is not asserted, because pinning it here means editing a
-    // test on every release, and a release that forgets teaches people to update
-    // the expectation rather than look for the reason. What must hold is that the
-    // version is a shape the stores accept. Both stores accept one to four
-    // dot-separated integers, so a two-part version such as `0.37` is valid: this
-    // pins the shape, not a part count.
+    // 上面三者必须一致——这正是这个测试存在的意义。
+    // 不直接断言字面值，因为把它钉死在这儿就意味着
+    // 每次发布都要改测试，而一次忘记改的发布只会教人
+    // 去改期望值，而不是去找原因。必须成立的是：
+    // 版本号的形态是商店接受的形态。两个商店都接受一至四个
+    // 点分隔的整数，所以像 `0.37` 这样的两段式版本是合法的：这里
+    // 固定的是形态，不是段数。
     expect(chromeManifest.version).toMatch(/^\d+(\.\d+){0,3}$/)
-    // The panel API is the one legitimate difference: Chrome declares the
-    // `sidePanel` permission, Firefox has no such permission to request.
+    // 面板 API 是唯一合理的差异：Chrome 声明了
+    // `sidePanel` 权限，Firefox 没有这种权限可申请。
     expect(firefoxManifest.permissions).toEqual(chromeManifest.permissions.filter((name) => name !== 'sidePanel'))
     expect(chromeManifest.permissions).toContain('sidePanel')
     expect(firefoxManifest.permissions).not.toContain('sidePanel')
     expect(firefoxManifest.permissions).toContain('notifications')
-    // The panel talks to the local bridge and to the image hosts the user's own
-    // pages already loaded, and nothing else. `connect-src` used to also allow
-    // raw.githubusercontent.com, which no code ever used — a permission granted to
-    // nobody in particular, so it was removed from both manifests. The rule stands:
-    // a published extension should not carry network access it does not exercise.
-    // The image fetch is what exercises this one — the desktop's relay cannot carry
-    // the user's cookies, so a login-gated image is readable only from the worker.
+    // 面板只跟本机 bridge 通信，以及跟用户自己的网页已经
+    // 加载过的图片主机通信，别的一概没有。`connect-src` 以前还允许
+    // raw.githubusercontent.com，却没有一行代码用过它——一项授予给
+    // 谁都说不上的权限，所以已从两份 manifest 里移除。规则依然成立：
+    // 已发布的扩展不该带上自己并不使用的网络访问权限。
+    // 图片抓取正是行使这项权限的地方——桌面的中继带不了
+    // 用户的 cookie，所以需要登录的图片只能由 worker 去读。
     expect(firefoxManifest.content_security_policy.extension_pages).toContain('ws://127.0.0.1:*')
     expect(firefoxManifest.content_security_policy.extension_pages).toContain('http://127.0.0.1:*')
     expect(firefoxManifest.content_security_policy.extension_pages).toContain('https:')
@@ -75,9 +75,9 @@ describe('Firefox build contract', () => {
       readJson<ExtensionManifest>('../manifest.firefox.json'),
     ])
 
-    // Chrome: a side panel, no popup (it would shadow the panel and cannot hold
-    // the layout). Firefox: the sidebar, which the browser's own sidebar button
-    // toggles, so no popup either.
+    // Chrome：侧边面板，没有 popup（popup 会遮住面板，也放不下
+    // 这套布局）。Firefox：sidebar，靠浏览器自带的侧边栏按钮
+    // 切换，所以同样没有 popup。
     expect(chromeManifest.action?.default_popup).toBeUndefined()
     expect(firefoxManifest.action?.default_popup).toBeUndefined()
     expect(chromeManifest.side_panel?.default_path).toBe('control/index.html')
@@ -92,8 +92,8 @@ describe('Firefox build contract', () => {
       readJson<ExtensionManifest>('../manifest.firefox.json'),
     ])
 
-    // The chat panel used to own these entry points; the control page is the
-    // only UI now, and it is reached through the panel APIs above.
+    // 这些入口以前归聊天面板；现在控制页是
+    // 唯一的 UI，靠上面那些面板 API 到达。
     for (const manifest of [chromeManifest, firefoxManifest]) {
       expect(manifest.action?.default_popup).toBeUndefined()
       expect(JSON.stringify(manifest)).not.toContain('panel/index.html')
@@ -115,9 +115,9 @@ describe('Firefox build contract', () => {
   })
 
   it.skipIf(!hasBuilds)('ships the licence notice with both builds, as MIT requires', async () => {
-    // A packaged extension is a distribution of the software. This project is a
-    // derivative of an MIT-licensed one, so the upstream copyright line has to be in
-    // the notice that travels with the build — not only in the repository.
+    // 打包后的扩展是一种软件分发形式。本项目是某个
+    // MIT 许可项目的衍生作品，所以上游版权行必须出现在
+    // 随构建一起分发的声明里——而不只是躺在仓库里。
     for (const path of BUILD_LICENCES) {
       const text = await readFile(new URL(path, import.meta.url), 'utf8')
       expect(text).toContain('MIT License')

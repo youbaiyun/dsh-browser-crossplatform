@@ -17,13 +17,13 @@ describe('registerBrowserTools', () => {
     const requestTool = vi.fn(async (_name: string, _args: Record<string, unknown>, _signal: AbortSignal, _timeoutMs?: number): Promise<unknown> => {
       return { text: 'ok' }
     })
-    // A connected extension by default: the preflight that would otherwise try to
-    // start a browser only runs when this says no.
+    // 默认视为有一个已连接的扩展：否则那个会尝试启动浏览器的 preflight，只在
+    // 这里说没有连接时才会跑。
     const bridge = { requestTool, hasConnection: () => true } as unknown as BridgeServer
     return { ctx, bridge, requestTool, registered }
   }
 
-  /** Options every case shares: budgets plus the launch gate. */
+  /** 每个用例共用的选项：预算值加上启动开关。 */
   const OPTIONS = { toolTimeoutMs: 1_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60, openPagesForUser: true }
 
   it('registers the full v1 tool set', () => {
@@ -180,10 +180,10 @@ describe('registerBrowserTools', () => {
     const { ctx, bridge, registered } = makeHarness()
     registerBrowserTools(ctx, bridge, { toolTimeoutMs: 5_000, snapshotMaxChars: 12_000, maxInteractiveItems: 60, openPagesForUser: true })
     const descriptionChars = registered.reduce((sum, { definition }) => sum + String(definition.description).length, 0)
-    // A budget, not a style rule: it exists so the whole surface cannot creep up
-    // unnoticed. It covers every tool the model sees (17 now) plus the untrusted
-    // content warning repeated on the read-side tools, and `browser_wait` and
-    // `browser_launch` genuinely need a sentence each about timing and limits.
+    // 这是一个预算，不是风格规则：它存在的意义是让整个工具面没法在没人注意的
+    // 情况下悄悄膨胀。它覆盖模型看到的每一个工具（目前 17 个），加上在读取类工具
+    // 上重复出现的那句不可信内容警告，而 `browser_wait` 和 `browser_launch` 确实
+    // 各自都需要一句关于时序和限制的话。
     expect(descriptionChars).toBeLessThan(2_000)
   })
 
@@ -197,8 +197,8 @@ describe('registerBrowserTools', () => {
   })
 
   it('does not open a window it cannot prove is missing', async () => {
-    // The probe answers undefined on a platform we cannot ask; a launch then would
-    // open a window nobody requested, so "already running" stays the answer.
+    // 在问不到答案的平台上，这个探测会返回 undefined；那时启动会打开一个没人
+    // 要求过的窗口，所以答案仍然是“已在运行”。
     const { ctx, bridge, registered } = makeHarness()
     const spawn = vi.fn()
     registerBrowserTools(ctx, bridge, {
@@ -212,10 +212,10 @@ describe('registerBrowserTools', () => {
   })
 
   it('launches when the connected browser has no window left, instead of claiming it is running', async () => {
-    // A Chromium process outlives its last window and the extension keeps its socket
-    // open, so "connected" was reported as "already running" to someone looking at no
-    // browser — and every page tool then failed with "no active tab". With a definite
-    // "no window", asking the browser to start again is what brings one back.
+    // 一个 Chromium 进程会比它最后一个窗口活得更久，而扩展一直把 socket 开着，
+    // 于是对一个眼前没有任何浏览器的用户报了“已连接、已在运行”——接着每个页面
+    // 工具都失败于“没有活动标签页”。在明确知道“没有窗口”时，让浏览器再启动一次
+    // 才是把窗口找回来的办法。
     const { ctx, bridge, registered } = makeHarness()
     const spawn = vi.fn()
     registerBrowserTools(ctx, bridge, {
@@ -224,9 +224,8 @@ describe('registerBrowserTools', () => {
         visibleWindow: async () => false,
         spawnDetached: spawn,
         exists: () => true,
-        // Nothing already running from the launcher's point of view: it is the
-        // window that is gone, and asking a resident process to start again is the
-        // only way to get one back.
+        // 从启动器的角度看没有任何东西在运行：不见的是窗口，而请一个常驻进程再
+        // 启动一次，是把窗口找回来的唯一办法。
         probeRunning: async () => [],
         waitForConnection: async () => true,
       },
@@ -234,13 +233,13 @@ describe('registerBrowserTools', () => {
     const tool = registered.find((r) => r.name === 'browser_launch')!
     const result = await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({}, { signal: new AbortController().signal })
     expect(spawn).toHaveBeenCalledTimes(1)
-    // And the answer is not the "already running" line this case used to produce.
+    // 而且答案不是这个用例以前会产出的那句“已在运行”。
     expect(JSON.stringify(result)).not.toContain('already running')
   })
 
   it('turns a lost connection into instructions instead of a transport error', async () => {
-    // The point of the preflight: with no launcher configured, a model that calls
-    // browser_snapshot on a closed browser must get something it can act on.
+    // preflight 的意义：没有配置启动器时，一个对已关闭浏览器调用 browser_snapshot
+    // 的模型必须拿到点能据以行动的东西。
     const { ctx, registered } = makeHarness()
     const bridge = { requestTool: vi.fn(), hasConnection: () => false } as unknown as BridgeServer
     registerBrowserTools(ctx, bridge, OPTIONS)
@@ -280,8 +279,8 @@ describe('registerBrowserTools', () => {
   })
 
   it('opens the extensions page when the extension is not installed anywhere', async () => {
-    // The dead end this feature exists to remove: the user is told to install the
-    // extension while already being one click away from the page that does it.
+    // 这个功能存在就是为了消除那条死路：用户被告知去安装扩展，而其实离那个能
+    // 完成这件事的页面只有一次点击之遥。
     const { ctx, registered } = makeHarness()
     const onInstallNeeded = vi.fn()
     const bridge = { requestTool: vi.fn(), hasConnection: () => false } as unknown as BridgeServer
@@ -294,8 +293,8 @@ describe('registerBrowserTools', () => {
         exists: (path) => path === '/usr/bin/google-chrome',
         executableOfDefaultBrowser: () => '/usr/bin/google-chrome',
         probeRunning: async () => [{ id: 'chrome', userDataDir: '' }],
-        browsersWithExtension: () => [],
-        // Nothing is started: the browser is running, so only the page is opened.
+        extensionInstall: () => ({ installed: [], checked: ['chrome (Default)'] }),
+        // 什么都不启动：浏览器已经在跑了，所以只把页面打开。
         spawnDetached: vi.fn(),
       },
     })
@@ -313,7 +312,7 @@ describe('registerBrowserTools', () => {
       ...OPTIONS,
       openPagesForUser: false,
       onInstallNeeded,
-      launcher: { platform: 'linux', env: {}, exists: () => true, browsersWithExtension: () => [] },
+      launcher: { platform: 'linux', env: {}, exists: () => true, extensionInstall: () => ({ installed: [], checked: [] }) },
     })
     const tool = registered.find((r) => r.name === 'browser_launch')!
     await (tool.definition.execute as (args: unknown, e: { signal: AbortSignal }) => Promise<unknown>)({}, { signal: new AbortController().signal })

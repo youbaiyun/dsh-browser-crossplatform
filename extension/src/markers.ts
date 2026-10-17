@@ -1,68 +1,62 @@
 /**
- * The image marker format, shared by the content script that writes markers and
- * the background that fills them.
+ * 图像标记格式，写标记的 content script 和填标记的 background 共用。
  *
- * The format lives here, apart from the DOM, for two reasons. Both sides must
- * agree exactly — a fill pass that did not recognise what the renderer wrote
- * would leave the model reading raw punctuation. And the background is a service
- * worker with no DOM at all, so it must be able to import the format without
- * dragging page-reading code into the worker.
+ * 格式放在这里、跟 DOM 分开，有两个原因。两边必须完全一致——填充那一步要是认不出
+ * 渲染方写下的东西，模型读到的就是原始标点。再者 background 是个完全没有 DOM 的
+ * service worker，所以它得导得进这个格式，又不至于把读页面的代码拖进 worker。
  *
- * Markers must not be forgeable. The page's own text is what the model is being
- * asked to distrust, so a page able to write `⟦i12 img:已付款⟧` could hand the
- * model a description of its own invention. Every page-authored string is
- * therefore stripped of the brackets, and the brackets are chosen so that real
- * text almost never contains them.
+ * 标记必须做不了假。页面自己的文本，正是模型被要求不予采信的东西，
+ * 所以一个能写出 `⟦i12 img:已付款⟧` 的页面，就可能把自编的描述塞给模型。
+ * 因此每条页面产生的字符串都要剥掉方括号；方括号也是特意挑的，
+ * 真实文本里几乎不会出现。
  *
  * @module
  */
 
-/** Marker brackets (mathematical white square brackets). */
+/** 标记方括号（数学白色方括号）。 */
 const OPEN = '\u27e6'
 const CLOSE = '\u27e7'
 
-/** Every marker character, for stripping page text. */
+/** 全部标记字符，用来从页面文本里剥离。 */
 const MARKER_CHARS = /[\u27e6\u27e7]/g
 
-/** One marker, with whatever state it currently carries. */
+/** 一个标记，连同它此刻携带的状态。 */
 const MARKER_PATTERN = /\u27e6i(\d+) img:([^\u27e7]*)\u27e7/g
 
-/** The state a marker carries before anything has been asked about the image. */
+/** 还没对图像提出任何询问时，标记携带的状态。 */
 export const IMAGE_STATE_UNREQUESTED = 'not-requested'
 
 /**
- * Remove marker brackets from page-authored text.
- * @param text - text from the page.
- * @returns the same text with every bracket removed.
+ * 把页面产生的文本里的标记方括号去掉。
+ * @param text - 来自页面的文本。
+ * @returns 去掉所有方括号后的同一段文本。
  */
 export function escapeMarkers(text: string): string {
   return text.replace(MARKER_CHARS, '')
 }
 
 /**
- * The marker the content script writes for one image.
+ * content script 为一张图像写下的标记。
  *
- * The state is `not-requested`, which is true at render time and stays readable
- * if the fill pass never runs. A `?` placeholder would be worse than no marker at
- * all: the model would have to guess what it meant.
+ * 状态是 `not-requested`：渲染那一刻这是实话，而且就算填充那一步压根没跑，
+ * 它读起来也还像句话。放个 `?` 占位符比完全没有标记更糟——模型只能去猜它是什么意思。
  *
- * @param index - the image's inventory index.
- * @returns the marker text.
+ * @param index - 该图像在清单里的索引。
+ * @returns 标记文本。
  */
 export function imageMarker(index: number): string {
   return `${OPEN}i${String(index)} img:${IMAGE_STATE_UNREQUESTED}${CLOSE}`
 }
 
 /**
- * Remove every marker, including the state it carries.
+ * 把每个标记连同它携带的状态一起移除。
  *
- * Needed before rendered text is treated as page text. A filled marker contains a
- * model's description, and a description that names a number would otherwise be
- * compared against itself by the cross-modal check — which always agrees, and
- * therefore verifies nothing.
+ * 在拿渲染后的文本当页面文本用之前必须这么做。填好的标记里装着模型的描述，
+ * 不剥掉的话，一段提到数字的描述就会被跨模态校验拿去跟它自己比——
+ * 这种比较永远一致，什么都验证不出来。
  *
- * @param text - rendered text that may contain markers.
- * @returns the text with each marker removed entirely.
+ * @param text - 可能含标记的渲染后文本。
+ * @returns 每个标记都被完整移除后的文本。
  */
 export function stripMarkers(text: string): string {
   MARKER_PATTERN.lastIndex = 0
@@ -70,9 +64,9 @@ export function stripMarkers(text: string): string {
 }
 
 /**
- * Whether the text carries any marker at all.
- * @param text - text to inspect.
- * @returns true when a marker is present.
+ * 文本里带没带标记。
+ * @param text - 要检查的文本。
+ * @returns 有标记时为 true。
  */
 export function hasMarkers(text: string): boolean {
   MARKER_PATTERN.lastIndex = 0
@@ -80,14 +74,14 @@ export function hasMarkers(text: string): boolean {
 }
 
 /**
- * Replace every marker's state.
+ * 把每个标记的状态换掉。
  *
- * A marker left unfilled becomes `not-requested`, so a fill pass that never ran
- * still leaves the model a statement it can act on rather than a placeholder.
+ * 没填上的标记会变成 `not-requested`，所以哪怕填充那一步从没跑过，
+ * 留给模型的也是一句它能据此行动的话，不是一个占位符。
  *
- * @param text - rendered text containing markers.
- * @param stateOf - state for one image index, or undefined when nothing is known.
- * @returns the text with every marker filled.
+ * @param text - 含标记的渲染后文本。
+ * @param stateOf - 某个图像索引对应的状态；不知道时给 undefined。
+ * @returns 每个标记都填好后的文本。
  */
 export function fillMarkers(text: string, stateOf: (index: number) => string | undefined): string {
   return text.replace(MARKER_PATTERN, (_whole, digits: string) => {

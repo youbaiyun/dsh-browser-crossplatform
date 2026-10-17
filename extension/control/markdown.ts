@@ -1,14 +1,13 @@
 /**
- * Markdown rendering for the model's replies.
+ * 为模型的回复渲染 Markdown。
  *
- * The assistant answers in Markdown — lists, tables, fenced code — so the panel
- * has to render it or a reply reads as raw punctuation. That means inserting
- * HTML, which is exactly where a page-supplied string could turn into script,
- * so every byte goes through DOMPurify with a narrow allowlist first.
+ * 助手用 Markdown 作答——列表、表格、围栏代码——面板就得把它渲染出来，
+ * 否则一条回复读起来就是一堆原始标点。这就意味着要插 HTML，而页面给来的
+ * 字符串恰恰可能在这里变成脚本，所以每个字节都先过一遍窄 allowlist 的
+ * DOMPurify。
  *
- * The configuration mirrors what the desktop client allows: links, inline
- * formatting, and code, with no images (a remote image would leak the fact that
- * the panel is open), no embedded frames, and no event handlers.
+ * 这份配置与桌面客户端的允许范围一致：链接、行内格式和代码，不允许图片
+ * （远程图片会泄露面板正开着这件事）、不允许内嵌框架、不允许事件处理属性。
  *
  * @module
  */
@@ -27,7 +26,7 @@ const ALLOWED_ATTR = ['align', 'class', 'href', 'start', 'title']
 const PURIFY_CONFIG = {
   ALLOWED_TAGS: [...ALLOWED_TAGS],
   ALLOWED_ATTR: [...ALLOWED_ATTR],
-  // Only http(s) links: a `javascript:` or `data:` href must never survive.
+  // 只允许 http(s) 链接：`javascript:` 或 `data:` 的 href 绝不能存活下来。
   ALLOWED_URI_REGEXP: /^https?:\/\//i,
   ALLOW_ARIA_ATTR: false,
   ALLOW_DATA_ATTR: false,
@@ -37,11 +36,10 @@ const PURIFY_CONFIG = {
 marked.setOptions({ gfm: true, breaks: true })
 
 /**
- * Close an unfinished fenced code block.
+ * 补上一个没写完的围栏代码块。
  *
- * While a reply streams, the tail can be a half-written ``` fence, which would
- * otherwise swallow the rest of the transcript into one code block until the
- * closing fence arrives.
+ * 一条回复在流式输出时，尾巴可能是半个 ``` 围栏，不补的话它会把后面整段
+ * 记录都吞进同一个代码块里，直到闭合围栏到达为止。
  */
 export function stabilizeStreamingMarkdown(text: string): string {
   const fences = (text.match(/^```/gm) ?? []).length
@@ -49,37 +47,35 @@ export function stabilizeStreamingMarkdown(text: string): string {
 }
 
 /**
- * Rendered replies, keyed by source text.
+ * 渲染好的回复，以源文本为键。
  *
- * A tool step arriving, an approval appearing, a row expanding — each of those rebuilds the
- * transcript, and the rebuild re-rendered Markdown for every reply already on screen. That
- * made a small update cost a parse of the whole conversation. The mapping is pure (same
- * source, same HTML), so a cache removes the repeat work entirely.
+ * 一个工具步骤到达、一个审批出现、一行展开——每一样都会重建记录，而重建会
+ * 把屏幕上已有的每条回复都重新渲染一遍 Markdown。这让一次小小的更新也要
+ * 付出解析整段对话的代价。这个映射是纯的（同样的源，同样的 HTML），一份
+ * 缓存就能把重复的工作完全消掉。
  *
- * Bounded so a day-long session cannot grow it without limit, but the bound has to clear the
- * transcript it serves: the worker keeps `TIMELINE_LIMIT` (200) rows, so a long conversation
- * can hold ~100 assistant replies. A cache smaller than that misses for half of them on every
- * rebuild, which is most of the cost it was added to remove.
+ * 有上限，免得跑一整天的会话把它撑到无限大，但上限必须盖住它服务的这段
+ * 记录：worker 保留 `TIMELINE_LIMIT`（200）行，所以一段长对话能装下约 100 条
+ * 助手回复。缓存比这还小，每次重建就有一半以上未命中，而那正是加它要
+ * 消掉的大部分开销。
  *
- * Eviction is least-recently-used, not first-in-first-out: a hit re-inserts, so the replies
- * currently on screen stay warm and only the ones scrolled out of the timeline age out.
+ * 淘汰按最近最少使用，不是先进先出：一次命中会重新插入，所以正在屏幕上的
+ * 那些回复保持温热，只有滚出时间线的那批才会变凉。
  */
 const CACHE_LIMIT = 200
 const rendered = new Map<string, string>()
 
 /**
- * Render one Markdown string to sanitized HTML, reusing a previous result when the source
- * has not changed since.
+ * 把一个 Markdown 字符串渲染成净化后的 HTML，源没变时复用上一次的结果。
  *
- * @param text - markdown source, possibly truncated mid-stream.
- * @returns HTML that is safe to assign to `innerHTML`.
+ * @param text - Markdown 源文本，可能是流式输出中途被截断的。
+ * @returns 可以安全赋给 `innerHTML` 的 HTML。
  */
 export function renderMarkdown(text: string): string {
   const cached = rendered.get(text)
   if (cached !== undefined) {
-    // A `Map` iterates in insertion order, so re-inserting on a hit is what makes this an
-    // LRU: the entries a rebuild keeps asking for move to the end and stay, and only the
-    // text that has left the screen ages out.
+    // `Map` 按插入顺序迭代，命中后重新插入正是它成为 LRU 的原因：一次
+    // 重建反复要的那些条目会移到末尾并留下来，只有已经离开屏幕的文本才会老去。
     rendered.delete(text)
     rendered.set(text, cached)
     return cached
@@ -88,8 +84,8 @@ export function renderMarkdown(text: string): string {
   const source = stabilizeStreamingMarkdown(text)
   const html = marked.parse(source, { async: false }) as string
   const clean = DOMPurify.sanitize(html, PURIFY_CONFIG) as unknown as string
-  // `target` and `rel` cannot be expressed in the allowlist above, so they are
-  // applied after sanitizing, when no attacker-controlled markup is left.
+  // `target` 和 `rel` 没法写进上面的 allowlist，所以它们在净化之后才加上，
+  // 那时候已经没有任何受攻击者控制的标记了。
   const result = clean.replace(/<a href="/g, '<a rel="noreferrer noopener" target="_blank" href="')
 
   if (rendered.size >= CACHE_LIMIT) {
@@ -100,7 +96,7 @@ export function renderMarkdown(text: string): string {
   return result
 }
 
-/** Whether a string contains anything worth rendering as Markdown. */
+/** 一个字符串里是否有值得按 Markdown 渲染的内容。 */
 export function hasMarkdownContent(text: string): boolean {
   return text.trim() !== ''
 }

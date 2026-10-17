@@ -1,16 +1,16 @@
 // @vitest-environment jsdom
 
 /**
- * Regression tests for the defects found while rewriting the worker.
+ * 重写 worker 时发现的缺陷的回归测试。
  *
- * Each case here reproduces a real bug from that rewrite, so a future refactor
- * that reintroduces one of them fails loudly instead of shipping:
+ * 这里的每个用例都复现那次重写里的一个真实 bug，所以将来任何
+ * 把其中任何一个重新引入的改动都会大声失败，而不是被发布出去：
  *
- *  1. the keepalive reclaiming a bridge that handed its slot to another browser,
- *  2. turning unrestricted access off leaving an already-approved call running,
- *  3. two settings writes racing so the earlier one lands last,
- *  4. a timed-out tab rebind still moving the controlled tab afterwards,
- *  5. typed text and full URLs accumulating in the control strip's history.
+ * 1. keepalive 抢回了一个已经把槽位交给另一个浏览器的 bridge，
+ * 2. 关掉不受限访问，一次已经获批的调用却还在跑，
+ * 3. 两次设置写入抢着写，结果较早的那次最后落盘，
+ * 4. 一次超时的标签页重绑之后仍然挪动了受控标签页，
+ * 5. 输入的文本和完整 URL 在控制条历史里越堆越多。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -49,9 +49,9 @@ class FakeWebSocket extends EventTarget {
   }
 
   receive(frame: unknown): void {
-    // The real bridge always answers `hello` with a policy, so the fake one
-    // does too; a fixture that omits it is rejected by the frame parser and the
-    // connection silently never authenticates.
+    // 真 bridge 总是用一份 policy 回答 `hello`，所以这个假的
+    // 也照做；省略它的 fixture 会被帧解析器拒掉，连接
+    // 就永远静默地认证不完。
     const delivered = isRecord(frame) && frame.t === 'hello.ok' && frame.policy === undefined
       ? { ...frame, policy: { openPagesForUser: true } }
       : frame
@@ -117,12 +117,12 @@ function latestState(postMessage: ReturnType<typeof vi.fn>): ControlState | unde
   return sentMessages(postMessage).filter((message) => message.type === 'state').at(-1)?.state
 }
 
-/** Every activity row the strip has been shown, in the order it saw them. */
+/** 控制条见过的每一行活动记录，按它看到的顺序排。 */
 function activityRows(postMessage: ReturnType<typeof vi.fn>): NonNullable<ControlMessageLike['entry']>[] {
   return sentMessages(postMessage).filter((message) => message.type === 'activity').map((message) => message.entry!)
 }
 
-/** The activity list carried by the newest full state snapshot. */
+/** 最新一份完整状态快照带的活动列表。 */
 function activitySnapshot(postMessage: ReturnType<typeof vi.fn>): ControlState['activity'] {
   return latestState(postMessage)?.activity ?? []
 }
@@ -137,7 +137,7 @@ function mockChrome(options: {
   localSet?: (items: Record<string, unknown>) => Promise<void>
   tabSendMessage?: (tabId: number, message: unknown) => Promise<unknown>
   tabQuery?: (queryInfo: chrome.tabs.QueryInfo) => Promise<chrome.tabs.Tab[]>
-  /** Frame documents `webNavigation` reports; a DOM tool needs at least frame 0. */
+  /** webNavigation 报告的 frame 文档；DOM 工具至少需要 frame 0。 */
   frames?: Array<{ frameId: number; parentFrameId: number; documentId?: string; url: string }>
 } = {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
@@ -150,9 +150,9 @@ function mockChrome(options: {
     remove: vi.fn(async () => {}),
     create: vi.fn(async () => htmlTab(1)),
     update: vi.fn(async () => {
-      // A page-level navigation is only "ready" once the replacement document
-      // announces itself; the worker installs that listener before dispatching,
-      // so answering here is deterministic rather than a timing race.
+      // 页面级导航要等替换文档自报身份之后才算「就绪」；
+      // worker 会在派发之前装好那个监听器，
+      // 所以在这里作答是确定性的，不是一场时序竞争。
       onRuntimeMessage.emit(
         { type: 'DSH_CONTENT_READY' },
         { tab: { id: 1 }, frameId: 0, documentId: 'doc-2', url: 'https://example.com/reset' } as chrome.runtime.MessageSender,
@@ -174,7 +174,7 @@ function mockChrome(options: {
       setBadgeText: vi.fn(async () => {}),
       setBadgeBackgroundColor: vi.fn(async () => {}),
       openPopup: vi.fn(async () => {}),
-      // The toolbar icon has no popup: this listener is what opens the page.
+      // 工具栏图标没有 popup：开页面靠的就是这个监听器。
       onClicked: chromeEvent<[chrome.tabs.Tab]>(),
     },
     alarms: { create: vi.fn(), clear: vi.fn(async () => true), onAlarm },
@@ -232,17 +232,17 @@ describe('bridge replacement (close code 4000)', () => {
     await openBridge(socket)
     socket.receive({ t: 'hello.ok', caps: HELLO_CAPS })
 
-    // The bridge hands the single slot to another browser.
+    // bridge 把唯一的槽位给了另一个浏览器。
     socket.close(4000, 'replaced')
     await vi.waitFor(() => { expect(FakeWebSocket.instances).toHaveLength(1) })
 
-    // The heartbeat must leave the other browser alone instead of evicting it
-    // back and forth every thirty seconds.
+    // 心跳必须放过另一个浏览器，不能每三十秒把它
+    // 来回踢一次。
     chromeMock.onAlarm.emit({ name: KEEPALIVE_ALARM, scheduledTime: Date.now() })
     await new Promise((resolve) => { setTimeout(resolve, 20) })
     expect(FakeWebSocket.instances).toHaveLength(1)
 
-    // An explicit user action is still allowed to claim the slot again.
+    // 显式的用户操作仍然可以再认领这个槽位。
     const control = controlPort()
     chromeMock.onConnect.emit(control.port)
     control.onMessage.emit({ type: 'settings.update', id: 'reclaim', settings: { bridgeUrl: BRIDGE_URL } })
@@ -269,9 +269,9 @@ describe('revoking unrestricted browser access', () => {
     chromeMock.onConnect.emit(control.port)
     await vi.waitFor(() => { expect(latestState(control.postMessage)?.bridge).toBe('connected') })
 
-    // A snapshot first: element targeting is validated against the document the
-    // worker last saw, exactly as it is in a real session. It must complete
-    // before `sendMessage` starts hanging.
+    // 先来一次快照：元素寻址是针对 worker 最后看到的文档
+    // 做校验的，跟真实会话里的做法完全一致。它必须在
+    // `sendMessage` 开始挂起之前完成。
     socket.receive({ t: 'tool.call', id: 'snap-1', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
     await vi.waitFor(() => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'snap-1', ok: true }))
@@ -295,7 +295,7 @@ describe('revoking unrestricted browser access', () => {
       expect(control.postMessage).toHaveBeenCalledWith({ type: 'settings.result', id: 'revoke-1', ok: true })
     })
 
-    // The revocation is what got persisted, and the call never answered success.
+    // 存下来的正是那次撤销，而这次调用从没回答成功过。
     expect(settings.unrestrictedBrowserAccess).toBe(false)
     expect(socket.sent).toContainEqual(expect.objectContaining({
       t: 'tool.result',
@@ -321,7 +321,7 @@ describe('revoking unrestricted browser access', () => {
     chromeMock.onConnect.emit(control.port)
     await vi.waitFor(() => { expect(latestState(control.postMessage)?.bridge).toBe('connected') })
 
-    // A snapshot baseline, and then a page action the worker dispatches.
+    // 先来一次快照基线，然后是 worker 派发的一次页面动作。
     socket.receive({ t: 'tool.call', id: 'snap-4', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
     await vi.waitFor(() => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'snap-4', ok: true }))
@@ -340,8 +340,8 @@ describe('revoking unrestricted browser access', () => {
       expect(control.postMessage).toHaveBeenCalledWith({ type: 'settings.result', id: 'revoke-4', ok: true })
     })
 
-    // The revocation is what got persisted, the strip is told, and the answer to
-    // the in-flight call still arrives so the model is never left waiting.
+    // 存下来的正是那次撤销，控制条也被告知了，而对
+    // 那次在途调用的答复仍然会到，所以模型永远不会被晾着等。
     expect(settings.unrestrictedBrowserAccess).toBe(false)
     expect(latestState(control.postMessage)?.settings.unrestrictedBrowserAccess).toBe(false)
     expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'call-4' }))
@@ -356,17 +356,17 @@ describe('settings write ordering', () => {
     const chromeMock = mockChrome({
       localGet: async () => ({ dshSettings: settings }),
       localSet: (items) => {
-        // Only settings writes belong to the sequence this test counts. The
-        // worker's diagnostic probe writes its own key to the same store, and
-        // letting it in would renumber the writes this test reasons about.
+        // 只有设置写入属于这个测试计数的序列。worker 的
+        // 诊断探测会把自己的键写进同一个存储，放它
+        // 进来会重新编号这个测试推理的那些写入。
         if (!('dshSettings' in items)) return Promise.resolve()
         const index = written.length
         settings = items.dshSettings as Record<string, unknown>
         written.push(settings)
-        // Write 0 is the boot migration, write 1 is the first patch, write 2 is
-        // the second. Making the *middle* one slow is what exposes a missing
-        // queue: write 2 would land first, then the stale write 1 would land
-        // last and silently undo the user's later choice.
+        // 写入 0 是启动迁移，写入 1 是第一个 patch，写入 2 是
+        // 第二个。把*中间*那次拖慢，正是暴露缺少队列的方式：
+        // 写入 2 先落盘，然后过期的写入 1 最后落盘，
+        // 悄悄撤销用户后来做出的选择。
         if (index !== 1) return Promise.resolve()
         return new Promise<void>((resolve) => { releaseSecondWrite = resolve })
       },
@@ -385,7 +385,7 @@ describe('settings write ordering', () => {
     control.onMessage.emit({ type: 'settings.update', id: 'w1', settings: { sharePageContent: 'off' } })
     await vi.waitFor(() => { expect(written).toHaveLength(2) })
     control.onMessage.emit({ type: 'settings.update', id: 'w2', settings: { approvalNotifications: false } })
-    // The queued second patch must not reach storage while the first is open.
+    // 第一个还开着的时候，排队的第二个 patch 绝不能到达存储。
     await new Promise((resolve) => { setTimeout(resolve, 20) })
     expect(written).toHaveLength(2)
 
@@ -396,7 +396,10 @@ describe('settings write ordering', () => {
     expect(written).toHaveLength(3)
 
     const persisted = settings as { sharePageContent?: string; approvalNotifications?: boolean }
-    expect(persisted.sharePageContent).toBe('off')
+    // 这里原先断言 `'off'`。那一档已删除，而归一化把它折算成 `'ask'`
+    //（存过旧值的用户当初选的是更严格的一档，不该被降级成"什么都不问"）。
+    // 所以这条断言顺带把那条迁移路径也钉住了 —— 而且走的是真实的设置写入。
+    expect(persisted.sharePageContent).toBe('ask')
     expect(persisted.approvalNotifications).toBe(false)
   })
 })
@@ -421,7 +424,7 @@ describe('tab rebind deadline', () => {
     const control = controlPort()
     chromeMock.onConnect.emit(control.port)
     await vi.waitFor(() => { expect(latestState(control.postMessage)?.bridge).toBe('connected') })
-    // The first successful page tool binds the controlled tab to tab 1.
+    // 第一次成功的页面工具把受控标签页绑到 tab 1。
     socket.receive({ t: 'tool.call', id: 'bind-1', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
     await vi.waitFor(() => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'bind-1', ok: true }))
@@ -439,7 +442,7 @@ describe('tab rebind deadline', () => {
       error: 'timeout',
     })
 
-    // The late answer arrives after the user was already told the attempt failed.
+    // 迟到的那份答复在用户已经被告知尝试失败之后才到。
     vi.useRealTimers()
     releaseQuery([htmlTab(2)])
     await new Promise((resolve) => { setTimeout(resolve, 20) })
@@ -454,8 +457,8 @@ describe('tab rebind deadline', () => {
 describe('control strip activity privacy', () => {
   it('never echoes typed text or a full URL into the activity list', async () => {
     const chromeMock = mockChrome({
-      // Unrestricted access keeps this about what the log records, not about
-      // answering approvals.
+      // 有了不受限访问，这件事只关乎日志记了什么，不关乎
+      // 怎么回答审批。
       localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL, unrestrictedBrowserAccess: true } }),
       tabSendMessage: async () => ({ ok: true, result: { text: 'typed' } }),
     })
@@ -469,8 +472,8 @@ describe('control strip activity privacy', () => {
     chromeMock.onConnect.emit(control.port)
     await vi.waitFor(() => { expect(latestState(control.postMessage)?.bridge).toBe('connected') })
 
-    // A snapshot first: element targeting is validated against the document the
-    // worker last saw, exactly as it is in a real session.
+    // 先来一次快照：元素寻址是针对 worker 最后看到的文档
+    // 做校验的，跟真实会话里的做法完全一致。
     socket.receive({ t: 'tool.call', id: 'snap-1', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
     await vi.waitFor(() => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'snap-1', ok: true }))
@@ -495,8 +498,8 @@ describe('control strip activity privacy', () => {
       expect(rows.some((row) => row.id === 'nav-1' && row.state === 'done')).toBe(true)
     })
 
-    // Ask for a fresh snapshot the way the strip does, so the assertion reads
-    // the authoritative list instead of whichever push arrived last.
+    // 像控制条那样请求一份新快照，这样断言读到的
+    // 是权威列表，不是最后到达的那次推送。
     control.onMessage.emit({ type: 'state.request' })
     await vi.waitFor(() => {
       expect(activitySnapshot(control.postMessage)).toHaveLength(3)
@@ -505,7 +508,7 @@ describe('control strip activity privacy', () => {
     const serialized = JSON.stringify(activitySnapshot(control.postMessage))
     expect(serialized).not.toContain('hunter2-correct-horse')
     expect(serialized).not.toContain('secret-value')
-    // The useful, non-secret parts are still there.
+    // 那些有用、非机密的部分还在。
     expect(serialized).toContain('https://example.com')
     expect(serialized).toContain('21 chars')
   })

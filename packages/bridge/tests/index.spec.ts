@@ -1,13 +1,14 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { apply, assertPositiveInteger, buildVisionClient, BROWSER_PROMPT_MARKER_RULE, BROWSER_PROMPT_PREAMBLE, BROWSER_TASK_LIST_RULE, Config, DEFAULT_EXTENSION_IDS, resolveConfig, resolveVisionClient } from '../src/index.ts'
 import { VISION_MODEL } from '@dsh-browser/protocol'
 
-/** Minimal context stub: apply only needs the services at registration time. */
+/** 最小化的 context 桩：apply 在注册时只需要那几个 service。 */
 function stubContext(): Context {
   const gateway = {
     wireStream: {
@@ -43,8 +44,8 @@ afterEach(async () => {
 
 describe('system prompt text', () => {
   it('keeps the assembled section ASCII-only, so a page has no homoglyph to smuggle', () => {
-    // The extension marks user panel input with an origin marker; that marker is
-    // deliberately not quoted in the prompt, so the prompt must stay plain ASCII.
+    // 扩展会用 origin marker 标记用户面板的输入；那个 marker 是刻意不写进提示词
+    // 的，所以提示词本身必须保持纯 ASCII。
     for (const [label, text] of [['preamble', BROWSER_PROMPT_PREAMBLE], ['marker rule', BROWSER_PROMPT_MARKER_RULE], ['task list rule', BROWSER_TASK_LIST_RULE]] as const) {
       const offenders = [...text].filter((character) => character.charCodeAt(0) > 0x7f)
       expect(offenders, `${label} must stay ASCII-only: found ${offenders.join('')}`).toEqual([])
@@ -53,7 +54,7 @@ describe('system prompt text', () => {
 
   it('describes the marker by origin instead of quoting it', () => {
     expect(BROWSER_PROMPT_MARKER_RULE).toContain('origin marker')
-    // A quoted literal marker would hand a page the exact string to impersonate.
+    // 一个被原样引用的字面 marker 会把那个可以拿来冒充的精确字符串交给页面。
     expect(BROWSER_PROMPT_MARKER_RULE).not.toContain('[用户')
     expect(BROWSER_PROMPT_PREAMBLE).not.toContain('[用户')
   })
@@ -68,10 +69,10 @@ describe('assertPositiveInteger', () => {
   })
 })
 
-/** Valid budgets (the Loader applies schema defaults; hand-built tests pass them explicitly). */
+/** 合法的预算值（Loader 会套用 schema 默认值；手工构造的测试显式传入它们）。 */
 const VALID = { toolTimeoutMs: 90_000, snapshotMaxChars: 32_000, maxInteractiveItems: 60 }
 
-/** Vision is off until a key is configured, so its defaults are inert. */
+/** 在配置 key 之前看图是关着的，所以它的默认值是无害的。 */
 const VISION_DEFAULTS = {
   visionApiKey: '',
   visionBaseUrl: 'https://api.deepseek.com/v1',
@@ -80,7 +81,7 @@ const VISION_DEFAULTS = {
   visionTimeoutMs: 20_000,
 }
 
-/** Launching is off until a browser is configured; detection happens at launch time. */
+/** 在配置浏览器之前启动是关着的；检测发生在启动那一刻。 */
 const LAUNCH_DEFAULTS = {
   browserExecutablePath: '',
   extensionPath: '',
@@ -100,8 +101,8 @@ describe('vision source', () => {
   })
 
   it('falls back to the credential the desktop already holds', async () => {
-    // `DEEPSEEK_API_KEY` by name: a CredentialRef is an environment-variable name
-    // layered over the environment, the managed store and `.env` files.
+    // 名字是 `DEEPSEEK_API_KEY`：一个 CredentialRef 就是一个环境变量名，环境变量
+    // 之上还叠了受管存储和 `.env` 文件。
     const asked: string[] = []
     const client = await resolveVisionClient({
       get: (name) => name === 'credentials'
@@ -113,8 +114,8 @@ describe('vision source', () => {
   })
 
   it('never borrows the account token, which the public API rejects', async () => {
-    // The first fallback asked `deepseekAccount` and got a platform token; the API
-    // answered 401 about a key nobody wrote. That service must not be consulted.
+    // 第一个回落分支问的是 `deepseekAccount`，拿到的是一个平台 token；API 于是对
+    // 一个没人写过的 key 回了 401。那个 service 绝不能被问。
     const client = await resolveVisionClient({
       get: (name) => {
         if (name === 'deepseekAccount') throw new Error('the account service must not be used')
@@ -137,30 +138,28 @@ describe('vision source', () => {
   })
 
   it('names one image-capable model, by its API id, as the default that can be overridden', () => {
-    // `deepseek-v4.1-flash` is the display name and answers 400; the API lists
-    // `deepseek-flash` and `deepseek-v4-pro`, and only the first accepts an image.
+    // `deepseek-v4.1-flash` 是展示名，会返回 400；API 列出的则是
+    // `deepseek-flash` 和 `deepseek-v4-pro`，而只有前者接受图片。
     expect(VISION_MODEL).toBe('deepseek-flash')
-    // Unset or cleared resolves to that id, so an install nobody configured — and a
-    // config whose field was emptied — are both correct rather than broken.
+    // 未设置或被清空都会解析成那个 id，所以一个没人配置过的安装——以及一个字段被
+    // 清空的配置——都是正确的，而不是坏的。
     expect(resolveConfig({ ...VALID }).visionModel).toBe('deepseek-flash')
     expect(resolveConfig({ ...VALID, visionModel: '' }).visionModel).toBe('deepseek-flash')
-    // But the field is configuration, because `visionBaseUrl` is: pointing this at
-    // another provider while the id stayed fixed would send a name that provider has
-    // never heard of. A wrong id is not silent — the provider's own 400 lists the
-    // names it accepts, which is how this one was found.
+    // 但这个字段是可配置的，因为 `visionBaseUrl` 也是：把它指向另一个 provider 而
+    // id 还固定着，就会发过去一个那个 provider 从没听说过的名字。错的 id 不会
+    // 悄无声息——provider 自己的 400 会列出它接受的名字，这一个就是这么被发现的。
     expect(resolveConfig({ ...VALID, visionModel: 'custom-vision' }).visionModel).toBe('custom-vision')
   })
 
   it('falls back rather than throwing when a direct caller passes a non-string model', () => {
-    // The Loader always runs the schema first, but a hand-built config never does,
-    // and `.trim()` on a number used to throw a TypeError where the field's old
-    // `??` form simply took the fallback.
+    // Loader 总是先跑 schema，但手工构造的配置从来不跑，而以前对一个数字调
+    // `.trim()` 会抛 TypeError，替换掉的那个 `??` 写法则只是取回落值。
     const handBuilt = { ...VALID, visionModel: 42 } as unknown as Config
     expect(resolveConfig(handBuilt).visionModel).toBe('deepseek-flash')
   })
 
   it('asks for thinking off by default', () => {
-    // On a perception task the reasoning tokens cost more than the image does.
+    // 在感知类任务上，推理 token 的开销比图本身还大。
     expect(resolveConfig({ ...VALID }).visionThinking).toBe('off')
   })
 })
@@ -170,15 +169,14 @@ describe('config', () => {
     expect(resolveConfig({})).toEqual({
       ...VALID,
       sessionWorkspacePath: dshHomePath('browser-sessions'),
-      // Named, or the group would appear under its directory name.
+      // 要有名字，否则这个分组会以它的目录名出现。
       sessionWorkspaceTitle: '浏览器对话',
       deferSessionCreate: true,
-      // The model opens pages for the user unless the user turns it off.
+      // 除非用户关掉它，否则模型会替用户打开页面。
       openPagesForUser: true,
-      // The named extensions may skip the token on loopback; nothing else may. Both
-      // the development id (pinned by the manifest `key`) and the Chrome Web Store id
-      // are named, because a store install cannot ship that key and would otherwise
-      // have to be configured by hand.
+      // 被点名的扩展可以在 loopback 上跳过 token；别的都不行。开发用 id（由
+      // manifest 的 `key` 钉住）和 Chrome Web Store 的 id 都被点名了，因为商店
+      // 安装不能带上那个 key，否则就得手工配置。
       extensionId: DEFAULT_EXTENSION_IDS.join(','),
       ...VISION_DEFAULTS,
       ...LAUNCH_DEFAULTS,
@@ -223,7 +221,7 @@ describe('config', () => {
       visionModel: 'custom-vision',
       visionThinking: 'low',
       visionTimeoutMs: 1_000,
-      // The empty-string opt-out must survive: it makes the token mandatory.
+      // 空字符串这种退出方式必须保留下来：它让 token 变成强制项。
       extensionId: '',
       browserExecutablePath: '/opt/custom/chrome',
       extensionPath: '/opt/ext/dist',
@@ -251,8 +249,18 @@ describe('config', () => {
 })
 
 describe('apply', () => {
-  it('registers the bridge with a fixed token (no generation)', async () => {
-    await apply(stubContext(), { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })
+  it('registers the bridge and mints no token when one is configured', async () => {
+    const ctx = stubContext()
+    const register = vi.spyOn(ctx.webServer, 'registerUpgrade')
+    const home = await mkdtemp(join(tmpdir(), 'dsh-bridge-home-'))
+    dirs.push(home)
+    vi.stubEnv('DSH_HOME', home)
+    await apply(ctx, { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })
+    // 桥接必须真的挂上 upgrade 路由，否则"注册成功"无从谈起——这条用例原先只调用
+    // apply() 而不检查任何东西，等于只证明了"没有抛异常"。
+    expect(register).toHaveBeenCalledTimes(1)
+    // 配置里给了 token 就不该再铸一个并落盘；"no generation" 要由磁盘来回答。
+    expect(existsSync(join(home, 'ext-bridge-token'))).toBe(false)
   })
 
   it.each([undefined, {}, { wireStream: {} }])('rejects unsupported Gateway capabilities: %j', async (gateway) => {
@@ -279,6 +287,44 @@ describe('apply', () => {
     dirs.push(home)
     vi.stubEnv('DSH_HOME', home)
     await apply(stubContext(), VALID)
+    // 真正的断言在磁盘上：没配置 token 时必须铸一个并持久化，否则下一次启动会换一个
+    // 新 token，已经装好的扩展就再也连不上。这条用例原先什么都没检查。
+    const file = join(home, 'ext-bridge-token')
+    expect(existsSync(file)).toBe(true)
+    // 256 位十六进制；空文件、或只写了一半，都会被这条挡下。
+    expect(readFileSync(file, 'utf8').trim()).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('treats every dsh peer as host-provided and optional, never as an exact pin', () => {
+    // dsh 是宿主：这些包在运行时由它提供（构建产物里就是裸 import），所以安装期不该
+    // 由 npm 来裁定版本。而且这里有个 semver 陷阱——带预发布标签的版本（当前桌面版
+    // `0.2.1-rc.2` 就是）**不满足**任何 `>=0.2.0-rc.2 <0.3.0` 这类范围，`*` 和 `0.2.x`
+    // 也一样排除它。所以光放宽范围不够：必须标成 optional，范围只作文档。
+    // 真正把关的是挂载时的能力检查（`gateway.wireStream`）以及下面那条"缺服务时的
+    // 降级/报错"。这条测试防的是有人把它改回精确锁。
+    const pkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf8')) as {
+      peerDependencies?: Record<string, string>
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>
+    }
+    const peers = Object.entries(pkg.peerDependencies ?? {}).filter(([name]) => name.startsWith('@deepseek-ai/'))
+    expect(peers.length).toBeGreaterThan(0)
+    for (const [name, range] of peers) {
+      expect(pkg.peerDependenciesMeta?.[name]?.optional, `${name} must be optional`).toBe(true)
+      expect(range, `${name} must not be an exact pin`).not.toMatch(/^\d+\.\d+\.\d+(-\S+)?$/)
+    }
+  })
+
+  it('mounts without an agent registry, and says so instead of failing', async () => {
+    // 不同 dsh 版本暴露的 Context 面并不一致。`agents` 只驱动"把浏览器快照注入对话"
+    // 这个便利功能；缺了它，插件仍应完整可用，缺的只是自动注入。这条同时钉住"缺服务
+    // 时不抛"——否则用户装上新 dsh 会看到插件直接加载失败。
+    const ctx = stubContext()
+    delete (ctx as { agents?: unknown }).agents
+    const warn = vi.spyOn(ctx.logger, 'warn')
+    const register = vi.spyOn(ctx.webServer, 'registerUpgrade')
+    await apply(ctx, { token: 'fixed-token', ...VALID, sessionWorkspacePath: '' })
+    expect(register).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('agent registry'))
   })
 
   it('rejects invalid budgets loudly', async () => {

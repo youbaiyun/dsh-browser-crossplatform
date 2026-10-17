@@ -1,10 +1,10 @@
 /**
- * Content script entry: listens for DSH_ACTION messages from the background
- * service worker, runs the action against the real page, and answers with a
- * text-only result. Starts the DOM watcher that marks the snapshot dirty.
+ * content script 入口：听 background service worker 发来的 DSH_ACTION 消息，
+ * 在真实页面上执行动作，只拿文本作答。
+ * 它还会启动那个把快照标脏的 DOM 监视器。
  *
- * The content script is the only part that touches the page; the bridge and
- * the model never see page internals beyond the structured text snapshots.
+ * 只有 content script 碰得到页面；除了结构化的文本快照，
+ * bridge 和模型永远看不到页面内部。
  *
  * @module
  */
@@ -14,7 +14,7 @@ import { runAction, ActionError } from './actions.ts'
 import { ElementIds } from './ids.ts'
 import type { SnapshotBudget } from './snapshot.ts'
 
-/** Negotiated snapshot budgets, patched in from the background via message. */
+/** 协商好的快照预算，由 background 用消息打补丁进来。 */
 let budget: SnapshotBudget = { maxItems: 60, maxForms: 30, maxChars: DEFAULT_SNAPSHOT_MAX_CHARS }
 
 const ids = new ElementIds()
@@ -22,7 +22,7 @@ const ids = new ElementIds()
 const CONTENT_SCRIPT_LISTENER = '__dshBrowserContentScriptListener__'
 type ContentListener = typeof onMessage
 
-/** A tool-call result for the bridge. */
+/** 给 bridge 的工具调用结果。 */
 export interface ToolResult {
   ok: boolean
   result?: { text: string; pageContent?: string; navigationPending?: boolean }
@@ -62,22 +62,22 @@ function onMessage(message: unknown, _sender: chrome.runtime.MessageSender, send
       sendResponse({ ok: false, error: { code, message: messageText } })
     },
   )
-  return true // async response
+  return true // 异步响应
 }
 
-// executeScript is used to recover tabs opened before extension install/reload.
-// Replace any stale listener left in the isolated world so a reload always
-// installs a listener belonging to the current extension context.
+// 靠 executeScript 把扩展安装/重载之前就打开的标签页也救回来。
+// 把隔离世界里残留的旧监听器替换掉，这样每次重载装上的都是
+// 属于当前扩展上下文的那个监听器。
 const contentGlobal = globalThis as typeof globalThis & {
   [CONTENT_SCRIPT_LISTENER]?: ContentListener
 }
 const previousListener = contentGlobal[CONTENT_SCRIPT_LISTENER]
 if (previousListener !== undefined) {
-  try { chrome.runtime.onMessage.removeListener(previousListener) } catch { /* stale extension context */ }
+  try { chrome.runtime.onMessage.removeListener(previousListener) } catch { /* 扩展上下文已经过期 */ }
 }
 contentGlobal[CONTENT_SCRIPT_LISTENER] = onMessage
 chrome.runtime.onMessage.addListener(onMessage)
 
-// A navigation action answers before unloading. The replacement content
-// script announces when the new document can accept its automatic snapshot.
+// 导航类动作在卸载之前就作答了。接替它的 content script
+// 会宣告新文档什么时候可以接受自动快照。
 void chrome.runtime.sendMessage({ type: 'DSH_CONTENT_READY' }).catch(() => {})

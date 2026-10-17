@@ -1,18 +1,16 @@
-# Four packages, one version: 0.38 is what the desktop plugin list shows for the
-# bridge, and the extension, the protocol and the root move with it so a checkout
-# has a single version to compare against a release.
+# 四个包共用一个版本：桌面端插件列表为桥接包显示的就是 0.38，扩展、协议包和根包
+# 都跟着它一起走，这样一份 checkout 只有一个版本需要和发布版对照。
 packages:
   - packages/*
   - extension
-  # The paired benchmark is a workspace member so its one devDependency
-  # (`playwright-core`, for the baseline browser) installs with the same command
-  # as everything else — `pnpm install`. It is not published and not part of the
-  # build; it is here so the runner has a browser that still honors
-  # `--load-extension`, which system Chrome 137+ does not.
+  # 配套的 benchmark 是工作区成员，这样它那唯一的 devDependency
+  # （`playwright-core`，用于基线浏览器）就能和其他一切用同一条命令装上 ——
+  # `pnpm install`。它不发布、也不属于构建；它在这里只是为了让运行器有一个
+  # 仍然认 `--load-extension` 的浏览器，而系统 Chrome 137+ 不认。
   - benchmark
 
 allowBuilds:
   esbuild: true
 
-# Peers are declared explicitly and installed by the root; do not guess.
+# peer 依赖显式声明，并由根包安装；不要猜。
 autoInstallPeers: false

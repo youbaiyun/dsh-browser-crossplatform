@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 
 /**
- * Tool-call continuity for the browser-execution worker.
+ * 浏览器端跑 worker 的工具调用连续性。
  *
- * The desktop GUI owns the conversation, so a `browser_*` call arrives on the
- * bridge socket and is answered there: it is never owned by the control strip
- * that happens to be open. This replaces the old session-checkpoint suite, whose
- * per-conversation page state was removed with the chat panel.
+ * 对话归桌面 GUI 所有，所以 `browser_*` 调用从
+ * bridge socket 到达，也在那里被应答：它从不属于恰好开着的
+ * 控制条。这顶掉了旧的会话检查点测试套件，那套
+ * 按对话保存的页面状态已随聊天面板一起移除。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,9 +43,9 @@ class FakeWebSocket extends EventTarget {
   }
 
   receive(frame: unknown): void {
-    // The real bridge always answers `hello` with a policy, so the fake one
-    // does too; a fixture that omits it is rejected by the frame parser and the
-    // connection silently never authenticates.
+    // 真 bridge 总是用一份 policy 回答 `hello`，所以这个假的
+    // 也照做；省略它的 fixture 会被帧解析器拒掉，连接
+    // 就永远静默地认证不完。
     const delivered = isRecord(frame) && frame.t === 'hello.ok' && frame.policy === undefined
       ? { ...frame, policy: { openPagesForUser: true } }
       : frame
@@ -99,7 +99,7 @@ function htmlTab(tabId: number): chrome.tabs.Tab {
   }
 }
 
-/** Boot the worker with the approval prompt out of the way (unrestricted access). */
+/** 在审批提示被移开的情况下启动 worker（不受限制的访问）。 */
 async function bootWorker(tabRemove: (tabId: number) => Promise<void> = async () => {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
   const remove = vi.fn(tabRemove)
@@ -107,7 +107,7 @@ async function bootWorker(tabRemove: (tabId: number) => Promise<void> = async ()
     action: {
       setBadgeText: vi.fn(async () => {}),
       setBadgeBackgroundColor: vi.fn(async () => {}),
-      // The toolbar icon has no popup: clicking it opens the control page.
+      // 工具栏图标没有 popup：点击它会打开控制页。
       onClicked: chromeEvent<[chrome.tabs.Tab]>(),
     },
     alarms: {
@@ -168,7 +168,7 @@ async function bootWorker(tabRemove: (tabId: number) => Promise<void> = async ()
   await vi.waitFor(() => { expect(FakeWebSocket.instances).toHaveLength(1) })
   const socket = FakeWebSocket.instances[0]!
   socket.open()
-  // The client attaches its frame listener in the turn that sends `hello`.
+  // 客户端在发 `hello` 的那一轮里挂上自己的帧监听器。
   await vi.waitFor(() => {
     expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'hello' }))
   })
@@ -236,7 +236,7 @@ describe('background tool-call continuity', () => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'close-1', ok: true }))
     })
 
-    // A strip that opens later still learns the outcome from its view state.
+    // 稍后才打开的控制条照样能从自己的视图状态得知结果。
     const reopened = controlPort()
     onConnect.emit(reopened.port)
     expect(latestState(reopened.postMessage)?.activity).toContainEqual(expect.objectContaining({

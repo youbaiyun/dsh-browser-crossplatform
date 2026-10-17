@@ -1,5 +1,5 @@
-# Replace the extension-backed browser tools with the benchmark Playwright
-# adapter while preserving the same DSH web profile, model and session API.
+# 把由扩展支撑的浏览器工具替换成 benchmark 的 Playwright adapter，同时保持同一个
+# DSH web profile、模型和会话 API。
 
 - id: bridge-browser
   disabled: true
@@ -14,8 +14,8 @@
 
 - insert:
     - id: benchmark-playwright-browser
-      # The runner replaces this portable placeholder with a file:// URL in an
-      # effective patch under benchmark/results/runtime/.
+      # runner 会把这个可移植的占位符替换成 benchmark/results/runtime/ 下一份
+      # 生效 patch 里的 file:// URL。
       name: __BENCHMARK_PLAYWRIGHT_PLUGIN__
       config:
         startUrl: !!js process.env.BENCHMARK_START_URL

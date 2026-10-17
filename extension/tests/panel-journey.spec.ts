@@ -1,26 +1,25 @@
 // @vitest-environment jsdom
 
 /**
- * A user journey, start to finish, in one test.
+ * 一段用户旅程，从开头到结尾，全放在一个测试里。
  *
- * The other specs each answer one question. This one walks the sequence a person actually
- * performs and checks the panel is usable at every step — because the failures found so far
- * were all *between* steps: the panel rendered fine in isolation and went blank once it had
- * been resized, or lost focus only when a prompt was sent rather than pushed.
+ * 其他 spec 各自只回答一个问题。这一个走的是一个人真会走的顺序，并检查面板在
+ * 每一步都还能用——因为目前找到的故障全出在步骤*之间*：面板单独渲染时好好的，
+ * 一旦被调过尺寸就变空白；或者只有提示是被「发送」而不是被「推送」时才丢
+ * 焦点。
  *
- * The journey, in order:
- *   1. the panel opens narrow, with no state yet
- *   2. state arrives; the desktop is mid-answer in a conversation the panel did not start
- *   3. the reader types their own message while that streams
- *   4. they open settings and change one
- *   5. they drag the panel wider and narrower again
- *   6. they expand a tool line and scroll back through the transcript
- *   7. an approval arrives and is answered
- *   8. the desktop finishes the turn
- *   9. the reader switches conversation and returns
+ * 旅程顺序如下：
+ *   1. 面板在窄宽度下打开，此时还没有任何状态
+ *   2. 状态到达；桌面端正在一场不是面板发起的对话里作答
+ *   3. 阅读者在那段回答流式输出的同时输入自己的消息
+ *   4. 他们打开设置，改动其中一项
+ *   5. 他们把面板拖宽，再拖窄
+ *   6. 他们展开一行工具记录，再往上回滚对话记录
+ *   7. 一个审批请求到达并被回答
+ *   8. 桌面端结束该回合
+ *   9. 阅读者切换对话，再切回来
  *
- * At each step it asserts the two things a person would notice: the content is on screen and
- * the controls still respond.
+ * 每一步它都断言两件一个人会注意到的事：内容在屏幕上，控件仍然有响应。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -68,7 +67,7 @@ function state(overrides: Partial<ControlState> = {}): ControlState {
   }
 }
 
-/** What a person would notice: is there content, and does the composer still work? */
+/** 一个人会注意到的事：有内容吗，输入框还能用吗？ */
 function visible(root: HTMLElement) {
   const transcript = root.querySelector('.transcript')
   const inner = root.querySelector('.transcript__inner')
@@ -90,7 +89,7 @@ describe('user journey', () => {
   })
 
   it('stays usable through a whole session, including a conversation the panel did not start', async () => {
-    // --- 1. the panel opens narrow, before the worker says anything --------------------
+    // --- 1. 面板在窄宽度下打开，worker 还没说任何话 --------------------
     const root = document.createElement('div')
     document.body.append(root)
     let panelWidth = 360
@@ -104,7 +103,7 @@ describe('user journey', () => {
     expect(v.composer, '1. composer draws before any state').toBe(true)
     expect(v.panelMax, '1. cap is applied on the first paint').toBe('360px')
 
-    // --- 2. the desktop is mid-answer in a conversation the panel did not start --------
+    // --- 2. 桌面端正在一场不是面板发起的对话里作答 --------
     const desktopPrompt = '在浏览器对话里发出的指令'
     let reply = ''
     const pushWorking = (turn: 'running' | 'idle', state_?: 'running' | 'done') => {
@@ -132,14 +131,14 @@ describe('user journey', () => {
     expect(v.rows, '2. rows exist').toBeGreaterThan(0)
     expect(Number.parseFloat(v.panelMax), '2. cap still within the panel').toBeLessThanOrEqual(panelWidth)
 
-    // --- 3. the reader types their own message while that streams ---------------------
+    // --- 3. 阅读者在回答流式输出的同时输入自己的消息 ---------------------
     const input = root.querySelector<HTMLTextAreaElement>('.composer__input')!
     input.focus()
     input.value = '我自己的问题'
     input.dispatchEvent(new Event('input', { bubbles: true }))
     expect(document.activeElement, '3. the composer holds focus').toBe(input)
 
-    // --- 4. they open settings and change one ----------------------------------------
+    // --- 4. 他们打开设置，改动其中一项 ----------------------------------------
     root.querySelector<HTMLButtonElement>('[aria-label="更改设置"]')?.click()
     expect(root.querySelector('.sheet'), '4. the sheet opens').not.toBeNull()
     const selects = [...root.querySelectorAll<HTMLSelectElement>('.sheet select')]
@@ -148,10 +147,10 @@ describe('user journey', () => {
     sharing.value = sharing.options[sharing.options.length - 1]!.value
     sharing.dispatchEvent(new Event('change', { bubbles: true }))
     expect(port.sent.some((m) => m.type === 'settings.update'), '4. changing a control sends an update').toBe(true)
-    // A state push must not rebuild the sheet out from under the reader. The push carries the
-    // settings the worker knows about — which are still the ones from before the local change —
-    // so one push legitimately reconciles. The second, identical push is the one that must be
-    // a no-op, which is what keeps a dropdown open while a reply streams.
+    // 一次状态推送不得在阅读者脚下重建整个设置面板。这次推送带的是 worker 所知道的
+    // 那份设置——还是本地改动之前的那份——所以第一次推送做一次协调是合理的。
+    // 第二次一模一样的推送才必须是空操作，正是这一点让下拉菜单在回答流式输出时保持
+    // 展开。
     const sameSettings = state({
       session: { id: 'desktop-session', turn: 'running', pendingPrompt: false },
       settings: { ...SETTINGS_DEFAULTS },
@@ -162,11 +161,11 @@ describe('user journey', () => {
     app.handleMessage({ type: 'state', state: sameSettings })
     expect(root.querySelector('.sheet__body .setting'), '4. an unchanged push keeps the sheet').toBe(settledRow)
 
-    // --- 5. they drag the panel wider and narrower -----------------------------------
+    // --- 5. 他们把面板拖宽，再拖窄 -----------------------------------
     for (const width of [640, 900, 320, 180, 360]) {
       panelWidth = width
-      // The push has to carry the working conversation, or resizing would also clear it and the
-      // later steps would be testing an empty panel instead of a resized one.
+      // 这次推送必须带上正在进行的对话，否则调尺寸也会把它清掉，后面几步就变成
+      // 在测一个空面板，而不是一个被调过尺寸的面板。
       pushWorking('running')
       const applied = Number.parseFloat(document.documentElement.style.getPropertyValue('--panel-max'))
       expect(Number.isNaN(applied), `5. width ${width} produced a number`).toBe(false)
@@ -176,7 +175,7 @@ describe('user journey', () => {
     }
     panelWidth = 360
 
-    // --- 6. they expand a tool line and scroll back ----------------------------------
+    // --- 6. 他们展开一行工具记录并向上回滚 ----------------------------------
     const toolButton = root.querySelector<HTMLButtonElement>('.tool-line')
     expect(toolButton, '6. there is a tool line to expand').not.toBeNull()
     const before = toolButton!.getAttribute('aria-expanded')
@@ -185,7 +184,7 @@ describe('user journey', () => {
     const transcriptEl = root.querySelector<HTMLElement>('.transcript')!
     transcriptEl.scrollTop = 400
 
-    // --- 7. an approval arrives and is answered --------------------------------------
+    // --- 7. 一个审批请求到达并被回答 --------------------------------------
     app.handleMessage({
       type: 'state',
       state: state({
@@ -202,7 +201,7 @@ describe('user journey', () => {
     allow!.click()
     expect(port.sent.some((m) => m.type === 'approval.respond'), '7. answering posts a decision').toBe(true)
 
-    // --- 8. the desktop finishes the turn --------------------------------------------
+    // --- 8. 桌面端结束该回合 --------------------------------------------
     pushWorking('idle', 'done')
     flushAnimationFrames()
     v = visible(root)
@@ -210,7 +209,7 @@ describe('user journey', () => {
     expect(v.composer, '8. composer survived the whole journey').toBe(true)
     expect(root.querySelector<HTMLTextAreaElement>('.composer__input')?.value, '8. the typed draft survived').toBe('我自己的问题')
 
-    // --- 9. they switch conversation and come back -----------------------------------
+    // --- 9. 他们切换对话再切回来 -----------------------------------
     app.handleMessage({
       type: 'state',
       state: state({ session: { id: 'other-session', turn: 'idle', pendingPrompt: false }, timeline: [] }),
@@ -236,9 +235,9 @@ describe('user journey', () => {
     expect(visible(root).composer, '9. composer survives the return').toBe(true)
   }, 30_000)
   it('flips the send button to stop and back on a state push alone', () => {
-    // The turn flag arrives in `state` as well as in `session.event`. `refreshComposerAction`
-    // was only called from the turn-event path, so a state-only transition left the button in
-    // the previous turn's shape — a stop button after the turn had already ended.
+    // 回合标志既随 `session.event` 到达，也随 `state` 到达。`refreshComposerAction` 过去
+    // 只从回合事件那条路径被调用，所以光由 state 引起的转换会让按钮停在上一个回合的
+    // 样子——回合已经结束，却还显示停止按钮。
     const root = document.createElement('div')
     document.body.append(root)
     const app = new App(root, 'zh', new StubPort().asControlPort(), controlCopy('zh'))

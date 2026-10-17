@@ -34,8 +34,8 @@ describe('token', () => {
     const token = generateToken()
     await writeTokenFile(token, file)
     expect((await readFile(file, 'utf8')).trim()).toBe(token)
-    // Windows cannot express POSIX mode bits, so the 0600 guarantee is only
-    // assertable on a POSIX filesystem; the round-trip below still runs.
+    // Windows 表达不了 POSIX 的 mode 位，所以 0600 这个保证只能在 POSIX 文件系统上
+    // 断言；下面的往返测试仍然会跑。
     if (process.platform !== 'win32') {
       expect((await stat(file)).mode & 0o777).toBe(0o600)
     }

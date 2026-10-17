@@ -1,15 +1,12 @@
 /**
- * Serving the extension's image-recognition requests on the desktop side.
+ * 在桌面侧处理扩展的图片识别请求。
  *
- * The extension is asked for bytes first because only it carries the user's login
- * state; when it could not fetch at all — its content-security policy, a host
- * permission, or an enterprise rule — it sends the URL and the desktop tries with
- * its own network stack instead. The two paths are complementary rather than
- * redundant, which is why the frame carries a source rather than always one kind.
+ * 先向扩展要字节，因为只有它带着用户的登录状态；它完全取不到时——内容安全策略、host
+ * 权限，或企业策略——就把 URL 发过来，改由桌面端用自己的网络栈去取。两条路径互补而不是
+ * 冗余，帧里之所以带着 source、而不是永远只有一种来源，原因就在这里。
  *
- * The desktop has no image codec, so bytes it fetches itself are passed through
- * unchanged once they are known to be an image and to be a sane size. Anything
- * the extension already normalized arrives pre-scaled.
+ * 桌面端没有图片编解码器，所以它自己取回的字节一旦确认是图片、大小也合理，就原样透传。
+ * 扩展已经规范化过的内容则以预缩放的形式到达。
  *
  * @module
  */
@@ -21,7 +18,7 @@ export type ImageRelayResult =
   | { ok: true; desc: string }
   | { ok: false; code: string; message: string }
 
-/** Cap on bytes the desktop will pull from the network for one image. */
+/** 桌面端为单张图片从网络拉取字节数的上限。 */
 const MAX_RELAY_BYTES = 12_000_000
 const RELAY_TIMEOUT_MS = 15_000
 
@@ -34,17 +31,17 @@ export class ImageRelay {
     this.fetchImpl = fetchImpl
   }
 
-  /** Whether a vision model is configured, which is what `hello.ok` advertises. */
+  /** 有没有配置视觉模型，`hello.ok` 宣告的就是这个。 */
   get available(): boolean {
     return this.vision !== undefined
   }
 
   /**
-   * Recognize one image for the extension.
+   * 替扩展识别一张图片。
    *
-   * @param request - the page context the extension gathered.
-   * @param source - normalized bytes, or a URL for the desktop to fetch.
-   * @returns a one-line description, or a classified failure.
+   * @param request - 扩展收集到的页面上下文。
+   * @param source - 规范化后的字节，或交给桌面端去取的一个 URL。
+   * @returns 一行描述，或分类后的失败。
    */
   async recognize(request: ImageRecognitionRequest, source: ImageSource): Promise<ImageRelayResult> {
     const vision = this.vision
@@ -72,9 +69,9 @@ export class ImageRelay {
         near: request.near,
         heading: request.heading,
         kind: request.kind,
-        // The tier travels with the request so the relayed call asks exactly what
-        // the extension's own call would have asked. Omitted rather than set to
-        // undefined, which `exactOptionalPropertyTypes` rejects.
+        // 档位随请求一起走，中继出去的调用问的就是扩展自己那次调用会问的东西。
+        // 这里是省略而不是设成 undefined，因为 `exactOptionalPropertyTypes`
+        // 不接受后者。
         ...request.tier === undefined ? {} : { tier: request.tier },
       },
     })
@@ -83,7 +80,7 @@ export class ImageRelay {
       : { ok: false, code: result.code, message: result.message }
   }
 
-  /** The desktop's own attempt, for when the extension's fetch did not work. */
+  /** 桌面端自己的尝试，用在扩展那次抓取没成功的时候。 */
   private async fetchByUrl(
     url: string,
   ): Promise<{ ok: true; base64: string; mediaType: string } | { ok: false; code: string; message: string }> {

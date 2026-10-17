@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { rememberedImageIdentities, rememberImageIdentities } from '../src/background/tools.ts'
 
 /**
- * The background's memory of what each image number pointed at.
+ * 后台记着每个图片编号曾经指向什么。
  *
- * It exists so a describe call that arrives after the page re-rendered can still
- * name the picture. The rules worth pinning are the ones a wrong map would break
- * silently: frames are separate namespaces, and one long-lived frame must not
- * grow a number per image forever.
+ * 它存在的意义是：页面重新渲染之后才到的 describe 调用仍然能
+ * 说出那张图是什么。值得钉住的规则，是那些一旦映射出错就会
+ * 悄悄失败的部分：frame 是彼此独立的命名空间，而且一个长生命周期的 frame
+ * 不能为每张图片无限地长编号下去。
  */
 describe('remembered image identities', () => {
   beforeEach(() => {
@@ -21,8 +21,8 @@ describe('remembered image identities', () => {
   })
 
   it('keeps the same number in two frames apart', () => {
-    // Element indices are a per-frame namespace, so a tab-wide map would hand one
-    // frame's address to the other.
+    // 元素索引是按 frame 分的命名空间，所以一张横跨标签页的映射会把一个
+    // frame 的地址交给另一个。
     rememberImageIdentities(7, 0, [{ index: 3, identity: 'https://example.com/a.png' }])
     rememberImageIdentities(7, 4, [{ index: 3, identity: 'https://example.com/b.png' }])
     expect(rememberedImageIdentities.get('7:0')?.get(3)).toBe('https://example.com/a.png')
@@ -47,14 +47,14 @@ describe('remembered image identities', () => {
     }
     const byNumber = rememberedImageIdentities.get('11:0')!
     expect(byNumber.size).toBeLessThanOrEqual(500)
-    // The newest is what a live page is about to be asked about; the oldest goes.
+    // 最新的是活动页面马上要被问到的那张；最旧的被淘汰。
     expect(byNumber.get(699)).toBe('https://example.com/699.png')
     expect(byNumber.has(0)).toBe(false)
   })
 
   it('bounds how many frames it remembers, since closed tabs never report back', () => {
-    // The bound on one frame's numbers says nothing about the number of frames:
-    // every tab and iframe ever snapshotted adds a key that nothing removes.
+    // 一个 frame 里编号数量的上限，管不了 frame 的数量：
+    // 每个被快照过的标签页和 iframe 都会加进一个没人移除的键。
     for (let tab = 1; tab <= 200; tab += 1) {
       rememberImageIdentities(tab, 0, [{ index: 0, identity: `https://example.com/${String(tab)}.png` }])
     }
@@ -64,8 +64,8 @@ describe('remembered image identities', () => {
   })
 
   it('drops the frame that went longest without a snapshot, not the one opened first', () => {
-    // A long-lived tab that keeps being snapshotted is exactly the one a describe
-    // call is about to reference, so it must survive a flood of newer frames.
+    // 一个反复被快照的长生命周期标签页，正是 describe
+    // 调用马上要引用的那个，所以它必须能在不断更新的 frame 洪流里活下来。
     rememberImageIdentities(1, 0, [{ index: 0, identity: 'https://example.com/keep.png' }])
     for (let tab = 2; tab <= 200; tab += 1) {
       rememberImageIdentities(tab, 0, [{ index: 0, identity: `https://example.com/${String(tab)}.png` }])

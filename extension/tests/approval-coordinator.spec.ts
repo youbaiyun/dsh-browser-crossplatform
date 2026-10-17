@@ -43,14 +43,14 @@ describe('ApprovalCoordinator', () => {
       summary: 'Click element [3]',
       canTrust: true,
     }))
-    // A view accepted it, so the OS notification fallback must stay quiet.
+    // 有视图接了它，所以操作系统通知这条兜底路径必须保持安静。
     expect(callbacks.notify).not.toHaveBeenCalled()
     expect(callbacks.resolved).not.toHaveBeenCalled()
     expect(coordinator.pendingRequests()).toHaveLength(1)
 
     const request = coordinator.pendingRequests()[0]
-    // The control strip request is session-free: the dsh side owns conversation
-    // identity, the browser only correlates one tool call.
+    // 控制条的请求和会话无关：会话身份由 dsh 一侧持有，
+    // 浏览器只关联一次工具调用。
     expect('sessionId' in request).toBe(false)
 
     let settled = false
@@ -73,8 +73,8 @@ describe('ApprovalCoordinator', () => {
 
     expect(callbacks.deliver).toHaveBeenCalledTimes(1)
     expect(callbacks.notify).toHaveBeenCalledTimes(1)
-    // notify takes exactly one argument: there is no view id to address, and it
-    // reports the same correlated request the control strip was offered.
+    // notify 只收一个参数：没有可寻址的视图 id，而且它
+    // 报的就是控制条拿到的那同一个已关联请求。
     expect(callbacks.notify.mock.calls[0]).toHaveLength(1)
     expect(callbacks.notify.mock.calls[0]![0].id).toBe(callbacks.deliver.mock.calls[0]![0].id)
     expect(callbacks.notify.mock.calls[0]![0].summary).toBe(PROMPT.summary)
@@ -98,8 +98,8 @@ describe('ApprovalCoordinator', () => {
 
   it('times out only after the full approval window', async () => {
     vi.useFakeTimers()
-    // A user has to notice the notification and open the control strip, so the
-    // window is measured in minutes rather than seconds.
+    // 用户得注意到通知并打开控制条，所以这个
+    // 时间窗按分钟算，不按秒。
     expect(APPROVAL_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000)
     const { callbacks, coordinator } = harness(true)
 
@@ -119,7 +119,7 @@ describe('ApprovalCoordinator', () => {
     expect(callbacks.resolved).toHaveBeenCalledTimes(1)
     expect(coordinator.pendingRequests()).toEqual([])
 
-    // A late answer cannot revive a request the window already closed.
+    // 迟到的答复救不活时间窗已经关掉的请求。
     coordinator.respond(request.id, 'allow-once')
     expect(callbacks.resolved).toHaveBeenCalledTimes(1)
   })
@@ -169,7 +169,7 @@ describe('ApprovalCoordinator', () => {
     expect(callbacks.clearNotification).toHaveBeenCalledTimes(2)
     expect(coordinator.pendingRequests()).toEqual([])
 
-    // Nothing left to settle, and a late abort must not settle twice.
+    // 已经没什么可结算的了，迟到的 abort 也不能结算两次。
     coordinator.cancelAll()
     abort.abort()
     coordinator.respond(firstRequest!.id, 'allow-once')
@@ -189,7 +189,7 @@ describe('ApprovalCoordinator', () => {
     expect(live.map((request) => request.action)).toEqual(['browser_click', 'browser_navigate'])
     expect(new Set(live.map((request) => request.id)).size).toBe(2)
 
-    // Mutating whatever a caller received must not corrupt the coordinator.
+    // 改调用方拿到的任何东西，都破坏不了协调器。
     live.pop()
     live[0]!.summary = 'tampered'
     live[0]!.origins.push('https://evil.example')
@@ -200,7 +200,7 @@ describe('ApprovalCoordinator', () => {
     expect(again[0]!.origins).toEqual(PROMPT.origins)
     expect(again[0]!.origins).not.toBe(live[0]!.origins)
 
-    // A settled request leaves the live list.
+    // 已结算的请求会从活动列表里离开。
     coordinator.respond(again[0]!.id, 'always-allow-reads')
     await expect(first).resolves.toEqual({ status: 'decision', decision: 'always-allow-reads' })
     expect(coordinator.pendingRequests()).toHaveLength(1)
@@ -219,7 +219,7 @@ describe('ApprovalCoordinator', () => {
     const [first, second] = coordinator.pendingRequests()
 
     coordinator.respond(first!.id, 'trust-origin')
-    // Repeats, unknown ids, and late aborts are all ignored.
+    // 重复的、未知 id、迟到的 abort，都会被忽略。
     coordinator.respond(first!.id, 'deny')
     coordinator.respond('12345678-1234-4234-8234-123456789abc', 'deny')
     abort.abort()

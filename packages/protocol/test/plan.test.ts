@@ -24,7 +24,7 @@ test('a failure is terminal, and every task finishing means the plan is complete
   assert.ok(plan)
   assert.equal(plan.complete, true)
   assert.equal(plan.tasks[1]?.status, 'failed')
-  // Nothing is in progress once every box is terminal.
+  // 每个框落定之后，就没有任何东西还在进行中。
   assert.equal(plan.activeId, null)
 })
 
@@ -38,12 +38,12 @@ test('accepts numbered and bare-bracket items, because the box is the contract',
 })
 
 test('a list with no boxes counts only under a heading that announces a plan', () => {
-  // Without the heading this is an ordinary bulleted answer, not a task list.
+  // 没有这个标题，它就是一段普通的项目符号回答，而不是任务表。
   assert.equal(parsePlan('- one thing\n- another thing'), null)
   const titled = parsePlan('## 任务清单\n- 打开标签页\n- 读取页面')
   assert.ok(titled)
   assert.deepEqual(titled.tasks.map((task) => task.status), ['pending', 'pending'])
-  // A single item is not a list; prose is not a plan.
+  // 单项不算列表；大白话不是任务表。
   assert.equal(parsePlan('## Plan\n- only one'), null)
   assert.equal(parsePlan('## Plan\njust a sentence'), null)
 })
@@ -56,7 +56,7 @@ test('prose after a loose list is not swallowed into it', () => {
 test('no checklist means no plan, and empty text is not a plan', () => {
   assert.equal(parsePlan(''), null)
   assert.equal(parsePlan('Just a reply, no list at all.'), null)
-  // Boxes with nothing in them are not tasks.
+  // 框里什么都没有，那不算任务。
   assert.equal(parsePlan('- [ ]\n- [x]'), null)
 })
 

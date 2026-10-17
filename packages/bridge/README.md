@@ -1,6 +1,6 @@
 # dsh-browser-crossplatform
 
-The desktop half of the dsh browser extension 「dsh 浏览器扩展（全端）」. It mounts a
+The desktop half of the dsh browser extension 「dsh 浏览器扩展（全平台）」. It mounts a
 token-authenticated WebSocket bridge on the desktop app's own webserver, exposes the
 `browser_*` tools to the model, and relays image recognition to the model the user
 configured.

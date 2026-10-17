@@ -6,7 +6,7 @@ import { buildSnapshot, type SnapshotBudget } from '../src/content/snapshot.ts'
 
 const BUDGET: SnapshotBudget = { maxItems: 12, maxForms: 5, maxChars: 6_000 }
 
-/** Populate the id registry the way a snapshot would, then resolve one image. */
+/** 像快照那样填充 id 注册表，然后解析出一张图片。 */
 async function resolveImage(html: string): Promise<ReturnType<typeof runAction>> {
   document.body.innerHTML = html
   const ids = new ElementIds()
@@ -23,9 +23,9 @@ afterEach(() => {
 
 describe('browser_describe_image', () => {
   it('uses the same identity the snapshot reported, or the cache never hits', async () => {
-    // The two sides compute this independently: the snapshot renders it into the
-    // identity map, the describe action asks with it. A drift here is invisible —
-    // the marker simply keeps saying "not-requested" — so it is asserted.
+    // 两边各自独立算这个值：快照把它渲染进
+    // 身份映射，describe 动作则带着它来提问。这里一旦漂移根本看不见——
+    // 标记只会一直写着「not-requested」——所以要断言它。
     document.body.innerHTML = `
       <h2>本季度营收</h2>
       <img id="chart" src="data:image/png;base64,${'A'.repeat(40)}" alt="季度营收" style="width:64px;height:64px">
@@ -57,8 +57,8 @@ describe('browser_describe_image', () => {
   })
 
   it('names an image that is itself the click target of a link', async () => {
-    // The page's own structure says what kind of image this is, and that changes
-    // how the answer should be read.
+    // 页面自己的结构说明了这是哪一类图片，而这会改变
+    // 答案该怎么解读。
     const result = await resolveImage('<a href="/offer"><img src="/banner.png" alt="促销"></a>')
     expect(result.image?.kind).toBe('link')
   })
@@ -100,10 +100,10 @@ describe('browser_describe_image', () => {
   })
 
   it('recovers the image by address after a re-render retires its index', async () => {
-    // The registry is WeakMap-backed, so a re-render replaces the node the id
-    // belonged to and the number the model remembers stops resolving. The picture
-    // is still there, and the address the snapshot called its identity still
-    // names it, so the call should survive the page repainting itself.
+    // 注册表由 WeakMap 支撑，所以一次重新渲染就会换掉该 id
+    // 所属的节点，模型记住的编号也跟着失效。图片
+    // 还在那儿，而快照认作它身份的那个地址仍然
+    // 指向它，所以这次调用应该能熬过页面自己的重绘。
     document.body.innerHTML = '<img src="/chart.png" alt="图表" style="width:64px;height:64px">'
     const ids = new ElementIds()
     const first = buildSnapshot(ids, { budget: BUDGET }, null)
@@ -120,8 +120,8 @@ describe('browser_describe_image', () => {
   })
 
   it('still prefers the live index over the remembered address', async () => {
-    // The hint is a fallback, not an override: a number that resolves is honoured
-    // even when the caller also passes an address that would match another image.
+    // 这个提示只是兜底，不是覆盖：只要编号能解析成功就采纳，
+    // 哪怕调用方同时传了一个会匹配到另一张图片的地址。
     document.body.innerHTML = '<img src="/a.png" style="width:64px"><img src="/b.png" style="width:64px">'
     const ids = new ElementIds()
     const view = buildSnapshot(ids, { budget: BUDGET }, null)
@@ -137,8 +137,8 @@ describe('browser_describe_image', () => {
   })
 
   it('does not invent a recovery for an image that has no address', async () => {
-    // An address-less image is identified by the number that went stale, so
-    // "matching" it on that number would be guessing rather than recovering.
+    // 没有地址的图片就靠那个已经失效的编号来认，所以
+    // 拿那个编号去「匹配」它，是在猜，不是在恢复。
     document.body.innerHTML = '<svg width="100" height="60"><circle r="10" /></svg>'
     const ids = new ElementIds()
     const first = buildSnapshot(ids, { budget: BUDGET }, null)
@@ -153,8 +153,8 @@ describe('browser_describe_image', () => {
   })
 
   it('names the numbers that still resolve when an index is gone', async () => {
-    // Without the current numbers the only way forward is another full snapshot,
-    // which is the cost an indexed path exists to avoid.
+    // 没有当前的编号，唯一能往前走的办法就是再做一次完整快照，
+    // 而这正是索引化路径要避开的开销。
     document.body.innerHTML = `
       <img src="/a.png" style="width:64px;height:64px">
       <img src="/b.png" style="width:64px;height:64px">
@@ -177,9 +177,9 @@ describe('browser_describe_image', () => {
   })
 
   it('refuses to recover when a remembered address matches more than one image', async () => {
-    // A shared logo or placeholder appears on many tiles at once. Taking the first
-    // match would attach that instance's alt/near/heading to an image whose answer
-    // is not cached yet — a confident description of the wrong tile.
+    // 一个共享的 logo 或占位图会同时出现在许多图块上。取第一个
+    // 匹配会把那个实例的 alt/near/heading 安到一张答案
+    // 还没缓存的图片上——变成对错误图块的一段自信描述。
     const markup = `
       <figure><img src="/logo.png" alt="甲" style="width:64px;height:64px"><figcaption>第一处</figcaption></figure>
       <figure><img src="/logo.png" alt="乙" style="width:64px;height:64px"><figcaption>第二处</figcaption></figure>
@@ -198,7 +198,7 @@ describe('browser_describe_image', () => {
   })
 
   it('recovers when a remembered address matches exactly one image', async () => {
-    // The same re-render, but the address is unique: this is the case recovery is for.
+    // 同样是重新渲染，但地址是唯一的：这正是恢复机制要应对的场景。
     document.body.innerHTML = '<img src="/solo.png" alt="图" style="width:64px;height:64px">'
     const ids = new ElementIds()
     const first = buildSnapshot(ids, { budget: BUDGET }, null)

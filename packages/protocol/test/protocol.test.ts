@@ -19,7 +19,7 @@ test('hello.ok requires caps and policy', () => {  const ok = parseBridgeFrame(J
   assert.ok(ok && ok.t === 'hello.ok')
   assert.equal(ok.policy.openPagesForUser, false)
 
-  // Policy field dropped in transit must be rejected, not defaulted.
+  // 传输途中丢掉的 policy 字段必须被拒绝，而不是套用默认值。
   assert.equal(parseBridgeFrame(JSON.stringify({ t: 'hello.ok', caps })), undefined)
 })
 
@@ -55,7 +55,7 @@ test('malformed input is rejected, not thrown', () => {
   assert.equal(parseBridgeFrame('null'), undefined)
   assert.equal(parseBridgeFrame('[1,2]'), undefined)
   assert.equal(parseBridgeFrame(JSON.stringify({ t: 'nope' })), undefined)
-  assert.equal(parseBridgeFrame(JSON.stringify({ t: 'hello', token: 'x' })), undefined) // caps missing
+  assert.equal(parseBridgeFrame(JSON.stringify({ t: 'hello', token: 'x' })), undefined) // 缺 caps
 })
 
 test('guards separate client and server vocabulary', () => {
@@ -73,8 +73,8 @@ test('isPolicy accepts only a boolean field', () => {
 })
 
 test('imageRecognition is optional but must be a boolean when present', () => {
-  // Absent means "no vision model here", which is a supported state rather than
-  // a dropped field — unlike openPagesForUser, where absence is rejected.
+  // 缺失表示“这里没有看图模型”，这是一种受支持的状态，而不是一个被丢掉的
+  // 字段——不像 openPagesForUser，那里缺失是会被拒绝的。
   assert.equal(isPolicy({ openPagesForUser: true }), true)
   assert.equal(isPolicy({ openPagesForUser: true, imageRecognition: true }), true)
   assert.equal(isPolicy({ openPagesForUser: true, imageRecognition: false }), true)
@@ -101,10 +101,10 @@ test('image.call accepts bytes or a url, and rejects anything else', () => {
   }))
   assert.ok(url && url.t === 'image.call')
 
-  // An empty url is not a source, and an unknown kind is not a source at all.
+  // 空 url 不是一种 source，未知的 kind 更是完全不算 source。
   assert.equal(parseBridgeFrame(JSON.stringify({ t: 'image.call', id: '3', request: imageRequest, source: { kind: 'url', url: '' } })), undefined)
   assert.equal(parseBridgeFrame(JSON.stringify({ t: 'image.call', id: '4', request: imageRequest, source: { kind: 'inline' } })), undefined)
-  // Context fields are required: an answer without them cannot be about this image.
+  // 上下文字段是必需的：没有它们的答案不可能是关于这张图的。
   assert.equal(parseBridgeFrame(JSON.stringify({ t: 'image.call', id: '5', request: { identity: 'x' }, source: { kind: 'bytes', mediaType: 'image/png', base64: 'A' } })), undefined)
 })
 
@@ -136,12 +136,12 @@ test('the tier decides which question the vision model is asked', () => {
   }
 
   assert.equal(systemOf(body('standard')), VISION_SYSTEM_PROMPT)
-  // A sender that predates tiers still asks the base question rather than being
-  // refused, which is why the field is optional on the wire.
+  // 一个早于 tier 的发送方仍然问那个基础问题，而不是被拒绝，这就是这个字段在
+  // 线上协议里可选的原因。
   assert.equal(systemOf(body()), VISION_SYSTEM_PROMPT)
   assert.equal(systemOf(body('enhanced')), VISION_RELATION_PROMPT)
   assert.ok(systemOf(body('enhanced')).includes('doing on this page'))
-  // Both prompts keep the token every parser treats as a decline.
+  // 两套提示词都保留了那个每个解析器都当作“拒绝”的 token。
   assert.ok(systemOf(body('enhanced')).includes(VISION_DECLINE))
   assert.ok(systemOf(body('standard')).includes(VISION_DECLINE))
 })

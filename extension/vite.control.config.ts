@@ -3,13 +3,12 @@ import { defineConfig, type Plugin } from 'vite'
 import { outDir, sharedPlugins } from './vite.shared.ts'
 
 /**
- * Rewrite Vite's asset URLs to be relative to `control/index.html`'s own folder.
+ * 把 Vite 的资源 URL 改写成相对于 `control/index.html` 自己所在目录的形式。
  *
- * Vite defaults to root-absolute URLs and its `base` option cannot express
- * "relative to this nested html file": `base: './'` emits `../control/...` for
- * this entry, which escapes to `dist/` and 404s. The page is loaded as
- * `control/index.html` under both `chrome-extension://` and `moz-extension://`,
- * so `./assets/...` is the only form that resolves in both.
+ * Vite 默认用根绝对 URL，而它的 `base` 选项表达不了“相对于这个嵌套 html 文件”：
+ * `base: './'` 对这个入口会产出 `../control/...`，那会逃到 `dist/` 并 404。
+ * 这个页面在 `chrome-extension://` 和 `moz-extension://` 下都按
+ * `control/index.html` 加载，所以 `./assets/...` 是两种情形下都能解析的唯一形式。
  */
 const relativeControlAssets: Plugin = {
   name: 'dsh-relative-control-assets',
@@ -23,7 +22,7 @@ const relativeControlAssets: Plugin = {
   },
 }
 
-/** Control strip: dependency-free vanilla DOM page (html entry). */
+/** Control strip：无依赖的原生 DOM 页面（html 入口）。 */
 export default defineConfig({
   plugins: [...sharedPlugins, relativeControlAssets],
   build: {

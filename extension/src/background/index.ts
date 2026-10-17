@@ -1,23 +1,22 @@
 /**
- * Browser-execution worker for the dsh desktop app.
+ * dsh 桌面应用的浏览器执行 worker。
  *
- * The desktop GUI remains the conversation surface: this worker keeps one
- * authenticated bridge socket open so the model's `browser_*` tool calls arrive
- * here, dispatches them into a single user-controlled tab, and answers with a
- * text-only result. It also serves the full-page control UI, which adds two
- * powers over the same bridge: an instruction typed there is forwarded to the
- * desktop model (`session.prompt`) and its streamed reply, turn boundaries, and
- * tool progress are relayed back, while a `browser_*` command typed there runs
- * locally through the very same dispatch path and never involves the desktop
- * app. The worker still hosts no conversation of its own: one session, one
- * bounded timeline, no transcript, and nothing persisted.
+ * 对话界面仍然是桌面 GUI：这个 worker 只维持一条常开的、已认证的桥接 socket，
+ * 让模型的 `browser_*` 工具调用落到这里，派发进用户自己控制的标签页，
+ * 再用纯文本把结果答回去。整页的控制 UI 也在这里，
+ * 它在同一条桥接上多给两项能力：在控制页里输入的指令会转给桌面模型
+ * （`session.prompt`），流式回复、轮次边界和工具进度原样回传；
+ * 在控制页里输入的 `browser_*` 命令，则走完全相同的派发路径在本地执行，
+ * 从不经过桌面应用。
+ * worker 自己不保存对话：一个会话、一条有上限的时间线、没有完整记录，
+ * 也不持久化任何东西。
  *
- * Lifecycle: connecting starts as soon as settings load — there is no switch to
- * turn on, because installing the extension is the choice — and a half-minute
- * `alarms` heartbeat re-arms both the reconnect loop and this MV3 worker. The control page is a
- * full tab: every view state is pushed as one `state` message, and every
- * decision can also be made from an OS notification, so a closed page never
- * blocks a pending approval.
+ * 生命周期：设置一加载就开始连接 —— 没有开关要打开，
+ * 装上扩展本身就是那个选择 —— 外加一个半分钟的 `alarms` 心跳，
+ * 它一边重新武装重连循环，一边把这个 MV3 worker 唤醒。控制页是完整的标签页：
+ * 每个视图状态都推一条 `state` 消息，
+ * 每个决定也可以直接从系统通知里做出，
+ * 所以页面关掉了也绝不会卡住待处理的审批。
  *
  * @module
  */
@@ -89,10 +88,10 @@ const LEGACY_RECENT_SESSION_STORAGE_KEY = 'dshRecentSessions'
 const LEGACY_LOCAL_URL = 'ws://127.0.0.1:3080'
 
 /**
- * Local ports a desktop dsh may be serving on:
- * 3080 is the CLI default, and the desktop app pins its loopback Web port in
- * settings (43189 is the documented choice, 19387 the value observed in the
- * wild). A user-specified `bridgeUrl` skips this list entirely.
+ * 桌面 dsh 可能监听的本地端口：3080 是 CLI 的默认值，
+ * 桌面应用则把自己的 loopback Web 端口写在设置里
+ * （43189 是有文档记录的选择，19387 是实际环境里见到的值）。
+ * 用户显式指定了 `bridgeUrl` 时，整份列表都会被跳过。
  */
 const DISCOVERY_PORTS = [3080, 3081, 3090, 14389, 43189, 19387]
 
@@ -100,20 +99,20 @@ let settings: Settings = { ...SETTINGS_DEFAULTS }
 let caps: BridgeCaps | null = null
 
 /**
- * What the desktop app allows, as told by the bridge in `hello.ok`.
+ * 桌面应用允许做什么，由桥接在 `hello.ok` 里告知。
  *
- * Null until a handshake completes, and treated as "not allowed" while null:
- * the capability is only ever enabled by the app saying so. That direction
- * matters — if a dropped field meant "allowed", a broken handshake would hand
- * out a permission the user never granted.
+ * 握手完成之前这里是 null，而 null 一律当成"不允许"：
+ * 只有应用明确声明过，这项能力才启用。
+ * 这个方向不能反 —— 要是字段缺失被当成"允许"，
+ * 一次握手出错就会放出用户从没授予的权限。
  */
 let bridgePolicy: BridgePolicy | null = null
 
-/** Whether the desktop app has allowed opening pages on the user's behalf. */
+/** 桌面应用是否已允许代替用户打开页面。 */
 function pagesMayBeOpened(): boolean {
   return bridgePolicy?.openPagesForUser === true
 }
-/** Tail of the settings write queue; every write chains onto it. */
+/** 设置写入队列的队尾；每次写入都挂到它后面。 */
 let settingsWrites = Promise.resolve()
 let bridge: BridgeClient | null = null
 let bridgeStartRevision = 0
@@ -121,35 +120,35 @@ let bridgeStartRevision = 0
 const IMAGE_CACHE_STORAGE_KEY = 'dshImageCache'
 
 /**
- * How long a remembered description stays worth restoring.
+ * 记住的描述在多长时间内还值得恢复。
  *
- * A description is a property of an image rather than of the view that asked for
- * it, so it deserves to outlive one page — but it is a claim about a URL, and a
- * URL can start serving something else. A day covers "I came back to this tab
- * after lunch" without presenting last week's answer as knowledge about today's
- * bytes at the same address.
+ * 描述属于图像本身，而不属于当初请求它的那个视图，
+ * 所以它本该比一个页面活得久 —— 但它毕竟是针对某个 URL 的判断，
+ * 而那个 URL 随时可能换内容。
+ * 一天够覆盖"午饭后回到这个标签页"这种情况，
+ * 也不会把上周的答案当成对同一地址今天这些字节的认识端出来。
  */
 const IMAGE_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
-/** What actually goes on disk: the snapshot, and when it was taken. */
+/** 真正写进磁盘的东西：一份快照，外加拍下它的时间。 */
 interface StoredImageCache {
   savedAt: number
   cache: CacheSnapshot
 }
 
 /**
- * Persist the cache, because a service worker is not a place to keep state.
+ * 把缓存持久化出去，因为 service worker 不是保存状态的地方。
  *
- * Chrome may stop this worker between two tool calls and a browser restart always
- * ends it. The cache is the only lever that measurably shortens a recognition —
- * the same image asked twice is 1.02s and then 0.01s — and keeping it only in
- * module scope would tie that to the worker's lifetime, which nothing guarantees.
+ * Chrome 可能在两次工具调用之间就把这个 worker 停掉，浏览器一重启更是必然终结它。
+ * 缓存是唯一能切实缩短一次识别的杠杆 —— 同一张图问两次是 1.02s 然后 0.01s ——
+ * 只把它放在模块作用域里，就等于把它绑死在 worker 的寿命上，
+ * 而 worker 能活多久没有任何保证。
  *
- * `storage.local`, not `storage.session`: the session store is cleared when the
- * extension reloads, which during development is every rebuild, so the one lever
- * that worked was thrown away exactly when it was being measured. The timestamp
- * above is what keeps a store that now survives a restart from overstating how
- * much is still known.
+ * 用 `storage.local` 而不是 `storage.session`：session 存储会在扩展重新加载时清空，
+ * 而开发期间每次重建都会重新加载，
+ * 于是唯一管用的那个杠杆偏偏在要量它的时候没了。
+ * 上面那个时间戳，就是为了让这个能挺过重启的存储
+ * 不至于把"还记得多少"说得比实际多。
  */
 function persistImageCache(cache: ImageCache): void {
   const payload: StoredImageCache = { savedAt: Date.now(), cache: cache.snapshot() }
@@ -157,11 +156,10 @@ function persistImageCache(cache: ImageCache): void {
 }
 
 /**
- * Restore descriptions kept on disk, discarding a stale or malformed store.
+ * 把磁盘上的描述恢复回来，过期或结构损坏的存储直接丢掉。
  *
- * Raced by nothing: recognition waits on the bridge handshake, which is slower
- * than one storage read, so a description that was already paid for is in place
- * before the first image can be asked about again.
+ * 没有东西跟它抢时间：识别要等桥接握手，而握手比一次存储读取慢，
+ * 所以已经付过费的描述，在下一张图片可能被问到之前就已经就位了。
  */
 async function restoreImageCache(): Promise<void> {
   try {
@@ -174,27 +172,25 @@ async function restoreImageCache(): Promise<void> {
     }
     imageCache.restore(payload.cache)
   } catch {
-    // A cache that cannot be read is an empty cache, never a failure to start.
+    // 读不出来的缓存就是空缓存，绝不会变成启动失败。
   }
 }
 
 /**
- * Image descriptions for this worker: one cache, two transports.
+ * 这个 worker 的图像描述能力：一个缓存，两种传输方式。
  *
- * Built on first use because it sends through the bridge client, which the
- * assembly creates later. The cache outlives it: a description is a property of
- * an image, not of a connection, so losing the socket must not mean paying for
- * the same image twice.
+ * 首次使用时才构建，因为它发送要靠桥接客户端，而客户端要等组装过程稍后才创建。
+ * 缓存比它活得久：描述属于图像，不属于连接，
+ * 所以丢掉 socket 绝不能变成同一张图付两次费。
  */
 const imageCache = new ImageCache(200, 2, persistImageCache)
 let visionCoordinator: VisionCoordinator | null = null
 
 /**
- * Page text as the last snapshot or delta rendered it.
+ * 页面文本，最近一次快照或 delta 渲染出来是什么样就是什么样。
  *
- * Feeds the cross-modal check's page-wide fallback: a percentage the answer names
- * can be compared against the percentages the page states anywhere, not only
- * against the image's own caption.
+ * 供跨模态校验做页面级回退：答案里给出的百分比，可以和页面任何地方写出的百分比比，
+ * 而不是只能和图片自己的 caption 比。
  */
 let lastPageText = ''
 
@@ -202,20 +198,15 @@ function vision(): VisionCoordinator {
   visionCoordinator ??= new VisionCoordinator({
     cache: imageCache,
     send: (frame) => bridge?.send(frame) ?? false,
-    // The desktop states in `hello.ok` whether it will recognize images on this
-    // extension's behalf. Until it does, queueing work here would only fill the
-    // cache with failures.
+    // 桌面端在 `hello.ok` 里声明它愿不愿意替这个扩展识别图片。它还没声明之前，
+    // 在这里排队只会往缓存里塞满失败。
     canRelay: () => bridgePolicy?.imageRecognition === true,
-    // The desktop relay wins whenever it can answer — it holds the credentials and
-    // needs no manifest change. This is the alternative for when it cannot.
-    // The endpoint and the model travel together: pointing the browser at another
-    // provider while the model id stayed fixed would send a name that provider has
-    // never heard of. Both default to the one endpoint and id that are known to
-    // work, so nobody has to fill either in.
-    // A key is required, though. A direct call without one can only answer 401, and
-    // counting that as configured turns "this path was never set up" into an
-    // authentication failure about a key nobody wrote — the same misleading shape
-    // the relay path already had to be cured of.
+    // 桌面端中继能作答就用它——凭据在它手里，也不用改 manifest。它是中继答不了时的兜底。
+    // 端点和模型必须成套：把浏览器指向另一个提供方、却留着原来的模型 id，
+    // 发出去的就是那个提供方从没听说过的名字。两个默认值都指向已知可用的那一对端点和 id，
+    // 所以谁都不用去填。但 key 必须填。没有 key 的直接调用只能吃 401，而把这种情况
+    // 算成"已配置"，就等于把"这条路径从来没设过"变成一次针对某个没人写过的 key 的
+    // 认证失败——正是中继路径当初不得不治好的一模一样的误导。
     directConfig: () => settings.visionEndpoint === '' || settings.visionApiKey === ''
       ? undefined
       : {
@@ -228,31 +219,30 @@ function vision(): VisionCoordinator {
   return visionCoordinator
 }
 
-/** What the tool dispatcher reports back to the vision pipeline. */
+/** 工具派发器交回给视觉流水线的内容。 */
 function visionSink(): VisionSink {
   return {
     states: (identity) => vision().stateFor(identity),
-    // The caller strips markers first: a filled marker holds a description, and a
-    // description naming a number would otherwise be checked against itself.
+    // 调用方会先把标记剥掉：填好的标记里装着一整段描述，
+    // 不剥的话，一段提到了数字的描述就会拿它自己跟自己比。
     sawPageText: (text) => { lastPageText = text },
   }
 }
-/** Gateway RPC facade for the live bridge generation; created and cleared with `bridge`. */
+/** 当前存活 bridge 世代的 gateway RPC 门面；与 `bridge` 一起创建和清除。 */
 let rpc: RpcFacade | null = null
 const controlPorts = new Set<chrome.runtime.Port>()
 const affinity = new TabAffinityController()
 const focusedWindow = new FocusedWindowTracker()
 const activity: ActivityEntry[] = []
-/** The one session view the control page renders; kept here, never in a page. */
+/** 控制页面渲染的那唯一的会话视图；保存在这里，绝不存在页面里。 */
 const control = new ControlSession({ changed: () => { broadcastState() } })
 
 /**
- * One in-flight `browser_*` call.
+ * 一次还在进行中的 `browser_*` 调用。
  *
- * `unrestricted` captures the access mode at the moment the frame arrived, so
- * turning the global switch on can never retroactively elevate a call that was
- * already running under approval rules — and turning it off can find every call
- * that still depends on the grant.
+ * `unrestricted` 在帧到达的那一刻就把访问模式定下来，所以后来打开全局开关，
+ * 绝不可能追溯地把一次已经在审批规则下跑着的调用提升权限；反过来关掉它，
+ * 正好能圈出每一个还依赖这份授权的调用。
  */
 interface ActiveToolCall {
   controller: AbortController
@@ -260,42 +250,41 @@ interface ActiveToolCall {
   settled: Promise<void>
   settle: () => void
 }
-/** Ephemeral allowlist: cleared when this worker restarts or the user empties it. */
+/** 临时白名单：worker 一重启、或用户清空它，就没了。 */
 const sessionTrustedActionOrigins = new Set<string>()
-/** Live tool calls, so a cancel, a revoke, or a disconnect can withdraw them. */
+/** 还活着的工具调用，好让取消、撤销或断开连接时能把它们收回来。 */
 const activeToolCalls = new Map<string, ActiveToolCall>()
 let affinityReady = Promise.resolve()
 let settingsReady = Promise.resolve()
 
-// ---- Settings ----
+// ---- 设置 ----
 
 async function loadSettings(): Promise<void> {
   let stored: Record<string, unknown> = {}
   try {
     stored = await chrome.storage.local.get(SETTINGS_STORAGE_KEY)
   } catch {
-    // A storage-less context still works with defaults for this worker's life.
+    // 上下文里没有存储可用，那就靠默认值过完这个 worker 的一生。
   }
   const loaded = normalizeSettings(stored[SETTINGS_STORAGE_KEY] as Partial<Settings> | undefined)
-  // The old build stored an explicit localhost URL that the discovery path now
-  // covers; keeping it would pin the extension to one port forever.
+  // 旧版本会存一个写死的 localhost URL，现在发现逻辑已经覆盖了这种情况；
+  // 留着它只会把扩展永远钉在那一个端口上。
   if (loaded.bridgeUrl === LEGACY_LOCAL_URL || loaded.bridgeUrl === `${LEGACY_LOCAL_URL}/`) {
     loaded.bridgeUrl = ''
   }
   settings = loaded
-  // Rewrite the migrated value through the shared queue so a legacy localhost
-  // address cannot be re-saved behind a newer patch.
+  // 迁移后的值也走同一条共享队列写回去，
+  // 免得某个旧版 localhost 地址在后续一次 patch 之后又被存回来。
   void persistSettings({}, true).catch(() => {})
 }
 
 /**
- * Persist one settings patch.
+ * 把一个设置 patch 持久化下去。
  *
- * The in-memory snapshot moves immediately so the very next tool call and the
- * next `state` push already respect the user's choice; only the storage write
- * is queued. Two rapid toggles used to race there, and the earlier
- * `storage.local.set` could land after the later one, silently dropping a field
- * and leaving memory and storage disagreeing about a safety setting.
+ * 内存里的快照立即更新，所以紧接着的下一次工具调用、下一次 `state` 推送就已经照着用户
+ * 的选择走；排队等待的只有写存储那一步。以前两次快速切换会在这里抢，
+ * 较早的那次 `storage.local.set` 可能落在较晚那次后面，悄没声地丢掉一个字段，
+ * 于是内存和存储对同一条安全设置各说各话。
  */
 async function persistSettings(next: Partial<Settings>, alreadyNormalized = false): Promise<void> {
   const normalized = alreadyNormalized ? settings : normalizeSettings({ ...settings, ...next })
@@ -308,38 +297,37 @@ async function persistSettings(next: Partial<Settings>, alreadyNormalized = fals
   await write
 }
 
-// ---- Control strip ----
+// ---- 控制条 ----
 
 function postToControl(message: ControlMessage): void {
   for (const port of controlPorts) {
     try {
       port.postMessage(message)
     } catch {
-      // The view closed between the check and the send.
+      // 检查之后、发送之前，视图被关掉了。
     }
   }
 }
 
-/** Answer one request on the port that made it; a closed view is not an error. */
+/** 在发起请求的那个 port 上作答；视图已经关了也不算错。 */
 function replyToPort(port: chrome.runtime.Port, message: ControlMessage): void {
   try {
     port.postMessage(message)
   } catch {
-    // The view closed before it could read the result.
+    // 结果还没送到，视图就被关掉了。
   }
 }
 
-/** The human half of an unknown thrown value. */
+/** 从任意抛出值里取出给人看的那部分。 */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
 /**
- * Record one browser operation.
+ * 记下一次浏览器操作。
  *
- * The activity list is the short "what just happened" queue; the same record is
- * mirrored onto its timeline step, so a run reads identically in both places and
- * the page can join a step to its origin by id.
+ * 活动列表就是那条简短的"刚刚发生了什么"；同一条记录还会镜像到它对应的时间线步骤上，
+ * 所以一次运行在两处读起来一模一样，而页面可以按 id 把某个步骤和它的 origin 对上。
  */
 function recordActivity(entry: Omit<ActivityEntry, 'at'>): void {
   const at = Date.now()
@@ -365,11 +353,13 @@ function controlState(): ControlState {
     session: control.session(),
     timeline: control.timeline(),
     policy: bridgePolicy === null ? null : { openPagesForUser: bridgePolicy.openPagesForUser },
-    // Read from the client, not inferred from `bridge === 'stopped'`: a
-    // replacement and an ordinary stop end in the same state, but only one of
-    // them has a way back that the user can act on.
+    // 问客户端要，而不是从 `bridge === 'stopped'` 猜：被顶替和正常停止收场在同一个状态，
+    // 但只有其中一种，用户还有路可走。
     replaced: bridge?.wasReplaced === true,
-  followError: followErrorRef,
+    // 被 bridge 拒绝（令牌/扩展 id 不匹配）是用户自己修得好的那一类失败，所以要把原因
+    // 送到面板上，而不是让它和"桌面端没开"长成同一个样子。
+    bridgeRejection: bridge?.lastRejection ?? null,
+    followError: followErrorRef,
   }
 }
 
@@ -380,13 +370,13 @@ function syncBadge(): void {
     .catch(() => {})
 }
 
-/** The Chrome side panel API, absent on Firefox. */
+/** Chrome 侧边面板 API，Firefox 上没有。 */
 interface ChromeSidePanel {
   open(options: { windowId?: number; tabId?: number }): Promise<void>
   setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>
 }
 
-/** The Firefox sidebar API, absent on Chrome. */
+/** Firefox 侧边栏 API，Chrome 上没有。 */
 interface FirefoxSidebarAction {
   open(): Promise<void> | void
 }
@@ -400,20 +390,20 @@ function firefoxSidebar(): FirefoxSidebarAction | undefined {
 }
 
 /**
- * Bring the panel in front of the user.
+ * 把面板送到用户眼前。
  *
- * Chrome shows the side panel; Firefox shows its sidebar. Both are driven from
- * here rather than by `action.onClicked`, because the same function also serves
- * a notification click and, on Firefox, the browser's own sidebar button.
+ * Chrome 打开侧边面板，Firefox 打开它自己的侧边栏。两条路都从这里走，而不是从
+ * `action.onClicked` 走，因为这个函数还要接通知点击，以及 Firefox 上浏览器自带的
+ * 侧边栏按钮。
  *
- * Every call runs inside a user gesture (a click listener, a notification
- * click, or a keyboard command), which is what both APIs require.
+ * 每次调用都发生在用户手势里（click listener、通知点击、键盘命令各算一次），
+ * 这是两个 API 都要求的。
  */
 function openControlPanel(windowId?: number): void {
   const panel = chromeSidePanel()
   if (panel !== undefined) {
     void panel.open(windowId === undefined ? {} : { windowId }).catch(() => {
-      // A window that closed mid-call, or a panel that is already open.
+      // 调用到一半窗口关了，或者面板本来就开着。
     })
     return
   }
@@ -424,15 +414,13 @@ function openControlPanel(windowId?: number): void {
 }
 
 /**
- * Claim the bridge slot again after another browser took it.
+ * 槽位被别的浏览器抢走之后，把 bridge 槽位抢回来。
  *
- * Close code 4000 means the bridge handed its one connection to a different
- * browser profile, and the retry loop deliberately goes quiet so two open
- * profiles cannot evict each other in a loop. The consequence is that this
- * profile stays disconnected until something claims the slot back, and with the
- * connection settings no longer in the panel there is no longer any way for a
- * user to do that by hand — so it is done when they deliberately open the panel.
- * That gesture is also the signal that they mean to use this browser.
+ * Close code 4000 表示 bridge 把它唯一的那条连接交给了另一个浏览器 profile，
+ * 而重试循环是刻意安静的，免得两个开着的 profile 在循环里互相踢。
+ * 代价是这个 profile 会一直断着，直到有东西把槽位抢回来；而连接设置从面板里搬走之后，
+ * 用户已经没有手动抢的途径了——所以就在他们主动打开面板的那一刻做这件事。
+ * 这个手势同时也说明"他们打算用这个浏览器"。
  */
 function reclaimBridgeIfReplaced(): void {
   if (bridge?.wasReplaced !== true) return
@@ -441,14 +429,12 @@ function reclaimBridgeIfReplaced(): void {
 }
 
 /**
- * Register the browser-specific chrome.
+ * 注册随浏览器而变的那部分 chrome。
  *
- * Chrome opens its side panel from the toolbar icon through
- * `setPanelBehavior`, which keeps the click inside the browser's own
- * implementation. An explicit `onClicked` opener is registered too: Firefox
- * ignores it because a declared `sidebar_action` is opened by the browser's own
- * sidebar button, and on Chrome the setting above wins, so this listener only
- * ever runs on a target that has neither.
+ * Chrome 用 `setPanelBehavior` 让工具栏图标直接开侧边面板，点击就留在浏览器自己的实现里。
+ * 另外还注册了一个显式的 `onClicked` 打开器：Firefox 会忽略它，因为声明的
+ * `sidebar_action` 由浏览器自带的侧边栏按钮打开；Chrome 上则是上面那个设置说了算，
+ * 所以这个 listener 只会在两者都没有的目标上跑到。
  */
 function registerPanelEntryPoints(): void {
   const panel = chromeSidePanel()
@@ -461,18 +447,14 @@ function registerPanelEntryPoints(): void {
 registerPanelEntryPoints()
 
 /**
- * Tell a first-time user where the extension went.
+ * 告诉第一次用的人，扩展跑哪儿去了。
  *
- * A newly installed extension is not pinned to the toolbar, and there is no API
- * to pin it — Chrome removed that, and the Web Store is the only path that pins
- * by default. So a user who installs from a file sees nothing appear and has no
- * way to guess that the toolbar's puzzle-piece menu holds it. Every other entry
- * point assumes they got past that.
+ * 新装的扩展不会自己钉到工具栏上，也没有 API 能钉——Chrome 把那个 API 砍了，
+ * 只有从 Web Store 装的才默认钉住。于是从文件安装的用户眼前什么都没多出来，
+ * 也猜不到工具栏的拼图菜单里放着它。其他每个入口都默认他们已经过了这一关。
  *
- * A notification is used rather than opening the panel directly because
- * opening a side panel requires a user gesture, which does not exist during
- * install. The notification creates one: clicking it counts, and so does its
- * button, both of which then open the panel through the existing path.
+ * 这里发通知而不是直接开面板，是因为打开侧边面板要用户手势，而安装过程中根本不存在手势。
+ * 通知正好造一个出来：点通知本身算，点它的按钮也算，两种随后都走既有的路径去开面板。
  */
 const ONBOARDING_NOTIFICATION_ID = 'dsh-onboarding'
 const ONBOARDING_SEEN_KEY = 'dshOnboardingSeen'
@@ -490,13 +472,13 @@ function notifyFirstRun(): void {
     buttons: [{ title: zh ? '打开侧边栏' : 'Open the side panel' }],
     requireInteraction: true,
   })).catch(() => {
-    // Notifications unavailable or silenced. Opening here is best-effort and may
-    // be refused for want of a gesture; it costs nothing to try.
+    // 通知不可用或者被静音了。这里顺手开一下，纯属尽力而为，也可能因为没有手势被拒；
+    // 试一下不亏。
     openControlPanel()
   })
 }
 
-/** Show the first-run hint once, and never on an update. */
+/** 首次运行提示只显示一次，更新时绝不显示。 */
 async function announceFirstRun(reason: string): Promise<void> {
   if (reason !== 'install') return
   try {
@@ -504,8 +486,7 @@ async function announceFirstRun(reason: string): Promise<void> {
     if (seen[ONBOARDING_SEEN_KEY] === true) return
     await chrome.storage.local.set({ [ONBOARDING_SEEN_KEY]: true })
   } catch {
-    // Storage unavailable: still show it. A second hint is a smaller problem
-    // than a user who never finds the extension.
+    // 存储不可用：照样显示。多一条提示，总好过一个永远找不到扩展的用户。
   }
   notifyFirstRun()
 }
@@ -514,30 +495,28 @@ chrome.runtime.onInstalled.addListener((details) => {
   void announceFirstRun(details.reason)
 })
 
-/** Wall-clock time of the last automatic panel open, for the cooldown below. */
+/** 上一次自动打开面板的墙上时钟时间，下面算冷却期要用。 */
 let lastAutoOpenAt = 0
 
 /**
- * How long an automatic open is suppressed after one.
+ * 自动打开一次之后，要压多久不再打开。
  *
- * A model that runs ten browser calls in a row must not fight the user ten
- * times: one panel, one open, and then it stays where they put it.
+ * 模型连着跑十次浏览器调用，绝不能因此跟用户较十次劲：面板打开一次，
+ * 之后就留在用户放它的地方。
  */
 const AUTO_OPEN_COOLDOWN_MS = 60_000
 
 /**
- * Bring the panel forward because the model is about to touch the browser.
+ * 模型马上要动浏览器，先把面板带到前台。
  *
- * Gated on {@link Settings.autoOpenPanel}, rate-limited, and deliberately not
- * awaited: opening a panel is a convenience, and a browser that refuses (no
- * focused window, a panel already open, a policy block) must never fail the tool
- * call that triggered it. Unlike the approval path this runs without a user
- * gesture, so every failure is swallowed rather than surfaced.
+ * 受 {@link Settings.autoOpenPanel} 约束、有速率限制，而且刻意不 await：
+ * 打开面板只是个便利，浏览器要是拒绝（没有聚焦窗口、面板已经开着、策略拦截），
+ * 绝不能让它触发的那次工具调用跟着失败。和审批路径不同，这里没有用户手势就跑，
+ * 所以失败一律吞掉，不往外抛。
  */
 function autoOpenPanel(): void {
-  // Gated on the app's policy as well as the user's own switch: raising the
-  // panel is part of "the model is about to show you something", so it must not
-  // survive the desktop app turning that off.
+  // 用户自己的开关和应用策略都要看：把面板抬起来属于"模型马上要给你看点东西"这件事的
+  // 一部分，所以桌面应用关掉那项功能之后，它就不能再生效。
   if (!settings.autoOpenPanel || !pagesMayBeOpened()) return
   const now = Date.now()
   if (now - lastAutoOpenAt < AUTO_OPEN_COOLDOWN_MS) return
@@ -547,7 +526,7 @@ function autoOpenPanel(): void {
     .catch(() => { openControlPanel() })
 }
 
-// ---- Bridge discovery and connection ----
+// ---- bridge 的发现与连接 ----
 
 async function discoverBridge(shouldContinue: () => boolean = () => true): Promise<string | undefined> {
   for (const port of DISCOVERY_PORTS) {
@@ -565,13 +544,13 @@ async function discoverBridge(shouldContinue: () => boolean = () => true): Promi
         return body.wsUrl
       }
     } catch {
-      // Nothing serving the bridge on this port: try the next one.
+      // 这个端口上没有东西在跑 bridge：试下一个。
     }
   }
   return undefined
 }
 
-/** Avoid opening a noisy loopback WebSocket until the local bridge responds. */
+/** 本地 bridge 有响应之前，先别去开一个只会报错的 loopback WebSocket。 */
 async function probeBridge(url: string): Promise<boolean> {
   try {
     const target = new URL(url)
@@ -594,35 +573,31 @@ function armBridgeKeepalive(): void {
 }
 
 /**
- * Retry discovery a few times, close together, before handing back to the alarm.
+ * 交还给 alarm 之前，先把发现过程密集重试几次。
  *
- * Boot races the desktop app's own startup: dsh may still be binding its port
- * when the worker first looks, and a 30-second gap there is a visible stall.
- * Three attempts inside a few seconds covers a normal launch; after that the
- * keepalive's slower cadence takes over, so a genuinely absent app is not polled
- * in a loop.
+ * 启动要和桌面应用自己的启动赛跑：worker 第一次去看的时候，dsh 可能还在绑定端口，
+ * 干等 30 秒是一段看得见的卡顿。几秒内试三次足以覆盖正常启动；
+ * 之后交给 keepalive 更慢的节奏，所以一个真不存在的应用不会被反复轮询。
  */
 const DISCOVERY_RETRY_MS = [1_000, 3_000, 8_000]
 let discoveryRetries = 0
 let discoveryTimer: ReturnType<typeof setTimeout> | undefined
 
 /**
- * Cancel any queued discovery retry.
+ * 取消所有已排队的发现重试。
  *
- * Exposed because a pending timer outlives the code that created it: the retry
- * holds the module graph alive, so anything that tears the worker down — a test
- * unmounting, an extension unload — has to be able to drop it. Without this the
- * timer fires into a stale module and dials a socket nobody asked for.
+ * 之所以要暴露出来，是因为挂起的定时器比创建它的代码活得久：这次重试会让模块图一直活着，
+ * 所以任何拆掉 worker 的东西——测试 unmount、扩展卸载——都得能把它丢掉。
+ * 少了这一步，定时器会对着一个陈旧的模块触发，还拨出一个没人要的 socket。
  */
 export function cancelPendingWork(): void {
   clearDiscoveryRetry()
   discoveryRetries = 0
-  // Clearing the timer does not stop the dialing. Two other paths open sockets after
-  // the teardown that was supposed to end them: a client that is reconnecting dials
-  // again on its next backoff, and a startBridge already in flight creates a fresh
-  // client once its await resolves. The revision bump is what abandons that start;
-  // stopping the client is what ends the reconnect loop. A test then sees only the
-  // socket it asked for, and an unload stops genuinely meaning no more sockets.
+  // 清掉定时器拦不住拨号。还有两条路会在本该终结它们的拆卸之后打开 socket：
+  // 一个正在重连的客户端会在下一次退避时再拨一次，而一次已经在进行中的 startBridge
+  // 会在 await 结算之后建出一个新客户端。自增 revision 用来放弃那次 start，
+  // 停掉客户端用来结束重连循环。这样测试只会看到它自己要的那个 socket，
+  // 卸载也才真正等于不再有 socket。
   bridgeStartRevision += 1
   bridge?.stop()
   bridge = null
@@ -639,80 +614,75 @@ function scheduleDiscoveryRetry(): void {
   }, delay)
 }
 
-/** Drop a queued boot retry: a target was found, or a newer start superseded it. */
+/** 丢掉已排队的启动重试：目标已经找到，或者有更新的 start 顶替了它。 */
 function clearDiscoveryRetry(): void {
   if (discoveryTimer === undefined) return
   clearTimeout(discoveryTimer)
   discoveryTimer = undefined
 }
 
-/** (Re)start the bridge with the current settings; empty address means auto-discover. */
+/** 按当前设置（重新）启动 bridge；地址为空就去自动发现。 */
 async function startBridge(): Promise<void> {
   const revision = ++bridgeStartRevision
   let url = settings.bridgeUrl
   if (url === '') {
     url = await discoverBridge(() => revision === bridgeStartRevision) ?? ''
   }
-  // Discovery is asynchronous: settings may have changed while it was in flight.
+  // 发现是异步的：它跑着的时候，设置可能已经变了。
   if (revision !== bridgeStartRevision) { return }
   if (url === '') {
     bridge?.stop()
     bridge = null
     rpc = null
     broadcastState()
-    // Nothing is serving the bridge right now. Waiting for the keepalive would
-    // leave the panel dead for up to 30s after the desktop app starts, which is
-    // exactly the window a user hits when they launch dsh and then look at the
-    // panel. Back off instead, and let a later alarm take over if these miss.
+    // 此刻没有东西在跑 bridge。干等 keepalive，面板在桌面应用起来之后最多要死 30 秒，
+    // 而用户启动 dsh 再去开面板，撞上的正是这个窗口。所以改成退避；
+    // 退避全错过了，就交给后面某次 alarm 接手。
     scheduleDiscoveryRetry()
     return
   }
-  // A target was found, so the burst of boot retries has done its job. Clearing
-  // here also stops a queued retry from dialling a second socket after this one.
+  // 目标找到了，启动时那一串重试也就完成使命了。在这里清掉，顺带挡住某个已排队的重试
+  // 在这次之后又拨出第二个 socket。
   discoveryRetries = 0
   clearDiscoveryRetry()
-  // A manually entered address usually carries only the host; the bridge path is
-  // a protocol constant, so fill it in rather than failing on the root path.
+  // 手动输入的地址通常只有主机名；bridge 路径是协议常量，所以这里补上，
+  // 而不是让它在根路径上失败。
   try {
     const parsed = new URL(url)
     if (parsed.pathname === '' || parsed.pathname === '/') parsed.pathname = BRIDGE_PATH
     url = parsed.toString()
   } catch {
-    // An invalid URL is handed to the WebSocket constructor to report.
+    // URL 无效的话，交给 WebSocket 构造函数去报错。
   }
   if (bridge === null) {
     bridge = new BridgeClient({
       onStateChange: (state) => {
-        // Deliberately not traced: this fires on every transition, and a
-        // reconnecting client cycles through them repeatedly. Each trace costs a
-        // read-modify-write of the whole log — real I/O on a hot path, for a fact
-        // the panel already displays. The trace keeps the connection *decisions*
-        // (discovery, probe, dial), which are the ones a diagnosis needs.
+        // 刻意不打 trace：每次状态转换都会走到这里，而一个正在重连的客户端会反复绕这些状态。
+        // 每打一次 trace 就要把整个日志读-改-写一遍——热路径上实打实的 I/O，
+        // 换来的却是面板早就显示过的事实。trace 留给连接的*决策*（发现、探测、拨号），
+        // 诊断要的正是那些。
         if (state !== 'connected') {
           cancelAllToolCalls()
-          // A gateway call cannot outlive the socket that carried it: settle
-          // every pending RPC now instead of leaving the page waiting 30s.
+          // gateway 调用活不过承载它的 socket：挂起的 RPC 现在就结算掉，
+          // 别让页面干等 30s。
           rpc?.fail(state === 'stopped'
             ? 'The dsh bridge was stopped before the gateway answered.'
             : 'The dsh bridge connection dropped before the gateway answered.')
-          // "Trust this site for this session" means this connection's session,
-          // not this popup's lifetime: the strip closes whenever the user looks
-          // away, so the grant has to outlive a port. It still dies with the
-          // socket, and the control strip can always take it back.
+          // "本次会话内信任这个站点"说的是这个连接的会话，不是这个弹窗能活多久：
+          // 用户一移开视线控制条就关了，所以这份授权必须比 port 活得久。
+          // 它照样跟着 socket 一起消亡，而控制条随时可以收回。
           if (state === 'stopped') sessionTrustedActionOrigins.clear()
-          // A "restart dsh" notice described the connection that produced it; this
-          // one has ended, so the claim is no longer known to hold.
+          // "重启 dsh"这类提示说的是产出它的那条连接；连接都结束了，
+          // 那个说法就不再已知为真。
           followConnectionChanged()
-          // A relay round trip in flight cannot be answered by a socket that is gone.
-          // Settle it with the reason instead of letting it wait out its timeout.
+          // 已经在路上的中继往返，没法由一条没了的 socket 来答。直接给个原因结算掉，
+          // 别让它耗到超时。
           visionCoordinator?.relayLost('bridge-closed')
-          // An approval the user can no longer answer must not stay open. Losing the
-          // connection closes the control strip, so the decision has nowhere to come
-          // from; dropping it is honest, and a reconnect re-asks.
+          // 用户再也答不了的审批，不能一直挂着。连接一断控制条就关了，决定也就没处可来；
+          // 直接丢掉最诚实，重连时会重新问一次。
           approvals.cancelAll()
-          // Nothing can be mirrored over a socket that is gone, and the timer would
-          // only fail every ten seconds. The mode itself is remembered, so a
-          // reconnection resumes it below in `onHelloOk`.
+          // socket 都没了，什么都镜像不了，那个定时器只会每十秒失败一次。
+          // 模式本身记着，重连时会在下面的 `onHelloOk` 里恢复。
           stopWorkspaceRefresh()
         }
         broadcastState()
@@ -721,21 +691,19 @@ async function startBridge(): Promise<void> {
       onHelloOk: (negotiated, negotiatedPolicy) => {
         caps = negotiated
         bridgePolicy = negotiatedPolicy
-        // Resume 「工作区内」 after a reconnect or a worker restart. The mode is in
-        // settings, so without this a reconnect would leave the panel showing the
-        // setting while mirroring nothing — the same "silently empty" state the mode
-        // exists to remove. Also the first chance to read the workspace path, which is
-        // what `workspaceSessions` needs to find the right group.
+        // 重连或 worker 重启之后，把「工作区内」恢复起来。模式存在设置里，少了这一步，
+        // 重连后面板显示着那个设置、却什么都没镜像——而这个模式存在的意义，
+        // 恰恰是消掉这种"悄悄空着"的状态。这里也是读取工作区路径的第一个机会，
+        // `workspaceSessions` 要靠它找到正确的分组。
         if (settings.sessionScope === 'workspace') {
-          // The whole group once, so the transcript a user was reading is back after a
-          // reconnect; the refresh below narrows it to what is actually live.
+          // 先把整个分组取回来，用户正在读的 transcript 才会在重连后回来；
+          // 下面的刷新再收窄到真正活跃的内容。
           void startWorkspaceMirror({ onlyActive: false }).then(() => { startWorkspaceRefresh() }, () => {})
         }
         broadcastState()
       },
-      // The user's Auto connect switch is the reconnect policy, not just the
-      // first-connect policy: without this, a dropped socket would be dialled
-      // again immediately after the strip reported the bridge as stopped.
+      // 用户的 Auto connect 开关管的是重连策略，不只是首次连接：没有它，
+      // socket 一掉，控制条刚报完 bridge 已停止，马上又会被拨一次。
     }, probeBridge, () => true, rediscoverBridgeUrl)
     rpc = createRpc(bridge)
   }
@@ -743,11 +711,10 @@ async function startBridge(): Promise<void> {
 }
 
 /**
- * Re-resolve an auto-discovered bridge address after it stops answering.
+ * 自动发现的 bridge 地址不再回应之后，重新解析一次。
  *
- * Only used when no address was set by hand: a typed address is a decision, and
- * silently dialling a different port would contradict it. Returning undefined
- * leaves the retry loop exactly as it was.
+ * 只在没有手动填地址时用：手输的地址是一个决定，悄悄拨去另一个端口就是跟它对着干。
+ * 返回 undefined 让重试循环保持原样。
  */
 async function rediscoverBridgeUrl(): Promise<string | undefined> {
   if (settings.bridgeUrl !== '') return undefined
@@ -763,34 +730,31 @@ async function rediscoverBridgeUrl(): Promise<string | undefined> {
 }
 
 function routeFrame(frame: ServerFrame): void {
-  // Recognition results are correlated by request id and belong to the vision
-  // pipeline; anything it does not claim falls through to the tool paths.
+  // 识别结果按请求 id 关联，归视觉流水线管；它没认领的都落到工具路径上。
   if (vision().handleFrame(frame)) return
   if (frame.t === 'tool.call') routeToolCall(frame)
   else if (frame.t === 'tool.cancel') cancelToolCall(frame.id)
   else if (frame.t === 'event') routeBridgeEvent(frame.frame)
 }
 
-/** One bridge-owned push event, already projected by the dsh Host adapter. */
+/** bridge 推来的一条事件，已经过 dsh Host 适配器投影。 */
 type BridgeEventFrame = Extract<ServerFrame, { t: 'event' }>['frame']
 
 /**
- * Forward one bridge event frame to the control page.
+ * 把 bridge 事件帧转发给控制页面。
  *
- * Only the session this worker drives is relayed: a second dsh window may share
- * the bridge, and its conversation must not paint into this page. Nothing is
- * cached or replayed — the page renders the live stream, and a page that opens
- * mid-turn repaints from the worker's timeline instead of from a replayed log.
+ * 只转发这个 worker 驱动的会话：第二个 dsh 窗口可能共用这条 bridge，
+ * 它的对话不该画进这个页面。这里不缓存也不重放——页面渲染的是实时流，
+ * 而一个在轮次中途打开的页面，是从 worker 的时间线重绘出来的，不是从一份重放的日志。
  */
 function routeBridgeEvent(frame: BridgeEventFrame): void {
-  // Every conversation the panel is currently showing. One in the ordinary modes, the
-  // whole mirrored set under 「工作区内」 — which is why this is a set and not an id: a
-  // frame from any of them belongs on screen.
+  // 面板此刻正在显示的每个对话。普通模式下就一个，「工作区内」下是整个被镜像的集合——
+  // 所以这里用集合而不是单个 id：其中任何一个来的帧都属于屏幕。
   const active = control.activeSessionIds()
   if (frame.method === 'session/assistant-stream') {
     const event = assistantStreamEvent(frame.payload, active)
     if (event === null) return
-    // Rows created while applying this event belong to the conversation it names.
+    // 应用这条事件时创建的行，归它点名的那一个对话。
     control.attributeTo(event.sessionId)
     control.applyStream(event)
     postToControl({ type: 'session.stream', event, sessionLabel: control.labelFor(event.sessionId) ?? null })
@@ -819,7 +783,7 @@ function broadcastState(): void {
   syncBadge()
 }
 
-// ---- Controlled tab ----
+// ---- 受控 tab ----
 
 function summarizeTab(tab: chrome.tabs.Tab): AffinityTab | null {
   if (tab.id === undefined) return null
@@ -902,7 +866,7 @@ async function restoreTabAffinity(): Promise<void> {
     }
     lastPersistedAffinity = record === null ? undefined : JSON.stringify(record)
   } catch {
-    // Session storage is a survival aid, not a reason to disable the bridge.
+    // session 存储只是个辅助，不是禁用 bridge 的理由。
   }
 
   if (record !== null && 'controlledTabId' in record) {
@@ -918,11 +882,10 @@ async function restoreTabAffinity(): Promise<void> {
     affinity.restoreLost()
   }
 
-  // Restore the pin before syncing the active tab: otherwise the sync would
-  // surface a handoff prompt for a switch the user already said not to ask about.
+  // 先恢复 pin，再去同步活动 tab：否则这次同步会弹出交接提示，
+  // 去问一个用户早说过别再问的切换。
   if (record !== null && 'pinned' in record && record.pinned === true) affinity.restorePinned()
-  // The switch preference is a setting, so it wins over the remembered pin: the
-  // mode is what the user asked for, the pin is only what they once answered.
+  // 切换偏好是设置，所以它压过往记的 pin：模式才是用户要的，pin 只是他们当时给过的答案。
   affinity.setSwitchMode(settings.tabSwitch)
   await syncActiveTab()
   if (record !== null && 'keptActiveTabId' in record) {
@@ -951,7 +914,7 @@ function affinityFailure(kind: 'handoff' | 'lost' | 'missing'): ToolAnswer {
   return { ok: false, error: { code: 'no-active-tab', message: 'No active tab is available for browser operations.' } }
 }
 
-/** Resolve one stable tab target without allowing a manual switch to drift it. */
+/** 解析出一个稳定的 tab 目标，同时不让一次手动切换把它带偏。 */
 async function resolveToolTab(): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 'title' | 'windowId'> | ToolAnswer> {
   await affinityReady
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -959,7 +922,7 @@ async function resolveToolTab(): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 't
     if (resolution.kind === 'handoff') return affinityFailure('handoff')
     if (resolution.kind === 'lost') return affinityFailure('lost')
     if (resolution.kind === 'initial') {
-      // First browser call before any user choice: bind the tab the user is on.
+      // 用户还没做过任何选择时的第一次浏览器调用：绑到用户当前所在的 tab。
       const active = await syncActiveTab()
       const summary = active === undefined ? null : summarizeTab(active)
       if (summary === null) return affinityFailure('missing')
@@ -989,7 +952,7 @@ async function resolveToolTab(): Promise<Pick<chrome.tabs.Tab, 'id' | 'url' | 't
   return affinityFailure('handoff')
 }
 
-/** Pick a window for browser_open_tab without requiring an already-controlled page. */
+/** 给 browser_open_tab 挑一个窗口，不要求已经有受控页面。 */
 async function resolveOpenTabWindow(): Promise<{ windowId: number } | ToolAnswer> {
   await affinityReady
   const resolution = affinity.resolveTarget()
@@ -999,14 +962,14 @@ async function resolveOpenTabWindow(): Promise<{ windowId: number } | ToolAnswer
       const tab = await chrome.tabs.get(resolution.tab.tabId)
       return { windowId: tab.windowId }
     } catch {
-      // Fall through to the focused window when the controlled tab is gone.
+      // 受控 tab 已经没了，就退到聚焦窗口上。
     }
   }
   try {
     const focused = await chrome.windows.getLastFocused()
     if (focused.id !== undefined) return { windowId: focused.id }
   } catch {
-    // No focused window: fall back to the last-focused window's active tab.
+    // 没有聚焦窗口：退到最后聚焦窗口的活动 tab。
   }
   const [fallback] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
   if (fallback?.windowId !== undefined) return { windowId: fallback.windowId }
@@ -1022,7 +985,7 @@ function bindOpenedTab(tab: chrome.tabs.Tab, active: boolean): boolean {
   return true
 }
 
-/** Commit one explicit tab handoff and clear stale element references. */
+/** 落实一次明确的 tab 交接，顺带清掉陈旧的元素引用。 */
 function commitTabAffinityRebind(summary: AffinityTab, mode: 'active' | 'controlled'): void {
   const previous = affinity.snapshot().controlled?.tabId
   if (mode === 'active') affinity.rebindActive(summary)
@@ -1034,11 +997,10 @@ function commitTabAffinityRebind(summary: AffinityTab, mode: 'active' | 'control
 }
 
 /**
- * Move browser control to the tab the user is looking at.
+ * 把浏览器控制权挪到用户正在看的那个 tab 上。
  *
- * The deadline owns the outcome: once the caller's signal aborts, a query that
- * resolves late must not move the binding. Moving it would make a request the
- * user already saw fail change the controlled tab behind their back.
+ * 截止时间说了算：调用方的 signal 一中止，迟到才解析出来的查询就绝不能动绑定。
+ * 动了它，等于让一次用户已经看到失败的请求，在他们背后换掉受控 tab。
  */
 async function rebindToActiveTab(signal: AbortSignal): Promise<void> {
   await affinityReady
@@ -1058,7 +1020,7 @@ function rebindCancelled(): Error {
   return new Error(getUiLocale() === 'zh' ? '标签页绑定已超时' : 'Tab binding timed out')
 }
 
-// ---- Approval ----
+// ---- 审批 ----
 
 const APPROVAL_NOTIFICATION_PREFIX = 'dsh-approval:'
 
@@ -1073,19 +1035,18 @@ function deliverApproval(request: ApprovalRequest): boolean {
       port.postMessage({ type: 'approval.request', request } satisfies ControlMessage)
       delivered = true
     } catch {
-      // The view closed between the check and the send.
+      // 检查之后、发送之前，视图被关掉了。
     }
   }
   return delivered
 }
 
 /**
- * Offer one pending decision to the user's desktop.
+ * 把一个待处理的决定送到用户的桌面端。
  *
- * A closed popup means the request would otherwise be invisible, so the
- * notification is deliberately NOT gated on the "system notifications" setting:
- * that setting chooses between a notification and silent in-strip delivery, and
- * silencing both would leave a fail-closed tool call with no way to proceed.
+ * 弹窗关着就意味着这个请求本来会不可见，所以这条通知刻意*不*受"系统通知"设置的约束：
+ * 那个设置是在"发通知"和"控制条内静默投递"之间做选择，而把两者都静音会让一次 fail-closed
+ * 的工具调用无路可走。
  */
 function notifyApproval(request: ApprovalRequest): void {
   if (controlPorts.size > 0) return
@@ -1100,8 +1061,8 @@ function notifyApproval(request: ApprovalRequest): void {
       : `${request.summary} — click to open the side panel and allow or deny within ${minutes} minutes.`,
     requireInteraction: true,
   })).catch(() => {
-    // No notification permission or a silenced channel: the toolbar badge still
-    // marks the pending request, so open the panel directly instead.
+    // 没有通知权限、或通道被静音：工具栏徽标仍然标记着这个待处理请求，所以改成直接打开
+    // 面板。
     openControlPanel()
   })
 }
@@ -1120,7 +1081,7 @@ const approvals = new ApprovalCoordinator({
   },
 })
 
-/** Authorize one tool call, recording the outcome in the activity list. */
+/** 授权一次工具调用，并把结果记入活动列表。 */
 async function authorizeToolCall(
   prompt: ApprovalPrompt,
   signal: AbortSignal,
@@ -1151,8 +1112,7 @@ async function authorizeToolCall(
     sessionTrustedActionOrigins.add(prompt.origins[0]!)
     return 'approved'
   }
-  // Retained for wire compatibility with older control strips; permanent trust
-  // is managed explicitly in the strip's advanced section.
+  // 留着是为了跟更老的控制条保持 wire 兼容；永久信任由控制条的高级区域显式管理。
   if (decision === 'trust-origin' && prompt.kind === 'action' && prompt.canTrust && prompt.origins.length === 1) {
     await persistSettings({ trustedActionOrigins: [...settings.trustedActionOrigins, prompt.origins[0]!] })
     return 'approved'
@@ -1164,16 +1124,14 @@ function unrestrictedAccessEnabled(): boolean {
   return settings.unrestrictedBrowserAccess
 }
 
-// ---- Gateway sessions ----
+// ---- gateway 会话 ----
 
 /**
- * The only gateway methods this worker calls.
+ * 这个 worker 会调用的全部 gateway 方法。
  *
- * The desktop dsh app owns the conversation, so the worker needs exactly these
- * four: create its one session, queue a prompt, cancel the running turn, and —
- * for a caller that wants a durable read instead of the live stream — fetch
- * history once. The control page renders live events and re-prompts rather than
- * replaying a transcript the worker deliberately never caches.
+ * 对话归桌面 dsh 应用所有，所以 worker 正好只需要这几个：创建它唯一的会话、排队一条提示、
+ * 取消正在跑的轮次，还有——给想要一次持久读取而不是实时流的调用方——取一次历史。
+ * 控制页面渲染实时事件并重新提示，而不是重放一份 worker 刻意从不缓存的 transcript。
  */
 const sessionRpc = {
   create: (): Promise<unknown> => gatewayRpc('session.create', {}),
@@ -1188,39 +1146,35 @@ const sessionRpc = {
   history: (sessionId: string): Promise<unknown> => gatewayRpc('session.history', { sessionId }),
   follow: (sessionId: string): Promise<unknown> => gatewayRpc('session.follow', { sessionId }),
   /**
-   * Declare which conversations are still being watched, releasing the rest.
+   * 声明哪些对话还要继续看，其余的一并放开。
    *
-   * The keep-list is the whole request: the worker's mirror is the authority, so a
-   * bridge that missed an earlier change still converges on the same set.
+   * 整个请求就是这份保留列表：worker 的镜像才是权威，所以哪怕 bridge 错过了先前的变更，
+   * 照样会收敛到同一个集合上。
    */
   retainFollows: (keep: readonly string[]): Promise<unknown> => gatewayRpc('session.unfollow', { keep }),
 }
 
 /**
- * Ask the bridge to start streaming one conversation's events to this worker.
+ * 请 bridge 开始把这个对话的事件流式发给这个 worker。
  *
- * The only other thing that opens that stream is sending a prompt, which is why a
- * panel always saw its own conversations and never a conversation the desktop app
- * drives: every event is dropped unless its session matches the panel's binding, and
- * binding alone never started the stream.
+ * 另一件能打开这条流的事情是发一条提示，这也正是过去面板永远只看得见自己的对话、
+ * 看不见桌面应用驱动的对话的原因：事件里的 session 只要和面板的绑定对不上就被丢掉，
+ * 而光有绑定从来不会把这条流启起来。
  *
- * Best-effort on purpose. A transport that predates `session.follow` answers with
- * an error; the panel is still correctly bound in that case, it simply will not
- * update live, and that is not worth failing the user's conversation switch over.
+ * 刻意做成尽力而为。早于 `session.follow` 的传输层会回一个错误；这种时候面板的绑定
+ * 仍然是对的，只是不会实时更新，而这不值得让用户的对话切换失败。
  *
- * The failure is remembered in `followErrorRef` and shown in the panel, because
- * "bound but not updating" and "nothing to show" look identical otherwise, and the
- * usual cause has a one-step fix the user cannot guess: restart the desktop app so
- * it loads a bridge that knows this method.
+ * 失败会记进 `followErrorRef` 并显示在面板上，因为"已绑定但不更新"和"没内容可显示"
+ * 不这样区分就长得一模一样，而常见原因的修法用户猜不到：重启桌面应用，
+ * 让它加载一个认识这个方法的 bridge。
  */
 let followErrorRef: string | null = null
 /**
- * Which follow request is allowed to write `followErrorRef`.
+ * 哪个 follow 请求才有权写 `followErrorRef`。
  *
- * Two quick picks issue two follows, and they can settle out of order: a slow
- * failure for the conversation the user already left would otherwise overwrite the
- * news that the one they are looking at follows fine. Only the newest request may
- * write, in either direction — a stale success must not clear a real error either.
+ * 快速连挑两次会发出两次 follow，结算顺序不定：那个针对用户已经离开的对话的慢失败，
+ * 原本会盖掉"他们正在看的那个跟随正常"这条消息。只有最新的请求能写，两个方向都一样——
+ * 一次陈旧的成功，同样不许清掉真实的错误。
  */
 let followRevision = 0
 
@@ -1233,22 +1187,21 @@ async function startFollowingSession(sessionId: string): Promise<void> {
     try {
       broadcastState()
     } catch {
-      // The worker is shutting down; there is no panel left to tell.
+      // worker 正在关掉，已经没有面板可告知了。
     }
   }
   try {
-    // Checked rather than assumed: `gatewayRpc` throws when the bridge is gone, and a
-    // fire-and-forget call that rejects after the worker is torn down surfaces as an
-    // unhandled rejection — a noisy console and a test failure for something that is,
-    // by design, allowed to fail. A follow that cannot be attempted is not reported
-    // as a failure either: "not connected" already has its own notice, and blaming
-    // the bridge version for it would send the user to the wrong fix.
+    // 这里是检查，不是假定：bridge 没了时 `gatewayRpc` 会抛，而一次在 worker 被拆掉之后
+    // 才 reject 的 fire-and-forget 调用，会以 unhandled rejection 冒出来——对一个按设计
+    // 就允许失败的东西来说，那就是吵闹的控制台加一次测试失败。一次根本没法尝试的 follow
+    // 也不当失败上报："未连接"本来就另有提示，为这个去怪 bridge 版本，
+    // 只会把用户引向错的修法。
     if (rpc === null || bridge === null || !bridge.connected) return
     await sessionRpc.follow(sessionId)
     settleHint(null)
   } catch (error: unknown) {
-    // Swallowed on purpose: following is best-effort, and the branch below turns the
-    // one failure the user can act on into a sentence the panel shows.
+    // 刻意吞掉：跟随是尽力而为；下面这个分支会把用户唯一能拿去行动的那种失败，
+    // 变成一句面板会显示的话。
     const detail = error instanceof Error ? error.message : String(error)
     settleHint(/unavailable|not-found/iu.test(detail)
       ? (getUiLocale() === 'zh'
@@ -1259,13 +1212,11 @@ async function startFollowingSession(sessionId: string): Promise<void> {
 }
 
 /**
- * Forget a standing "cannot follow" notice when the connection itself changes.
+ * 连接本身一变，就把常驻的"无法跟随"提示忘掉。
  *
- * The notice names the bridge version as the cause, which is only a statement about
- * the connection that produced it: once the socket drops, reconnects, or is replaced,
- * that claim is no longer known to be true, and repeating it would point the user at
- * a restart that may have already happened. A follow that is still broken puts the
- * notice back on its own.
+ * 那条提示把原因归到 bridge 版本上，而这只是关于产出它的那条连接的说法：socket 一旦掉落、
+ * 重连或者被顶替，那句话就不再已知为真，反复说它只会让用户去做一次也许早就做过的重启。
+ * follow 要是还坏着，会自己把这条提示放回来。
  */
 function followConnectionChanged(): void {
   followRevision += 1
@@ -1274,14 +1225,13 @@ function followConnectionChanged(): void {
   try {
     broadcastState()
   } catch {
-    // No panel to tell.
+    // 没有面板可告知。
   }
 }
 
 /**
- * One gateway RPC, refusing early with a clear message when the bridge cannot
- * carry it. The caller of a prompt must never see a 30-second socket timeout
- * when the real problem is that the desktop app is not connected.
+ * 一次 gateway RPC；bridge 载不动它时就早点用一个清楚的错误拒掉。真正的毛病是桌面应用
+ * 没连上时，发提示的调用方不该收到一个 30 秒的 socket 超时。
  */
 async function gatewayRpc(method: string, payload: unknown): Promise<unknown> {
   if (rpc === null || bridge === null || !bridge.connected) {
@@ -1292,69 +1242,51 @@ async function gatewayRpc(method: string, payload: unknown): Promise<unknown> {
   return rpc.request(method, payload)
 }
 
-/** In-flight `session.create`, so two quick prompts cannot create two sessions. */
+/** 正在进行中的 `session.create`，免得两条快速提示建出两个会话。 */
 let sessionCreation: Promise<string> | null = null
 
 /**
- * Bumped whenever the panel's target conversation changes.
+ * 面板的目标对话一换就自增。
  *
- * A `session.create` in flight when the user picks a different conversation must
- * not adopt its result: the reply arrives after the choice was made, and letting
- * it through would silently drag the panel back to the session the user just
- * left — and the next prompt would land in a conversation they did not choose.
+ * 用户挑另一个对话时，正在进行中的 `session.create` 不能采用它的结果：回复是在选择做出
+ * 之后才到的，放它过去就会悄悄把面板拽回用户刚离开的那个会话——下一条提示也就落进一个
+ * 他们没选的对话里。
  */
 let sessionGeneration = 0
 
 /**
- * The dsh session this worker drives.
+ * 面板此刻接着用的那个对话。
  *
- * Two modes, and the target is always chosen rather than inferred:
+ * `fresh` 和 `last` 两档共用它：`last` 读它来接着上一段，`fresh` 把它清掉好开新的。
  *
- * - `fresh` (default) lazily creates the panel's own session on first use, so a
- *   page that only runs typed browser commands never needs the desktop app.
- * - `pinned` continues a conversation the user named in settings, which is how
- *   the panel can ask about a page inside context that already exists.
+ * 存在 `storage.local` 里，而不是只放这个 worker 的内存里，因为 worker 的寿命没用户想的
+ * 那么长。Chrome 会停掉闲置的 MV3 service worker——侧边面板一关就会发生——只存在内存里的
+ * 会话跟着就没了。用户的下一条消息于是开了另一个对话，浏览历史碎成每闲置一次超时就多一个
+ * 会话，每个都得他们自己去找。
  *
- * The desktop publishes no "session I am viewing" signal, so there is nothing to
- * guess from: recent-activity inference would quietly deliver a prompt into the
- * wrong conversation, which is worse than asking the user once.
- */
-/**
- * The conversation the panel's "start a new one" mode is currently using.
- *
- * Kept in `storage.local` rather than only in this worker's memory because the
- * worker does not live as long as the user assumes it does. Chrome stops an idle
- * MV3 service worker — which happens as soon as the side panel closes — and a
- * session held only in memory is then gone. The user's next message opened a
- * different conversation, and their browser history fragmented into one session
- * per idle timeout, each of which they had to find on their own.
- *
- * The desktop persists sessions to disk, so an id remains valid across a browser
- * restart, a dsh restart, and both. That is what makes restoring it meaningful.
+ * 桌面端会把会话落到磁盘上，所以一个 id 跨浏览器重启、跨 dsh 重启、以及两样都来一遍，
+ * 都还能用。恢复它才有意义。
  */
 const FRESH_SESSION_KEY = 'dshFreshSessionId'
 
-/** Remember the session the "new conversation" mode is bound to. */
+/** 记住"新对话"模式绑的是哪个会话。 */
 function rememberFreshSession(sessionId: string | null): void {
   const write = sessionId === null
     ? chrome.storage.local.remove(FRESH_SESSION_KEY)
     : chrome.storage.local.set({ [FRESH_SESSION_KEY]: sessionId })
-  // Storage is a durability aid, not a precondition: a failure here must not
-  // stop the prompt the user is waiting on.
+  // 存储只是辅助，不是前置条件：这里失败绝不能拦下用户正在等的那条提示。
   void Promise.resolve(write).catch(() => {})
 }
 
 /**
- * The remembered session, if the desktop still has it.
+ * 那个记住的会话——前提是桌面端还持有它。
  *
- * A stored id can outlive its session — the user may have deleted that
- * conversation from the desktop. Adopting a dead id would send the next prompt
- * into nowhere and report a gateway error the user cannot act on, so the id is
- * checked against the desktop's own list first. An unreadable list means an
- * older desktop or a transient failure, and in both cases starting a new
- * conversation is better than refusing to send.
+ * 存下来的 id 可能比它的会话活得久：用户也许已经从桌面端把那个对话删了。采用一个已死的 id
+ * 会把下一条提示发向虚无，报出一个用户没法据以行动的 gateway 错误，所以这个 id 要先跟桌面端
+ * 自己的列表对一遍。列表读不出来说明桌面端更老，或者只是这次读失败了；
+ * 这两种情况都宁可开一个新对话，也不要拒绝发送。
  *
- * @returns the id to continue, or null to create a new conversation.
+ * @returns 要接着用的 id；null 表示新建一个对话。
  */
 async function restoredFreshSession(): Promise<string | null> {
   let stored: unknown
@@ -1380,16 +1312,10 @@ async function restoredFreshSession(): Promise<string | null> {
 function ensureSession(): Promise<string> {
   const existing = control.id
   if (existing !== null) return Promise.resolve(existing)
-  if (settings.sessionScope === 'pinned' && settings.pinnedSessionId !== null) {
-    const pinned = settings.pinnedSessionId
-    control.adopt(pinned)
-    return Promise.resolve(pinned)
-  }
   if (sessionCreation === null) {
     const generation = sessionGeneration
-    // Continuing the remembered conversation is tried first, so "new
-    // conversation" means "new conversation, then the same one until you ask
-    // for another" rather than "a new one every time the worker is recycled".
+    // 先试着接着用记住的那个对话，这样"新对话"才是"新开一个，然后一直用它，
+    // 直到你再要一个"，而不是"worker 每被回收一次就多一个新的"。
     const attempt = restoredFreshSession()
       .then((restored) => {
         if (restored !== null) {
@@ -1405,10 +1331,8 @@ function ensureSession(): Promise<string> {
               ? 'dsh 未返回会话 id'
               : 'The dsh gateway created a session without an id.')
           }
-          // Only a create that is still current may write the binding. Writing it
-          // unconditionally would let a superseded create resurrect itself after
-          // the user switched scope, so the next panel prompt would land in the
-          // conversation they just left.
+          // 只有还是当前那一次的 create 才能写这个绑定。无条件写的话，一个已被取代的 create
+          // 会在用户切换范围之后把自己复活，下一次面板提示就落进他们刚离开的那个对话。
           if (generation === sessionGeneration) {
             rememberFreshSession(sessionId)
             control.adopt(sessionId)
@@ -1423,7 +1347,7 @@ function ensureSession(): Promise<string> {
   return sessionCreation
 }
 
-/** The browser's IANA time zone, so the desktop renders times in the user's zone. */
+/** 浏览器的 IANA 时区，这样桌面端按用户所在时区渲染时间。 */
 function browserTimeZone(): string | undefined {
   try {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -1434,68 +1358,58 @@ function browserTimeZone(): string | undefined {
 }
 
 /**
- * Forward one typed instruction to the desktop model.
+ * 把一条键入的指令转发给桌面模型。
  *
- * The text is tagged with {@link BROWSER_PANEL_MARKER} so the model can tell a
- * real instruction from page content that claims to be one. The marker is applied
- * here, on the only path that can submit a prompt, rather than being left to the
- * model to infer.
+ * 文本被打上 {@link BROWSER_PANEL_MARKER} 标记，这样模型能分清一条真正的指令和一段自称是
+ * 指令的页面内容。标记在这里、在唯一能提交提示的路径上打上，而不是留给模型去推断。
  *
- * @param text - the instruction exactly as the user submitted it.
- * @returns the session the prompt was queued on.
+ * @param text - 用户提交时的原文指令。
+ * @returns 这条提示排队所在的会话。
  */
 async function promptSession(text: string): Promise<string> {
   const request = control.beginPrompt(text)
   try {
     const sessionId = await ensureSession()
-    // The binding is re-checked after the await, because `ensureSession` can spend a
-    // round trip creating or restoring a conversation and the user may have picked a
-    // different one in the meantime. The generation check inside `ensureSession` only
-    // stops the *adoption* — the id it resolves to is still returned, so without this
-    // the prompt lands in the conversation they just left while the row is drawn in
-    // the one they chose. Refusing is the honest answer: their next message goes to
-    // where the panel is actually pointing.
+    // await 之后再查一次绑定：`ensureSession` 可能花一次往返去创建或恢复对话，
+    // 而用户在这期间可能挑中了另一个。`ensureSession` 里的世代检查只挡住*采用*——
+    // 它解析出的 id 照样会返回，所以少了这里这一步，提示会落进他们刚离开的对话，
+    // 行却画在他们选中的那个里面。拒绝才是诚实的答复：下一条消息会发到面板实际指向的地方。
     if (control.id !== sessionId) {
       throw new Error(getUiLocale() === 'zh'
         ? '你切换了对话，这条消息没有发出。再发一次就会发到当前选中的对话。'
         : 'You switched conversations, so this message was not sent. Send it again to reach the one now selected.')
     }
-    // The transcript row keeps the raw text so the panel shows what was typed;
-    // the marker is what the model receives.
+    // transcript 行保留原文，这样面板显示的就是用户键入的内容；模型收到的是带标记的版本。
     await sessionRpc.prompt(sessionId, `${BROWSER_PANEL_MARKER} ${text}`, browserTimeZone())
-    // A prompt already opens the follower on the bridge, so this is belt and
-    // braces — and it runs after the prompt so it can never sit between the
-    // caller and the prompt's own result.
+    // 提示本身就会在 bridge 上打开跟随器，所以这只是双保险；而且它跑在提示之后，
+    // 永远不会夹在调用方和提示自己的结果中间。
     void startFollowingSession(sessionId)
     control.admitPrompt(request)
     return sessionId
   } catch (error: unknown) {
-    // The request row is optimistic: a prompt that never reached the desktop
-    // must not stay in the run as if it had been submitted.
+    // 这个请求行是乐观加上的：一条根本没到桌面端的提示，不能像已经提交过一样留在这次运行里。
     control.rejectPrompt(request)
     throw error
   }
 }
 
-/** A plain object, for narrowing values that crossed a process boundary. */
+/** 判断是不是普通对象，用来收窄跨进程边界过来的值。 */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
- * Read the desktop's recent conversations for the panel's picker.
- * Only the fields the picker shows are kept, and every one is validated: this
- * crosses the bridge from another process, so a shape change must degrade to a
- * shorter list rather than to a crash or a bogus session id.
+ * 读取桌面端最近的对话，给面板的选择器用。
+ * 只留选择器会显示的字段，而且每个都校验过：这东西是跨 bridge 从另一个进程来的，
+ * 所以形状变了必须降级成一份更短的列表，而不是崩掉、或者冒出一个伪造的 session id。
  *
- * **Sub-agent conversations are dropped.** Every delegated sub-agent is a Session of
- * its own, titled with its own instructions, so the list arrived full of entries
- * called `You are a senior code…` and `You are auditing…` — three identical-looking
- * rows per audit round, none of which the user can meaningfully continue from the
- * panel. The desktop tags them `origin: 'subagent'` with a `parentSessionId`, and the
- * list is about conversations the user holds, not about the machinery behind them.
+ * **子代理对话会被丢掉。** 每个被委派的子代理自己就是一个 Session，拿它自己的指令当标题，
+ * 所以列表里曾经满是叫 `You are a senior code…`、`You are auditing…` 的条目——
+ * 每轮审计三条看起来一模一样的行，没有一条是用户能从面板正经接着聊下去的。
+ * 桌面端把它们标成 `origin: 'subagent'` 并带上 `parentSessionId`，
+ * 而这份列表讲的是用户手里的对话，不是它们背后的机械装置。
  *
- * @returns conversations worth choosing from, running first then newest first.
+ * @returns 值得挑的对话，正在运行的在前，然后按最近排序。
  */
 async function listSessions(): Promise<SessionSummary[]> {
   const listed = await gatewayRpc('session.list', {})
@@ -1503,15 +1417,13 @@ async function listSessions(): Promise<SessionSummary[]> {
   const sessions: SessionSummary[] = []
   for (const item of items) {
     if (!isPlainObject(item) || typeof item.sessionId !== 'string' || item.sessionId === '') continue
-    // A sub-agent's Session is not a conversation the user can talk to. Matched on
-    // either field: `origin` is the direct statement and `parentSessionId` the
-    // structural one, and a build that publishes only one of them must still filter.
+    // 子代理的 Session 不是用户能对话的那种对话。两个字段命中任意一个就算：
+    // `origin` 是直接说明，`parentSessionId` 是结构上的说明，
+    // 而只发布其中一个的构建也得能过滤掉。
     if (item.origin === 'subagent' || typeof item.parentSessionId === 'string') continue
-    // `title` is not a top-level field: it lives in `projections.values.title`, so
-    // reading `item.title` found nothing and every conversation in the picker was
-    // labelled "Untitled" — which is why near-identical titles were not the only
-    // problem there. Both spellings are accepted, because a flat one is the obvious
-    // shape for a future build to publish.
+    // `title` 不是顶层字段：它住在 `projections.values.title` 里，读 `item.title` 什么都读不到，
+    // 于是选择器里每个对话都被标成 "Untitled"——所以那儿唯一的毛病并不是标题长得太像。
+    // 两种写法都接受，因为扁平的那种是未来构建很可能发布的形状。
     sessions.push({
       sessionId: item.sessionId,
       title: sessionTitleOf(item),
@@ -1520,12 +1432,11 @@ async function listSessions(): Promise<SessionSummary[]> {
       running: item.running === true,
     })
   }
-  // A conversation with a turn in progress comes first, then newest first.
+  // 有轮次在跑的对话排最前，其后按最近排序。
   //
-  // The desktop publishes no "session I am currently showing" field, so `running` is
-  // the closest thing: the conversation whose turn is executing is nearly always the
-  // one on screen, and after dropping the sub-agents the remaining list is short
-  // enough that newest-first is a usable order on its own.
+  // 桌面端不发布"我此刻在显示哪个会话"这种字段，`running` 是最接近的东西：
+  // 正在跑轮次的那个对话几乎总是屏幕上的那个；而丢掉子代理之后，
+  // 列表已经短到单靠"最近的在前"就是一个能用的顺序。
   sessions.sort((left, right) => {
     if (left.running !== right.running) return left.running ? -1 : 1
     return right.updatedAt - left.updatedAt
@@ -1534,67 +1445,73 @@ async function listSessions(): Promise<SessionSummary[]> {
 }
 
 /**
- * The conversations 「工作区内」 should mirror: where the panel's browser conversations live.
+ * 「全部工作区」该镜像哪些对话。
  *
- * The bridge names the directory it groups them under in `hello.ok`, so this asks for
- * the workspace whose `path` is that directory rather than guessing from the title —
- * a user may have renamed the group, and a path is what the desktop keeps stable.
+ * 早先这一档只镜像一个工作区：`bridgePolicy.sessionWorkspacePath` 指的那个目录（bridge 在
+ * `hello.ok` 里说出来的那份），理由是那才是扩展自己的浏览器对话所在的地方。现在按用户的
+ * 要求放宽成**每一个工作区**——"不管我在 DSH 哪个工作区发对话，都同步到插件里"——所以
+ * 这里不再按路径筛选，`workspace.list` 报出来的每个分组都算。
  *
- * @returns id → label, empty when the grouping is off or nothing is in it yet.
+ * 代价是分组越多、要跟的对话越多，所以活跃筛选（见 {@link sessionsWorthFollowing}）是
+ * 这条路的必需部分，不是优化。
+ *
+ * @returns id → 标签；一个分组都没开、或者里面都还没东西时为空。
  */
 async function workspaceSessions(options: { onlyActive: boolean }): Promise<Map<string, string>> {
-  const path = bridgePolicy?.sessionWorkspacePath
   const mirror = new Map<string, string>()
-  if (path === undefined || path === '') return mirror
   const listed = await gatewayRpc('workspace.list', {})
   const items = isPlainObject(listed) && Array.isArray(listed.items) ? listed.items : []
-  const wanted = items.find((item) => isPlainObject(item) && item.path === path)
-  if (!isPlainObject(wanted) || !Array.isArray(wanted.sessionIds)) return mirror
-  const title = typeof wanted.title === 'string' && wanted.title !== '' ? wanted.title : path
-  const memberIds = new Set<string>()
-  for (const id of wanted.sessionIds) {
-    if (typeof id !== 'string' || id === '') continue
-    memberIds.add(id)
+  // 「全部工作区」是这一档的定义：每一个工作区的对话都算，不只是浏览器工作区。所以这里刻意
+  // **不**按 `bridgePolicy.sessionWorkspacePath` 过滤 —— 那个路径标识的是扩展自己用的工作区，
+  // 而用户要的是"不管我在哪个工作区发对话，都同步到插件里"。
+  const memberIds = new Map<string, string>()
+  for (const item of items) {
+    if (!isPlainObject(item) || !Array.isArray(item.sessionIds)) continue
+    const title = typeof item.title === 'string' && item.title !== '' ? item.title : undefined
+    for (const id of item.sessionIds) {
+      if (typeof id !== 'string' || id === '') continue
+      // 同一段对话可以同时属于多个工作区；留第一个有名字的标题就是了。
+      if (title !== undefined && !memberIds.has(id)) memberIds.set(id, title)
+      else if (!memberIds.has(id)) memberIds.set(id, '')
+    }
   }
   if (memberIds.size === 0) return mirror
 
   if (!options.onlyActive) {
-    // Entering the mode: mirror the whole group once, so a conversation that has been
-    // driven from the desktop side is on screen even though its work predates this
-    // connection. Followed streams deliver the snapshot, which is what makes the
-    // existing transcript appear rather than only what happens next.
-    for (const id of memberIds) mirror.set(id, title)
+    // 刚进这个模式：先把每个工作区都镜像一遍，这样某个对话的工作哪怕发生在这条连接之前，
+    // 它也会出现在屏幕上。被跟随的流会送来快照，正是靠它把已有的 transcript 显出来，
+    // 而不只是显示之后发生的事。
+    for (const [id, title] of memberIds) mirror.set(id, title)
     return mirror
   }
 
-  // Steady state: only the conversations that are actually producing something.
-  for (const id of sessionsWorthFollowing(memberIds, await listSessions(), Date.now())) {
-    mirror.set(id, title)
+  // 稳态：只跟还在产出东西的那几个对话 —— 分组会无限长大，全部跟住就是每个成员一条
+  // 服务端流，只为看那一两个活跃的。
+  const worth = new Set(sessionsWorthFollowing(new Set(memberIds.keys()), await listSessions(), Date.now()))
+  for (const [id, title] of memberIds) {
+    if (worth.has(id)) mirror.set(id, title)
   }
   return mirror
 }
 
-/** A conversation whose last event is older than this is no longer worth following. */
+/** 最后一次事件早于这个时间的对话，就不值得再跟了。 */
 export const RECENT_ACTIVITY_MS = 5 * 60_000
 
 /**
- * Which of a group's conversations are worth following right now.
+ * 一个分组里哪些对话现在值得跟。
  *
- * This is what keeps 「工作区内」 cheap. Following every member of a workspace costs one
- * server-side stream per member to watch the one or two that are live, and a group grows
- * without bound as conversations accumulate. Activity is answerable from `session.list`
- * metadata without asking any Session anything: `updatedAt` moves when a conversation
- * produces an event and stays put when it does not, and `running` marks a turn in
- * flight. So a conversation that starts working becomes recent and is followed on the
- * next tick, and one that goes quiet leaves the window and is dropped.
+ * 就是它让「工作区内」保持便宜。跟一个工作区的每个成员，意味着每个成员一条服务端流，
+ * 只为看那一两个活跃的；而对话越攒越多，分组会无限长大。活跃不活跃，`session.list` 的元数据
+ * 就能回答，不用去问任何 Session：`updatedAt` 在对话产出事件时往前走、不产出就原地不动，
+ * `running` 标记有没有轮次在跑。于是一个开始干活的对话就"最近"，下一次 tick 被跟上；
+ * 一个安静下来的对话离开这个窗口，被丢掉。
  *
- * Pure and exported so the decision can be tested directly, rather than through a timer
- * that has to be waited out.
+ * 做成纯函数并导出，是为了直接测这个判断，而不是通过一个非得等它跑完的定时器。
  *
- * @param memberIds - every conversation in the group.
- * @param active - the desktop's session list, as the worker reads it.
- * @param now - current time, injected so the window is testable.
- * @returns the ids to follow, in the order `active` reports them (most recent first).
+ * @param memberIds - 这个分组里的每一个对话。
+ * @param active - 桌面端的会话列表，worker 读到的样子。
+ * @param now - 当前时间，注入进来方便测这个窗口。
+ * @returns 要跟随的 id，顺序跟着 `active` 报告的顺序（最近的在前）。
  */
 export function sessionsWorthFollowing(
   memberIds: ReadonlySet<string>,
@@ -1612,52 +1529,47 @@ export function sessionsWorthFollowing(
 }
 
 /**
- * How recent a conversation's last event must be for 「工作区内」 to keep following it.
+ * 一个对话最后一次事件要多新，「工作区内」才继续跟它。
  *
- * Long enough that a conversation being read or thought about is not dropped mid-use,
- * short enough that a group of twenty settles to the one or two that are live. The
- * comparison is against `updatedAt`, which only moves when a conversation produces an
- * event, so this really is "has anything happened here lately" rather than a guess.
+ * 够长，一段正在被读或被想的对话不会用着用着就被丢掉；又够短，二十个的分组会收敛到活跃的
+ * 那一两个。拿来比的是 `updatedAt`，它只在对话产出事件时往前走，
+ * 所以这问的是"这儿最近有没有动静"，不是猜。
  *
- * Declared with {@link sessionsWorthFollowing} above; this note is the rationale.
+ * 声明在上面 {@link sessionsWorthFollowing} 旁边；这段注释就是它的理由。
  */
 
 /**
- * The newest mirrored conversation, or null when the group is empty.
+ * 镜像里最新的那个对话；分组为空时返回 null。
  *
- * Used as the panel's binding under 「工作区内」: typing there starts the panel's own
- * conversation, but the transcript has to be *about* something, and the most recently
- * active conversation in the group is the one the user is looking at.
+ * 用作「工作区内」下面板的绑定：在那里键入会启动面板自己的对话，但 transcript 总得*关于*
+ * 点什么，而分组里最近有动静的那个对话，就是用户正在看的那个。
  *
- * @param mirror - the mirrored conversations.
- * @returns a session id, or null.
+ * @param mirror - 被镜像的对话。
+ * @returns 一个 session id，或 null。
  */
 function newestMirrored(mirror: ReadonlyMap<string, string>): string | null {
-  // The map preserves insertion order and `workspace.list` reports most recent first,
-  // so the first key is the newest. No timestamps are needed, which keeps this working
-  // for a group whose order the desktop decides.
+  // 这个 map 保持插入顺序，而 `workspace.list` 是按最近的在前报的，所以第一个键就是最新的。
+  // 一个时间戳都不用，所以顺序由桌面端决定的分组照样适用。
   return [...mirror.keys()][0] ?? null
 }
 
 /**
- * Start mirroring every conversation in the browser workspace.
+ * 开始镜像浏览器工作区里的每个对话。
  *
- * The follower has to be opened for each one: the bridge streams a conversation's
- * events only after someone asks, and the panel never prompts most of them. A failure
- * to open one is tolerated — the others still mirror, and `session.follow` on a
- * conversation that is already followed is cheap.
+ * 每一个都得打开跟随器：bridge 只在有人要求之后才流式发送某个对话的事件，而面板从来不会去
+ * 提示其中的大多数。某一个打不开可以容忍——其他对话照样被镜像，
+ * 而在一个已经跟随着的对话上再调 `session.follow` 很便宜。
  *
- * @param options.onlyActive - true in the steady state, to follow just the live
- *   conversations; false on entry, to mirror the whole group once.
- * @returns the mirrored set, so the caller can publish it to the panel.
+ * @param options.onlyActive - 稳态下为 true，只跟活跃的对话；刚进来时为 false，
+ *   把整个分组镜像一遍。
+ * @returns 被镜像的集合，方便调用方发布给面板。
  */
 /**
- * Conversations this worker has already asked the bridge to stream.
+ * 这个 worker 已经请 bridge 流式发送过的对话。
  *
- * Kept so a refresh tick asks only about what is new. The bridge's `session.follow` is
- * idempotent for a Session it is already reading, so repeating the request is not wrong
- * — but a tick that re-announces every mirrored conversation spends a round trip per
- * conversation per tick to change nothing.
+ * 记着它是为了让一次刷新 tick 只问新增的部分。对 bridge 已经在读的 Session 来说，
+ * `session.follow` 是幂等的，重复请求不算错——但一个每次都把所有被镜像对话重新声明一遍的
+ * tick，会每个 tick 为每个对话花一次往返，却什么都没变。
  */
 const followedSessions = new Set<string>()
 
@@ -1669,12 +1581,11 @@ async function startWorkspaceMirror(options: { onlyActive: boolean } = { onlyAct
     followedSessions.add(id)
     void startFollowingSession(id)
   }
-  // Release the streams for conversations the mirror has let go, so a group of twenty
-  // does not hold twenty server-side streams to watch the one or two that are live. The
-  // remaining set is declared rather than the dropped one, so the bridge ends up with
-  // exactly what this worker is showing even if it missed an earlier change.
+  // 把镜像已经放手的那些对话的流释放掉，二十个的分组才不会为了看活跃的一两个而攥着二十条
+  // 服务端流。声明的是保留的集合，不是丢弃的那个，所以 bridge 哪怕漏掉了先前的变更，
+  // 最终也会正好持有这个 worker 正在显示的东西。
   retainFollowedSessions(new Set(mirror.keys()))
-  // Their rows belong to a mirror that is no longer showing them.
+  // 这些行属于那个已经不再显示它们的镜像。
   control.retainSessions(new Set(mirror.keys()))
   const newest = newestMirrored(mirror)
   if (newest !== null) control.adopt(newest)
@@ -1682,19 +1593,16 @@ async function startWorkspaceMirror(options: { onlyActive: boolean } = { onlyAct
 }
 
 /**
- * Tell the bridge which conversations are still being watched.
+ * 告诉 bridge 还有哪些对话在看。
  *
- * Posted without awaiting, and best-effort on purpose. Two reasons, both about the user
- * rather than about tidiness:
+ * 发了就不管，刻意做成尽力而为。两个理由，都是为用户着想，不是为了整齐：
  *
- * - A bridge older than `session.unfollow` answers with an error, and that must not
- *   surface anywhere. An extension and a bridge upgrade separately — one from the
- *   store, one from npm — so the older pairing has to keep working, just without the
- *   release. Degrading to "streams are held a little longer" is correct; failing a
- *   refresh tick over it is not.
- * - It is bookkeeping. A tick that cannot post it has still updated the panel.
+ * - 早于 `session.unfollow` 的 bridge 会回一个错误，而那个错误绝不能从哪儿冒出来。
+ *   扩展和 bridge 是分开升级的——一个走商店，一个走 npm——所以老的组合必须照样能用，
+ *   只是没有释放这一步。退化成"流多攥了一会儿"是对的；为这个让一次刷新 tick 失败就不对了。
+ * - 这只是记账。一次发不出去的 tick，面板该更新的还是更新了。
  *
- * @param keep - the Session ids still being mirrored.
+ * @param keep - 仍在被镜像的 Session id。
  */
 function retainFollowedSessions(keep: ReadonlySet<string>): void {
   let dropped = false
@@ -1703,16 +1611,15 @@ function retainFollowedSessions(keep: ReadonlySet<string>): void {
     followedSessions.delete(id)
     dropped = true
   }
-  // Nothing was released, so there is nothing to declare. This is the common case on a
-  // refresh tick and it costs no round trip.
+  // 什么都没释放，也就没什么要声明的。刷新 tick 上多数时候都这样，而且不花任何往返。
   if (!dropped) return
   void sessionRpc.retainFollows([...keep]).catch(() => {
-    // An older bridge, or a socket that closed mid-flight. Either way the streams it
-    // still holds end with the connection.
+    // 要么是更老的 bridge，要么是中途关掉的 socket。不管哪种，它手里剩的流都会跟着连接一起
+    // 结束。
   })
 }
 
-/** Stop mirroring, dropping the extra conversations' rows and their follow bookkeeping. */
+/** 停止镜像，丢掉那些额外对话的行，连带它们的跟随记账。 */
 function stopWorkspaceMirror(): void {
   control.setMirrored(new Map())
   control.retainSessions(new Set())
@@ -1721,15 +1628,13 @@ function stopWorkspaceMirror(): void {
 }
 
 /**
- * A conversation's display name, from whichever field carries it.
+ * 一个对话的显示名，从装着它的那个字段里取。
  *
- * The desktop nests it at `projections.values.title`; a flat `title` is accepted too.
- * An untitled conversation legitimately has an empty string, which the picker renders
- * with a fallback label — the point is to tell that case apart from a title that was
- * simply looked for in the wrong place.
+ * 桌面端把它塞在 `projections.values.title`；扁平的 `title` 也认。无标题的对话合法地就是
+ * 空字符串，选择器会用回退标签渲染它——关键是把这种情况和"标题只是找错地方了"分开。
  *
- * @param item - one `session.list` entry.
- * @returns the title, or `''` when the entry carries none.
+ * @param item - 一条 `session.list` 条目。
+ * @returns 标题；条目没有标题时返回 `''`。
  */
 function sessionTitleOf(item: Record<string, unknown>): string {
   if (typeof item.title === 'string') return item.title
@@ -1740,17 +1645,15 @@ function sessionTitleOf(item: Record<string, unknown>): string {
 }
 
 /**
- * The opening prompt of a conversation, as one short line.
+ * 一个对话的开头提示，压成短短一行。
  *
- * Reaches through `projections.values.turnOutline`, which carries the first user
- * message of each turn and its response summary. Two titles can be near-identical
- * ("介绍哔哩哔哩罗肖尼视频" against "哔哩哔哩罗肖尼视频介绍") while the prompts behind them
- * differ plainly, so this is what makes the picker choosable. Every step is
- * defensive — the shape crosses a process boundary — and an unreadable one yields an
- * empty string rather than a wrong line.
+ * 来源是 `projections.values.turnOutline`，它带着每一轮的第一条用户消息和回复摘要。
+ * 两个标题可以几乎一样（"介绍哔哩哔哩罗肖尼视频" 对 "哔哩哔哩罗肖尼视频介绍"），
+ * 但它们背后的提示差别明显，所以正是它让选择器有得挑。每一步都是防御性的——
+ * 这形状跨进程边界——读不出来的那一步给空字符串，而不是给一行错的内容。
  *
- * @param projections - one `session.list` item's `projections` value.
- * @returns the first prompt, whitespace-collapsed, or `''` when unavailable.
+ * @param projections - 一条 `session.list` 条目的 `projections` 值。
+ * @returns 第一条提示，空白已折叠；取不到时返回 `''`。
  */
 function firstPromptOf(projections: unknown): string {
   if (!isPlainObject(projections)) return ''
@@ -1759,7 +1662,7 @@ function firstPromptOf(projections: unknown): string {
   for (const turn of values.turnOutline) {
     if (!isPlainObject(turn) || typeof turn.prompt !== 'string') continue
     const prompt = turn.prompt.replace(/\s+/gu, ' ').trim()
-    // Some turns carry an empty prompt (a continuation); keep looking for a real one.
+    // 有些轮次带的是空提示（续写那种）；接着找一条真提示。
     if (prompt === '') continue
     return prompt.length > 80 ? `${prompt.slice(0, 79)}…` : prompt
   }
@@ -1767,102 +1670,87 @@ function firstPromptOf(projections: unknown): string {
 }
 
 /**
- * Point the panel at a conversation, or give it its own again.
+ * 把面板指向某个对话，或者重新给它自己的对话。
  *
- * Switching away from a pinned session drops the current binding so the next
- * prompt creates a fresh one, and switching to a pinned session adopts it
- * immediately. Both directions also clear any half-finished `session.create`,
- * so a prompt in flight cannot resurrect the session the user just left.
+ * 换档都会丢掉当前绑定（`last` 与 `fresh` 的差别只在"要不要沿用记住的那段"，不是"立刻绑上去"），
+ * 下一条提示才决定用哪段对话。两个方向都会清掉没跑完的 `session.create`，让一次在路上的提示
+ * 无法把用户刚离开的会话复活过来。
  *
- * @param scope - `fresh` for the panel's own session, `pinned` to continue one.
- * @param sessionId - the conversation to continue; required when pinned.
+ * @param scope - 要切到的那一档。
  */
-async function selectSessionScope(scope: SessionScope, sessionId: string | null): Promise<void> {
-  // Invalidate any create still in flight before changing the target, so its
-  // reply cannot adopt a session the user has just navigated away from.
+async function selectSessionScope(scope: SessionScope): Promise<void> {
+  // 换目标之前先把还在路上的 create 作废，它的回复就没法采用一个用户刚离开的会话。
   sessionGeneration += 1
   sessionCreation = null
-  const previous = control.id
-  // Work already under way survives the switch; work merely queued does not,
-  // because it is about to run against the conversation being moved to.
+  // 已经开跑的工作能活过这次切换；只是排着队的不能，因为它马上要在被切走的那个对话上跑。
   const keep = control.inFlightRowIds(activeToolCalls.keys())
   if (scope === 'workspace') {
-    // Mirroring does not change where a prompt goes: the panel keeps its own
-    // conversation so typing here cannot land in one of the mirrored ones by
-    // accident. The rows of the conversations being mirrored are additive, so only
-    // the ones that leave the group are dropped.
+    // 镜像不改变提示的归属：面板留着自己的对话，所以在这儿键入不可能意外落进某个被镜像的
+    // 对话。被镜像对话的行是增量的，所以只有离开分组的那些会被丢掉。
     publishedMirror = new Map()
     control.detach(keep)
-    await persistSettings({ sessionScope: 'workspace', pinnedSessionId: null })
-    // The whole group on entry, so a conversation the desktop drove earlier is visible
-    // rather than only what happens from now on. The refresh below then follows just
-    // the live ones, which is what keeps twenty idle conversations from costing twenty
-    // server-side streams.
+    await persistSettings({ sessionScope: 'workspace' })
+    // 进来时先取整个分组，桌面端早先驱动过的对话才看得见，而不只是从现在起发生的事。
+    // 下面的刷新接着只跟活跃的那些，靠的正是不让二十个闲置对话花掉二十条服务端流。
     await startWorkspaceMirror({ onlyActive: false })
     startWorkspaceRefresh()
     broadcastState()
     return
   }
-  // Leaving workspace mode: stop mirroring before the single binding takes over, so
-  // its rows are not retained by the mirror.
+  // 离开工作区模式：先停掉镜像，再让那个唯一绑定接管，它的行就不会被镜像留下来。
   stopWorkspaceRefresh()
   stopWorkspaceMirror()
-  if (scope === 'pinned' && sessionId !== null) {
-    // Continuing a different conversation than the one on screen must clear the
-    // transcript: those rows belong to the session they came from.
-    if (previous !== null && previous !== sessionId) control.detach(keep)
-    control.adopt(sessionId)
+  if (scope === 'last') {
+    // 「上次浏览器对话」：不动记住的那段，下一次提示由 `ensureSession` 接着用它
+    //（`restoredFreshSession()` 会先核对桌面端是否还持有它）。这里刻意什么都不绑：
+    // 绑定是下一次提示的事，用户可能只是想改设置、并不打算立刻说话。
+    control.detach(keep)
   } else {
-    // Choosing "start a new one" has to actually start one. Without forgetting
-    // the remembered conversation here, the next prompt would restore the very
-    // session the user just asked to leave.
+    // 「新建对话」：把记住的那段忘掉。不在这儿忘，下一条提示就会接着用用户刚要求
+    // 离开的那个会话——这个选择必须算数。
     rememberFreshSession(null)
     control.detach(keep)
   }
-  await persistSettings({ sessionScope: scope, pinnedSessionId: scope === 'pinned' ? sessionId : null })
+  await persistSettings({ sessionScope: scope })
   broadcastState()
 }
 
 /**
- * How often 「工作区内」 re-reads its group, so a conversation that starts working is
- * picked up on its own.
+ * 「工作区内」多久重读一次分组，好让一个开始干活的对话自动被接上。
  *
- * Ten seconds is a compromise the mode can live with: a tick is two metadata reads and
- * opens a follower only for the conversations that turned out to be live, so the cost of
- * being early is near zero, while the cost of being late is a delay before desktop-side
- * work appears. Assigned rather than declared `const` because a test that wants to
- * exercise the timer has to reach it, and exposing it as a user setting would be a knob
- * whose only useful value is the default.
+ * 十秒是这个模式能接受的折中：一个 tick 读两次元数据，而且只给结果是活跃的对话打开跟随器，
+ * 所以"早"几乎不花钱，而"晚"的代价是桌面侧的工作出现前有一段延迟。
+ * 用赋值而不是 `const` 声明，是因为想演练这个定时器的测试得够得着它；
+ * 而把它做成用户设置，会变成一个只有默认值有用的旋钮。
  */
 export let WORKSPACE_REFRESH_MS = 10_000
 
-/** The refresh timer for 「工作区内」, and the group it last published. */
+/** 「工作区内」的刷新定时器，以及它上次发布的分组。 */
 let workspaceTimer: ReturnType<typeof setInterval> | null = null
 let publishedMirror = new Map<string, string>()
 
-/** Keep the mirrored set current while the mode is on. */
+/** 模式开着的时候，让被镜像的集合保持最新。 */
 function startWorkspaceRefresh(): void {
   stopWorkspaceRefresh()
   workspaceTimer = setInterval(() => {
     void startWorkspaceMirror().then(
       (mirror) => {
-        // Only repaint when the group actually changed: the panel re-renders on every
-        // state push, and a timer that pushed unconditionally would repaint the
-        // conversation every ten seconds for no reason.
+        // 只在分组真的变了才重绘：面板每次状态推送都会重渲染，
+        // 无条件推送的定时器只会毫无理由地每十秒重绘一次这个对话。
         if (sameMirror(mirror, publishedMirror)) return
         publishedMirror = new Map(mirror)
         broadcastState()
       },
-      () => { /* A read that failed: the next tick tries again. */ },
+      () => { /* 这次读取失败了：下一个 tick 再试。 */ },
     )
   }, WORKSPACE_REFRESH_MS)
-  // Node and the worker both keep a process alive for a pending interval; this one is
-  // bookkeeping and must never be the reason the worker stays up.
+  // Node 和 worker 都会因为一个挂着的 interval 而让进程活着；
+  // 这个只是记账，绝不能成为 worker 继续跑的理由。
   const timer = workspaceTimer as unknown as { unref?: () => void }
   timer.unref?.()
 }
 
-/** Stop refreshing the mirrored set. */
+/** 停止刷新被镜像集合。 */
 function stopWorkspaceRefresh(): void {
   if (workspaceTimer !== null) clearInterval(workspaceTimer)
   workspaceTimer = null
@@ -1870,14 +1758,13 @@ function stopWorkspaceRefresh(): void {
 }
 
 /**
- * Whether two mirrored sets name the same conversations.
+ * 两个被镜像集合指名的是不是同一批对话。
  *
- * Order is part of it: the newest conversation decides the panel's binding, so a
- * reordering is a real change even when the membership is identical.
+ * 顺序也算数：最新的对话决定面板的绑定，所以成员完全一样时，光重排一次也是真的变了。
  *
- * @param left - one set.
- * @param right - the other.
- * @returns true when they are equivalent.
+ * @param left - 一个集合。
+ * @param right - 另一个。
+ * @returns 两者等价时返回 true。
  */
 function sameMirror(left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean {
   if (left.size !== right.size) return false
@@ -1886,7 +1773,7 @@ function sameMirror(left: ReadonlyMap<string, string>, right: ReadonlyMap<string
   return leftKeys.every((id, index) => id === rightKeys[index])
 }
 
-/** Milliseconds to pause between `@open` steps, by pace. */
+/** `@open` 每步之间停多久（毫秒），按 pace 算。 */
 const OPEN_PACE_MS: Record<'fast' | 'normal' | 'slow', number> = {
   fast: 0,
   normal: 350,
@@ -1894,27 +1781,24 @@ const OPEN_PACE_MS: Record<'fast' | 'normal' | 'slow', number> = {
 }
 
 /**
- * Open a URL in front of the user, then hand it to the tools.
+ * 在用户眼前打开一个 URL，然后把它交给工具。
  *
- * This is the `@open` directive's whole behaviour, and every step is done here
- * rather than by the model: open the tab, bring it to the front, wait for the
- * document, bind it as the controlled tab, and raise the panel. "So I can watch
- * it" is therefore a guarantee — the model cannot skip it, because it is not the
- * model doing it.
+ * `@open` 指令的全部行为就是这个，每一步都在这里做完，不由模型做：开 tab、带到前台、等文档、
+ * 绑成受控 tab、把面板抬起来。所以"这样我就能看着它"是保证——模型跳不过去，
+ * 因为干这事的不是模型。
  *
- * @param url - the address to open; only http(s) is accepted.
- * @param pace - how long to pause between steps so a person can follow.
- * @param pin - whether the opened tab becomes the tab the tools act on.
- * @returns a short factual note for the panel to display.
+ * @param url - 要打开的地址；只接受 http(s)。
+ * @param pace - 每步之间停多久，好让人跟得上。
+ * @param pin - 打开的 tab 要不要成为工具作用的那个 tab。
+ * @returns 一段给面板显示的简短事实说明。
  */
 async function openInFrontOfUser(
   url: string,
   pace: 'fast' | 'normal' | 'slow',
   pin: boolean,
 ): Promise<{ url: string; tabId: number; pinned: boolean }> {
-  // The desktop app owns this permission. `@open` is a user-initiated command,
-  // but it still opens pages on the user's behalf, so a switch that did not stop
-  // it would be a switch that does not work.
+  // 这项权限归桌面应用所有。`@open` 虽然由用户发起，但它仍然是代表用户打开页面，
+  // 所以一个拦不住它的开关就是个不工作的开关。
   if (!pagesMayBeOpened()) {
     throw new Error(getUiLocale() === 'zh'
       ? '「自动打开页面」已在桌面端关闭，因此 @open 不可用'
@@ -1937,7 +1821,7 @@ async function openInFrontOfUser(
     .catch(() => undefined)
   await pause()
   const created = await chrome.tabs.create({
-    // Foreground on purpose: the user asked to see this happen.
+    // 刻意放前台：用户就是要看着这事发生。
     active: true,
     ...(windowId === undefined ? {} : { windowId }),
   })
@@ -1945,8 +1829,7 @@ async function openInFrontOfUser(
   const tabId = created.id
 
   await pause()
-  // Wait for the document before binding, so the first snapshot the model takes
-  // is of the real page rather than about:blank.
+  // 绑定前先等文档，模型拍的第一张快照才是真实页面的，而不是 about:blank。
   const navigationWait = waitForNextDocumentReady(tabId, 0, undefined, new AbortController().signal)
   await chrome.tabs.update(tabId, { url: parsed.href })
   await navigationWait.ready
@@ -1955,8 +1838,8 @@ async function openInFrontOfUser(
     await pause()
     const tab = await chrome.tabs.get(tabId)
     if (!bindOpenedTab(tab, true)) {
-      // Bind by id even when metadata is unavailable: the user asked for this
-      // tab, so failing to describe it must not silently retarget the tools.
+      // 元数据拿不到也照样按 id 绑：用户要的就是这个 tab，
+      // 描述不出来绝不能变成悄悄把工具指去别处。
       affinity.rebindControlled({ tabId, windowId: tab.windowId, title: tab.title ?? '', url: tab.url ?? parsed.href })
       persistTabAffinity()
       broadcastState()
@@ -1964,8 +1847,7 @@ async function openInFrontOfUser(
   }
 
   await pause()
-  // No gesture is available on a panel message, so this is best effort: the
-  // panel is usually already open, and a refusal must not fail the directive.
+  // 从面板消息上拿不到手势，所以这是尽力而为：面板通常已经开着，被拒也绝不能让指令失败。
   void chrome.windows.getLastFocused()
     .then((focused) => { openControlPanel(focused.id) })
     .catch(() => { openControlPanel() })
@@ -1973,7 +1855,7 @@ async function openInFrontOfUser(
   return { url: parsed.href, tabId, pinned: pin }
 }
 
-/** Stop the running turn of the worker's session. */
+/** 停掉 worker 会话里正在跑的轮次。 */
 async function cancelSession(): Promise<string> {  const sessionId = control.id
   if (sessionId === null) {
     throw new Error(getUiLocale() === 'zh'
@@ -1985,7 +1867,7 @@ async function cancelSession(): Promise<string> {  const sessionId = control.id
   return sessionId
 }
 
-// ---- Tool dispatch ----
+// ---- 工具派发 ----
 
 export function answerOutcome(answer: ToolAnswer): ActivityEntry['state'] {
   if (answer.ok) return 'done'
@@ -1995,52 +1877,44 @@ export function answerOutcome(answer: ToolAnswer): ActivityEntry['state'] {
 }
 
 /**
- * How much access one browser operation runs with.
+ * 一次浏览器操作带着多大的权限跑。
  *
- * `unrestricted` skips every approval prompt. The bridge path grants it only
- * when the user enabled the global switch; a typed command always has it,
- * because typing the command is itself the user's gesture.
+ * `unrestricted` 会跳过所有审批提示。bridge 那条路只在用户开了全局开关时才给；键盘输入的命令
+ * 永远有，因为敲下这条命令本身就是用户的手势。
  */
 type ToolAccessMode = 'prompt' | 'unrestricted'
 
-/** One browser operation, whoever asked for it. */
+/** 一次浏览器操作，不管是谁发起的。 */
 interface ToolRun {
   call: ToolCall
-  /** Withdraws the operation before it reaches the page. */
+  /** 在操作到页面之前把它撤回。 */
   controller: AbortController
-  /** Origin of the request: a model step, or the user's own typed command. */
+  /** 请求的来源：一次模型步骤，或者用户自己敲的命令。 */
   kind: ActivityEntry['kind']
   access: ToolAccessMode
 }
 
 /**
- * Describe one image the snapshot numbered, and check the answer against the page.
+ * 描述快照编号里的一张图片，再拿答案跟页面对一遍。
  *
- * This is the only place recognition is started, and it starts on demand: one
- * request for the one image that was asked about. Recognition costs a request per
- * image and a page can hold dozens, so the rule is scheduling rather than brute
- * force — and an image whose answer is already cached costs nothing at all.
+ * 启动识别的地方只有这里，而且是按需启动：问到哪张图才为哪张图发请求。识别一张图要花一次
+ * 请求，一个页面却能装几十张，所以这里的规矩是排一下就够，不必蛮干——而答案已经缓存的图片
+ * 一分钱不花。
  *
- * @param call - the tool call, carrying the image index.
- * @param tab - the affinity-selected tab.
- * @param sharePageContent - the user's page-content policy.
- * @param signal - bridge lifetime.
- * @returns the tool answer: the description with its cross-check, or why not.
+ * @param call - 工具调用，带着图片 index。
+ * @param tab - affinity 选中的 tab。
+ * @param sharePageContent - 用户的页面内容策略。
+ * @param signal - bridge 的生命周期。
+ * @returns 工具答案：交叉校验过的描述，或者描述不了的原因。
  */
 async function describeImage(
   call: ToolCall,
   tab: Pick<chrome.tabs.Tab, 'id'>,
-  sharePageContent: 'ask' | 'auto' | 'off',
   signal: AbortSignal,
 ): Promise<ToolAnswer> {
-  // An image is page content and its bytes leave the machine, so the switch that
-  // governs reading the page governs describing its images too.
-  if (sharePageContent === 'off') {
-    return {
-      ok: false,
-      error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' },
-    }
-  }
+  // 图片就是页面内容，字节要离开这台机器。这里原先还有一条 `'off'` 的拒绝分支，
+  // 但那一档已经不存在了（见 `Settings.sharePageContent`）—— 而它当年其实也不生效：
+  // 出厂即开的 `unrestrictedBrowserAccess` 会把这一档盖成 `'auto'`。
   const visionService = vision()
   if (settings.visionTier === 'off') {
     return {
@@ -2052,8 +1926,7 @@ async function describeImage(
     }
   }
   if (!visionService.canRecognize()) {
-    // The desktop knows why it cannot recognize images and says so in the
-    // handshake; without carrying it through, this is a dead end for the reader.
+    // 桌面端知道它为什么识别不了，也写在握手里了；不把它带出来，读者面前就是死路一条。
     const hint = bridgePolicy?.imageRecognitionHint
     return {
       ok: false,
@@ -2064,10 +1937,9 @@ async function describeImage(
       },
     }
   }
-  // Nothing is coerced here, on purpose. `Number(null)` is 0 and `Number('')` is 0,
-  // so accepting anything number-ish would turn `index: null` into "describe the
-  // first image" — quietly describing the wrong picture. The tool-dispatch path
-  // already refuses a non-integer index, and this path answers the same tool.
+  // 这里刻意不做任何强制转换。`Number(null)` 是 0，`Number('')` 也是 0，所以只要放宽到"像数字
+  // 就收"，`index: null` 就变成"描述第一张图片"——悄没声地描述错的那张图。工具派发那条路已经
+  // 拒绝非整数 index，而这条路回答的是同一个工具。
   const index = call.args.index
   if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) {
     return {
@@ -2078,10 +1950,9 @@ async function describeImage(
   if (tab.id === undefined) {
     return { ok: false, error: { code: 'no-active-tab', message: 'No active tab is available for browser operations.' } }
   }
-  // Element indices are a per-frame namespace, so the frame the snapshot showed
-  // the image under is part of addressing it, not an optional refinement. An
-  // unusable value is refused rather than defaulted, because defaulting describes
-  // whatever frame 0 happens to hold instead of the one the model meant.
+  // 元素 index 是按 frame 各自编号的，所以图片显示在哪个 frame 下，属于怎么找到它的一部分，
+  // 而不是可选的精修。给不出可用的值就拒绝，不取默认值——取默认值描述的是 frame 0 恰好有的
+  // 东西，不是模型指的那个。
   const rawFrame = call.args.frame
   const frameId = rawFrame === undefined ? 0 : rawFrame
   if (typeof frameId !== 'number' || !Number.isSafeInteger(frameId) || frameId < 0) {
@@ -2094,11 +1965,9 @@ async function describeImage(
   if (!resolved.ok) return resolved
   const image = resolved.target
 
-  // Bytes from the extension first, because only it carries the user's login
-  // state; the URL is the fallback for what its own fetch cannot reach. The cache is
-  // consulted by identity before any of that, so asking again about an image that is
-  // already described does not download it — a cost that appeared the moment the
-  // manifest stopped refusing every real host.
+  // 优先要扩展取来的字节，因为只有它带着用户的登录状态；URL 是自己的 fetch 够不着时的兜底。
+  // 缓存排在这一切之前，按 identity 查，所以再问一张描述过的图片不会重新下载——这笔成本是
+  // 从 manifest 不再把每个真实主机都拦下来的那一刻起出现的。
   const alreadyAnswered = visionService.descriptionOf(image.identity) !== undefined
   const chosen = await chooseImageSource(image.src, alreadyAnswered)
   const source = chosen.source
@@ -2122,22 +1991,19 @@ async function describeImage(
 }
 
 /**
- * Run one browser operation against the affinity-selected tab.
+ * 在 affinity 选中的 tab 上跑一次浏览器操作。
  *
- * This is the single dispatch path: a bridge `tool.call` frame and a typed
- * command differ only in the {@link ToolRun} they build, so tab affinity, frame
- * validation, protected-page refusal, and every guard inside `dispatchToolCall`
- * apply to both, and neither can drift from the other.
+ * 派发路径只有这一条：bridge 来的 `tool.call` 帧和键盘敲的命令，差别只在于各自构建的
+ * {@link ToolRun}，所以 tab affinity、frame 校验、受保护页面的拒绝，以及 `dispatchToolCall`
+ * 里的每一道守卫对两者同样有效，谁也不会跟另一边跑偏。
  */
 async function executeToolCall(run: ToolRun): Promise<ToolAnswer> {
   const { call, controller, access } = run
   const unrestricted = access === 'unrestricted'
   control.addStep(call.id, call.name, activitySummary(call, { ok: true }))
   if (run.kind === 'command') {
-    // A typed command never waits for an approval, so it is running the moment
-    // it is dispatched. A model call reaches `running` through its first
-    // activity record instead, which for a gated call is written as the
-    // approval prompt opens.
+    // 键盘敲的命令从不等待审批，派发出去就是在跑。模型调用则是靠它的第一条活动记录走到
+    // `running`；对一次要走门控的调用来说，那条记录是在审批提示弹出来的时候写下的。
     control.startStep(call.id)
   }
   const authorize = (prompt: ApprovalPrompt): Promise<ApprovalAuthorization> => {
@@ -2177,10 +2043,10 @@ async function executeToolCall(run: ToolRun): Promise<ToolAnswer> {
   }
   const target = await resolveToolTab()
   if ('ok' in target) return target
-  // Image description is its own dispatch: it needs the resolved tab, the page
-  // content policy and the vision pipeline, not a page action.
+  // 图片描述另走一条派发：它要的是解析出来的 tab、页面内容策略和视觉流水线，
+  // 而不是一次页面操作。
   if (call.name === 'browser_describe_image') {
-    return await describeImage(call, target, sharePageContent, controller.signal)
+    return await describeImage(call, target, controller.signal)
   }
   return dispatchToolCall(
     call,
@@ -2195,21 +2061,18 @@ async function executeToolCall(run: ToolRun): Promise<ToolAnswer> {
   )
 }
 
-/** Route one tool.call frame to the user-approved controlled tab. */
+/** 把 tool.call 帧送到用户批准的那个受控 tab 上。 */
 function routeToolCall(call: ToolCall): void {
   const socket = bridge
   if (socket === null) return
-  // The model is about to drive the browser, so put the panel where the user can
-  // watch it happen. This is the one place that fires for every browser action,
-  // including the ones that need no approval.
+  // 模型马上要驱动浏览器，先把面板放到用户看得见的地方。每一次浏览器操作都会走到这里，
+  // 唯一的一处，不需要审批的操作也算。
   autoOpenPanel()
-  // A frame carrying an id already in the map replaces that entry, and the replaced
-  // call's own `result`/`fail` then return early at the identity check below — so its
-  // one-shot `settle()` would never fire and `cancelAllToolCalls()` could no longer
-  // reach it either, because it is not the map's occupant any more. `settled` is what
-  // a revocation barrier awaits, so an unsettled orphan hangs
-  // `revokeUnrestrictedAccess()` forever and the user's "off" never reaches storage.
-  // Settling here is safe: the promise is one-shot and the call is being abandoned.
+  // 帧带来的 id 如果已经在 map 里，就会替换掉那个条目；被替换的调用随后在下面的身份检查处
+  // 提前返回——它一次性的 `settle()` 于是永远不触发，`cancelAllToolCalls()` 也再也够不着它，
+  // 因为它已经不是 map 的占用者了。`settled` 正是撤销屏障等的东西，所以一个没结算的孤儿会
+  // 永远挂着 `revokeUnrestrictedAccess()`，用户按下的"关"永远传不到存储。
+  // 在这里结算它是安全的：这个 promise 是一次性的，而这次调用本来就要被放弃。
   const superseded = activeToolCalls.get(call.id)
   if (superseded !== undefined) {
     superseded.controller.abort()
@@ -2265,12 +2128,11 @@ function routeToolCall(call: ToolCall): void {
 }
 
 /**
- * Refuse a typed command before anything is dispatched.
+ * 什么都还没派发之前，先把键盘命令挡下来。
  *
- * Two calls the desktop model makes under its own policy are hard guardrails
- * for a typed command: an unknown name has no call shape to validate, and
- * closing a tab destroys something the user may not have meant to name, so it
- * needs the explicit argument rather than an implied intent.
+ * 桌面模型照自己策略会做的两种调用，放到键盘命令上就是硬护栏：未知名字没有可校验的调用形状；
+ * 关 tab 会毁掉一个用户可能并不是有意指名的东西，所以它要的是那个显式参数，
+ * 而不是一个隐含的意图。
  */
 function rejectTypedCommand(call: ToolCall): ToolAnswer | undefined {
   if (!BROWSER_TOOL_NAMES.includes(call.name)) {
@@ -2296,19 +2158,18 @@ function rejectTypedCommand(call: ToolCall): ToolAnswer | undefined {
 }
 
 /**
- * Execute one `browser_*` command the user typed.
+ * 跑一条用户敲进来的 `browser_*` 命令。
  *
- * The desktop app is not involved: the command runs through the same dispatch
- * path as a model call, but with the access the unrestricted switch would grant
- * so it never opens an approval prompt. Arguments are used exactly as typed.
+ * 跟桌面应用无关：它走的是和模型调用一样的派发路径，但权限按不受限开关给，
+ * 所以永远不弹审批提示。参数完全按敲进来的原样用。
  */
 async function runTypedCommand(name: string, args: Record<string, unknown>): Promise<ToolAnswer> {
   const call: ToolCall = { id: crypto.randomUUID(), name, args }
   const controller = new AbortController()
   const rejection = rejectTypedCommand(call)
   const summary = activitySummary(call, { ok: true })
-  // The pending row is what shows "you asked for this" before any work starts,
-  // and it is also the row that mirrors the command's outcome onto the timeline.
+  // 这条 pending 行让"这是你要求的"在干活之前就显示出来，同时也是把命令结果镜像到时间线上的
+  // 那一行。
   recordActivity({ id: call.id, kind: 'command', name: call.name, summary, origin: null, state: 'pending' })
   let answer: ToolAnswer
   if (rejection !== undefined) {
@@ -2317,8 +2178,7 @@ async function runTypedCommand(name: string, args: Record<string, unknown>): Pro
     try {
       answer = await executeToolCall({ call, controller, kind: 'command', access: 'unrestricted' })
     } catch (error: unknown) {
-      // A dispatch that threw still has a caller waiting and a row to settle;
-      // its text is the same one the model would have been handed.
+      // 派发时抛了异常，也还有调用方在等、有一行要结算；文本与交给模型的那段一样。
       answer = { ok: false, error: { code: 'internal', message: errorText(error) } }
     }
   }
@@ -2337,15 +2197,14 @@ function cancelToolCall(id: string): void {
   activeToolCalls.get(id)?.controller.abort()
 }
 
-/** Calls a settings write is waiting for before revoking unrestricted access. */
+/** 撤销不受限访问前，一次设置写入要等的那些调用。 */
 const revocationBarrier = new Set<ActiveToolCall>()
 
 /**
- * Settle one call when its work is finished.
+ * 一次调用干完活时结算它。
  *
- * Returns whether the call can leave the active map. During a revocation the
- * call stays mapped until the barrier has observed it, so a settings write can
- * never be persisted while an already-approved operation is still running.
+ * 返回这次调用能不能离开活动 map。撤销期间，调用会一直留在 map 里，直到屏障看到它，
+ * 所以一次已经批准的操作还在跑的时候，设置写入绝不可能落盘。
  */
 function settleOnCompletion(call: ActiveToolCall): boolean {
   call.settle()
@@ -2353,13 +2212,11 @@ function settleOnCompletion(call: ActiveToolCall): boolean {
 }
 
 /**
- * Abandon every in-flight tool call, because the bridge is gone.
+ * bridge 没了，把所有还在路上的工具调用都放弃掉。
  *
- * Each call is **settled** before the map is emptied, and that is not optional:
- * `settled` is what a revocation barrier awaits, so clearing the map without
- * resolving it would leave `revokeUnrestrictedAccess()` waiting forever and the
- * safety switch would never be persisted. (The settle functions are one-shot, so
- * a later `result()`/`fail()` for the same call is harmless.)
+ * 每一次调用都要在 map 被清空之前**结算**，这不是可选项：`settled` 正是撤销屏障在等的东西，
+ * 不结算就清空 map，`revokeUnrestrictedAccess()` 会永远等下去，安全开关也永远落不了盘。
+ * （结算函数是一次性的，所以之后对同一次调用再调 `result()`/`fail()` 没关系。）
  */
 function cancelAllToolCalls(): void {
   for (const call of activeToolCalls.values()) {
@@ -2370,13 +2227,10 @@ function cancelAllToolCalls(): void {
 }
 
 /**
- * Switch unrestricted browser control off, for real.
+ * 真的把不受限浏览器控制关掉。
  *
- * The global switch is a safety boundary, so turning it off must not leave a
- * call that captured the grant still running against the page. Calls that have
- * not dispatched their page action are cancelled outright; an operation already
- * in flight cannot be withdrawn, so the settings write waits for it to settle
- * before it is persisted.
+ * 全局开关是一道安全边界，关它的时候，绝不能留下一个已经拿到授权、还在对着页面跑的调用。
+ * 还没派发页面操作的调用直接取消；已经在路上的操作收不回来，所以设置写入要等它结算完才落盘。
  */
 async function revokeUnrestrictedAccess(): Promise<void> {
   const affected = [...activeToolCalls.values()].filter((call) => call.unrestricted)
@@ -2396,30 +2250,28 @@ async function revokeUnrestrictedAccess(): Promise<void> {
   }
 }
 
-// ---- Content script messages ----
+// ---- content script 消息 ----
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (typeof message !== 'object' || message === null) return
   if (sender.id !== chrome.runtime.id) return
   if (sender.tab?.id === undefined) return
   if ((message as { type?: unknown }).type !== 'DSH_CONTENT_READY') return
-  // navigation.ts also listens for this frame-ready announcement; only this
-  // listener answers it, telling a fresh document that it may accept actions.
+  // navigation.ts 也在听这个 frame 就绪的宣告；只有这个 listener 会回应，
+  // 告诉新文档它已经可以接受操作了。
   sendResponse({ ready: true })
 })
 
-// ---- Control strip ports ----
+// ---- 控制条 port ----
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== CONTROL_PORT_NAME) return
   controlPorts.add(port)
   armBridgeKeepalive()
   void settingsReady.then(() => {
-    // Opening a panel is the user saying they mean to use this browser, so it is
-    // the right moment to take the bridge slot back from another profile that
-    // holds it. It also covers every route into the panel — the toolbar icon,
-    // the browser's keyboard shortcut, and an automatic open — where a toolbar
-    // click listener would only cover one of them.
+    // 打开面板，就是用户在说他们打算用这个浏览器，所以这正是从另一个占着槽位的 profile 手里
+    // 把 bridge 抢回来的时机。通往面板的每条路都会到这里——工具栏图标、浏览器快捷键、
+    // 自动打开——而一个工具栏点击 listener 只覆盖得了其中一条。
     reclaimBridgeIfReplaced()
     if (bridge !== null && bridge.state !== 'stopped') return
     void startBridge()
@@ -2427,7 +2279,7 @@ chrome.runtime.onConnect.addListener((port) => {
   try {
     port.postMessage({ type: 'state', state: controlState() })
   } catch {
-    // The view closed before its first render.
+    // 视图还没渲染第一次就被关掉了。
   }
   for (const request of approvals.pendingRequests()) clearApprovalNotification(request.id)
   syncBadge()
@@ -2440,7 +2292,7 @@ chrome.runtime.onConnect.addListener((port) => {
           try {
             port.postMessage({ type: 'state', state: controlState() })
           } catch {
-            // The view closed.
+            // 视图被关掉了。
           }
         })
         break
@@ -2461,10 +2313,9 @@ chrome.runtime.onConnect.addListener((port) => {
         break
       }
       case 'bridge.reclaim': {
-        // The slot is claimed by dialling again, so this is the same entry point
-        // every other reconnect uses — `startBridge` restarts the client, which
-        // clears the replaced latch. A fresh start also makes this idempotent if
-        // the user presses the button twice.
+        // 拨一次号就把槽位认领回来了，所以这里走的和其他重连是同一个入口——
+        // `startBridge` 会重启客户端，顺带清掉"被顶替"那个闩锁。每次都全新启动，
+        // 用户连按两下按钮也是幂等的。
         void startBridge()
         break
       }
@@ -2473,11 +2324,10 @@ chrome.runtime.onConnect.addListener((port) => {
         if (typeof decision.revision !== 'number' || !isTabAffinityDecision(decision.decision)) break
         if (!affinity.decide(decision.decision, decision.revision)) break
         persistTabAffinity()
-        // "Don't ask again" is a preference, not a per-switch answer: write the
-        // equivalent mode to settings so it survives an MV3 worker restart, a
-        // browser restart, and the next conversation. `follow` re-raises the
-        // prompt by design, so only `keep` is promoted. The write is queued
-        // behind any save already in flight, which is why it is fire-and-forget.
+        // "别再问了"是偏好，不是对某一次切换的答复：把等价的模式写进设置，它才能挺过
+        // MV3 worker 重启、浏览器重启和下一个对话。`follow` 按设计还要再弹提示，
+        // 所以只有 `keep` 会被提升成偏好。这次写入排在任何已经在路上的保存后面，
+        // 所以它 fire-and-forget。
         if (decision.decision === 'keep-always' && settings.tabSwitch !== 'keep') {
           void persistSettings({ tabSwitch: 'keep' }, false).catch(() => {})
         }
@@ -2488,9 +2338,8 @@ chrome.runtime.onConnect.addListener((port) => {
         const rebind = message as { id?: unknown }
         if (typeof rebind.id !== 'string') break
         const requestId = rebind.id
-        // The deadline owns the outcome: the timer both answers the strip and
-        // aborts the query, so a slow tab lookup can never move the binding
-        // after the user has already been told the attempt failed.
+        // 截止时间说了算：定时器一边答复控制条，一边中止这次查询，
+        // 慢吞吞的 tab 查询绝不可能在用户已经被告知失败之后才动绑定。
         const controller = new AbortController()
         let answered = false
         let timer: ReturnType<typeof setTimeout> | undefined
@@ -2500,7 +2349,7 @@ chrome.runtime.onConnect.addListener((port) => {
           if (timer !== undefined) clearTimeout(timer)
           try {
             port.postMessage(result)
-          } catch { /* the view closed */ }
+          } catch { /* 视图被关掉了 */ }
         }
         timer = setTimeout(() => {
           controller.abort()
@@ -2520,8 +2369,8 @@ chrome.runtime.onConnect.addListener((port) => {
         break
       }
       case 'session.create': {
-        // The page may create its session ahead of the first prompt; the reply
-        // id is optional because the id also arrives through `state.session`.
+        // 页面可能在第一条提示之前就把会话建出来；回复里的 id 是可选的，
+        // 因为 id 也会从 `state.session` 过来。
         const create = message as { id?: unknown }
         const requestId = typeof create.id === 'string' ? create.id : ''
         void ensureSession().then(
@@ -2574,8 +2423,7 @@ chrome.runtime.onConnect.addListener((port) => {
         }
         void runTypedCommand(command.name, args).then(
           (answer) => {
-            // The failure text is the same one the model would have been given,
-            // so a typed command and a model call disagree about nothing.
+            // 失败文本和交给模型的那段一模一样，所以键盘命令和模型调用之间不会有分歧。
             if (answer.ok) {
               replyToPort(port, { type: 'session.result', id: requestId, ok: true, result: answer.result })
               return
@@ -2609,29 +2457,18 @@ chrome.runtime.onConnect.addListener((port) => {
         const select = message as { id?: unknown; scope?: unknown; sessionId?: unknown; follow?: unknown }
         if (typeof select.id !== 'string') break
         const requestId = select.id
-        const scope: SessionScope = select.scope === 'pinned'
-          ? 'pinned'
+        const scope: SessionScope = select.scope === 'last'
+          ? 'last'
           : select.scope === 'workspace' ? 'workspace' : 'fresh'
         const sessionId = typeof select.sessionId === 'string' && select.sessionId.trim() !== ''
           ? select.sessionId.trim()
           : null
         const follow = select.follow === true
-        if (scope === 'pinned' && sessionId === null) {
-          replyToPort(port, {
-            type: 'session.result',
-            id: requestId,
-            ok: false,
-            error: getUiLocale() === 'zh' ? '请先选择一个对话' : 'Choose a conversation first.',
-          })
-          break
-        }
-        void selectSessionScope(scope, sessionId)
-          // Asked for after the binding moved, so the follower streams the
-          // conversation the panel is now showing rather than the previous one.
-          // Deliberately not awaited before the reply: the switch itself is a local
-          // change that has already happened, and holding the acknowledgement behind a
-          // round trip would make a slow bridge look like a picker that did nothing.
-          // `startFollowingSession` never rejects.
+        void selectSessionScope(scope)
+          // 等绑定挪好之后再要求跟随，跟的才是面板现在显示的那个对话，而不是上一个。
+          // 刻意不在回复前 await：切换本身是已经发生的本地变化，而把确认卡在一次往返之后，
+          // 会让慢吞吞的 bridge 看起来像个什么都没做的选择器。
+          // `startFollowingSession` 永不 reject。
           .then(() => {
             if (follow && sessionId !== null) void startFollowingSession(sessionId)
           })
@@ -2665,7 +2502,7 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => {
     controlPorts.delete(port)
     if (controlPorts.size === 0) {
-      // No visible view can answer now, so pending approvals become notifications.
+      // 已经没有可见的视图能作答了，待处理的审批改成发通知。
       approvals.notifyPending()
     }
   })
@@ -2683,7 +2520,7 @@ async function handleSettingsUpdate(
     try {
       port.postMessage(result)
     } catch {
-      // The view closed before it could read the result.
+      // 结果还没送到，视图就被关掉了。
     }
   }
   try {
@@ -2691,30 +2528,25 @@ async function handleSettingsUpdate(
     const previous = { bridgeUrl: settings.bridgeUrl, token: settings.token }
     const revokesUnrestricted = settings.unrestrictedBrowserAccess && next.unrestrictedBrowserAccess === false
     if (revokesUnrestricted) {
-      // Revocation is a barrier, not a flag flip: stop every call that captured
-      // the grant, then wait for one already dispatched to the page to settle
-      // before the restrictive setting is written.
+      // 撤销是一道屏障，不是翻个标志位：先停掉每个已经拿到授权的调用，再等一个已经派发到
+      // 页面的操作结算，然后才把限制性的设置写下去。
       //
-      // The in-memory flag is cleared *first*, because the barrier can be waiting
-      // on an approval for up to two minutes and `routeToolCall` stamps each new
-      // call from that flag. Updating it only inside `persistSettings` (after the
-      // await) would let a call arriving during the barrier still run unprompted —
-      // which is precisely the window this barrier exists to close.
+      // 内存里的标志*先*清掉，因为屏障可能为一个审批等上两分钟，而 `routeToolCall` 会拿这个
+      // 标志给每个新调用盖章。只在 `persistSettings` 内部（await 之后）改它，会让屏障期间
+      // 到达的调用照样不经提示就跑——而那正是这道屏障存在要关上的窗口。
       settings.unrestrictedBrowserAccess = false
       await revokeUnrestrictedAccess()
     }
     await persistSettings(next)
-    // A tab-switch preference takes effect at once: waiting for the next switch
-    // would leave a handoff prompt on screen for a question the user just
-    // answered in settings.
+    // tab 切换偏好立即生效：拖到下一次切换才生效，会让用户刚在设置里答过的问题
+    // 把交接提示继续留在屏幕上。
     if (affinity.setSwitchMode(settings.tabSwitch)) {
       persistTabAffinity()
-      // Adopting the active tab changes the target, so re-evaluate it now.
+      // 采用活动 tab 会换掉目标，所以现在就重算一次。
       await syncActiveTab()
     }
-    // Only a connection setting restarts the socket. Whether the extension
-    // connects at all is not a choice: installing it is the choice, so there is
-    // no switch to get out of step with.
+    // 只有连接设置才重启 socket。连不连根本不是可选项：装上它就是那个选择，
+    // 所以没有哪个开关会跟它失步。
     const connectionChanged = previous.bridgeUrl !== settings.bridgeUrl
       || previous.token !== settings.token
     if (connectionChanged) {
@@ -2738,8 +2570,7 @@ chrome.notifications.onClicked.addListener((notificationId) => {
   }
   if (!notificationId.startsWith(APPROVAL_NOTIFICATION_PREFIX)) return
   clearApprovalNotification(notificationId.slice(APPROVAL_NOTIFICATION_PREFIX.length))
-  // A notification click is an extension user gesture, which is what the
-  // side-panel and sidebar openers require.
+  // 点通知是扩展层面的用户手势，而侧边面板和侧边栏的打开器要的正是手势。
   openControlPanel()
 })
 
@@ -2753,14 +2584,13 @@ chrome.notifications.onButtonClicked.addListener((notificationId) => {
   openControlPanel()
 })
 
-// ---- Tab affinity ----
+// ---- tab affinity ----
 
 chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
   void affinityReady.then(() => {
     const activationRevision = focusedWindow.acceptActivation(windowId)
     if (activationRevision === null) return
-    // Mark the switch before awaiting metadata so an already-running trusted
-    // action cannot slip through the handoff boundary.
+    // 等元数据之前先把这次切换标上，一个正在跑的受信任操作就溜不过交接边界。
     observeActiveSummary({ tabId, windowId, title: '', url: '' })
     return chrome.tabs.get(tabId).then((tab) => {
       if (!focusedWindow.isCurrent(activationRevision)) return
@@ -2780,9 +2610,8 @@ chrome.tabs.onUpdated.addListener((tabId, _changeInfo, tab) => {
 
 chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
   void affinityReady.then(() => {
-    // onReplaced is an identity swap (for example prerender activation), not
-    // a close or user-visible switch. Transfer the id synchronously so tool
-    // resolution never observes the removed target.
+    // onReplaced 是身份替换（比如 prerender 激活），不是关闭，也不是用户看得见的切换。
+    // 同步把这个 id 搬过去，工具解析就永远不会看到已经移除的目标。
     if (!affinity.replaceTab(removedTabId, addedTabId)) return
     resetTabSnapshot(removedTabId)
     resetTabSnapshot(addedTabId)
@@ -2796,10 +2625,8 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  // Drop the snapshot baseline unconditionally: it is keyed by tab id and would
-  // otherwise keep one entry per tab ever snapshotted for the life of the worker.
-  // Clearing it before the affinity check matters because the tab is gone whether
-  // or not it was the controlled one.
+  // 无条件丢掉快照基线：它按 tab id 索引，不丢就会在 worker 的一生里为每个被快照过的 tab
+  // 留一条。要在 affinity 检查之前清掉，因为这个 tab 不管是不是受控的那个，都已经没了。
   resetTabSnapshot(tabId)
   void affinityReady.then(() => {
     if (!affinity.removeTab(tabId)) return
@@ -2814,31 +2641,27 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   void affinityReady.then(() => syncActiveTab(windowId))
 })
 
-// ---- Keepalive ----
+// ---- keepalive ----
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== BRIDGE_KEEPALIVE_ALARM) return
   if (bridge !== null && bridge.state === 'reconnecting') return
-  // A bridge that handed its slot to another browser stays stopped: reclaiming
-  // it on a heartbeat would make two open profiles evict each other forever.
-  // Reopening the control strip, saving the address, or restarting the browser
-  // is the user's way back.
+  // 把槽位让给别的浏览器的 bridge 就让它停着：心跳时抢回来，只会让两个开着的 profile
+  // 永远互相踢。重新打开控制条、保存地址，或者重启浏览器，才是用户的回头路。
   if (bridge?.wasReplaced === true) return
   void settingsReady.then(() => {
     if (bridge === null || bridge.state === 'stopped') void startBridge()
   })
 })
 
-// ---- Boot ----
+// ---- 启动 ----
 
 
 settingsReady = loadSettings()
   .then(() => {
-    // Sessions, recent-session hints, and per-conversation tabs belonged to the
-    // removed side panel; drop their leftovers instead of migrating them. The
-    // image cache is here for a different reason: it lived in the session store
-    // until it moved to `storage.local`, and the session copy is now dead weight
-    // that nothing will ever read back.
+    // 会话、最近会话提示、按对话分的 tab，都属于那个已经删掉的侧边面板；
+    // 它们的遗留物直接丢掉，不迁移。图片缓存列在这儿是另一个原因：它原本住在 session 存储里，
+    // 后来搬去了 `storage.local`，那份 session 副本现在永远不会被读回来。
     return Promise.resolve(chrome.storage.session.remove([
       LEGACY_RECENT_SESSION_STORAGE_KEY,
       'dshSessionContexts',
@@ -2849,18 +2672,16 @@ settingsReady = loadSettings()
     affinityReady = restoreTabAffinity()
     return affinityReady
   })
-  // A rejected affinity restore must not skip the step below. In one shared chain
-  // the rejection would land on the trailing catch and leave the cache empty with
-  // no trace of why — the failure and its own consequence would be inseparable.
+  // affinity 恢复被拒也绝不能跳过后面的步骤。在这样一条共享链上，这个 rejection 会落到末尾的
+  // catch，让缓存空着、也留不下任何原因——失败和它的后果就分不出来了。
   .catch(() => {})
-  // Descriptions are restored alongside the session state, so a worker that was
-  // stopped between two calls does not pay to describe the same image again.
+  // 描述和会话状态一起恢复，这样在两次调用之间被停掉的 worker，不必为描述同一张图片再付一次
+  // 钱。
   .then(() => restoreImageCache())
   .catch(() => {})
 
-// The extension connects as soon as it loads, without any switch to turn on:
-// installing it is the choice. Settings load first so a typed address is never
-// raced by auto-discovery.
+// 扩展一加载就连，没有开关要打开：装上它就是那个选择。先加载设置，
+// 这样手输的地址永远不会被自动发现抢先。
 void settingsReady.then(() => {
   armBridgeKeepalive()
   void startBridge()

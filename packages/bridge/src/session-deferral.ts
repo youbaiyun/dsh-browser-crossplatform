@@ -1,18 +1,15 @@
 /**
- * Defer real session creation until the first prompt.
+ * 把真正的 session 创建拖到第一次提示词。
  *
- * The panel calls `session.create` as soon as it connects, but a session that
- * is opened and never used should leave zero trace in the store/GUI. This
- * wrapper answers `session.create` with a provisional id (minted locally,
- * nothing persisted), serves `session.history` for provisional ids as empty,
- * and materializes the real session — same id, original create payload — on
- * the first `session.prompt` for that id. Abandoned provisional ids are
- * pruned after {@link PROVISIONAL_TTL_MS}.
+ * 面板一连上就会调 `session.create`，但一个被打开却从没用过的 session 不该在 store/GUI
+ * 里留下任何痕迹。这个包装层用一个临时 id（本地生成、什么都不持久化）应答
+ * `session.create`，对临时 id 的 `session.history` 返回空，并在该 id 第一次
+ * `session.prompt` 时把真实 session 建出来——id 不变，创建载荷还是原来那份。被丢下的
+ * 临时 id 会在 {@link PROVISIONAL_TTL_MS} 之后清掉。
  *
- * Provisional sessions also answer `session.models` from the host-wide
- * `session.modelCatalog` (via the Host API adapter, plus a pending switch)
- * and remember `session.selectModel` until materialization, so the composer can
- * show a model switcher before the first message.
+ * 临时 session 还会用宿主机全局的 `session.modelCatalog`（经 Host API 适配器，外加一个
+ * 待定的切换）应答 `session.models`，并记住 `session.selectModel` 直到它真正被创建，
+ * 这样输入区在第一条消息之前就能显示模型切换器。
  *
  * @module dsh-browser-crossplatform/src/session-deferral
  */
@@ -21,7 +18,7 @@ import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { BrowserHostApi, HostRpcCall, HostRpcResult } from './host-api.ts'
 import { isRecord } from './host-api.ts'
 
-/** Provisional entries older than this are dropped on the next create. */
+/** 比这个时长还老的临时条目，会在下一次 create 时丢掉。 */
 const PROVISIONAL_TTL_MS = 30 * 60_000
 
 interface ModelSelection {
@@ -31,25 +28,24 @@ interface ModelSelection {
 }
 
 interface ProvisionalEntry {
-  /** The original create payload, replayed at materialization (keeps cwd/workspaceId). */
+  /** 原始的 create 载荷，创建时重放（保留 cwd/workspaceId）。 */
   payload: Record<string, unknown>
   createdAt: number
-  /** Keep failed model selections retryable after the Host Session was created. */
+  /** 让失败的模型选择在 Host Session 建好之后还能重试。 */
   materialized?: boolean
-  /** Composer switch chosen before the session exists on the Host. */
+  /** session 在 Host 上还不存在时，输入区选定的那个切换。 */
   selection?: ModelSelection
 }
 
 /**
- * Wrap the gateway sessions API so `session.create` returns a provisional id
- * without creating anything; the real session materializes on the first
- * `session.prompt` for that id.
+ * 包装 gateway 的 sessions API，让 `session.create` 返回一个临时 id、什么都不真创建；
+ * 真正的 session 到该 id 第一次 `session.prompt` 时才建出来。
  *
- * @param api - Gateway API implementation.
- * @param enabled - Whether deferral is active; false returns the API untouched.
- * @param imageLimits - actual host image capability, used for the synthetic
- * empty history before the deferred Session exists.
- * @returns the original API when disabled, otherwise the wrapped API.
+ * @param api - Gateway API 实现。
+ * @param enabled - 是否启用延迟创建；为 false 时原样返回该 API。
+ * @param imageLimits - 宿主机实际的图片能力，用来在被延迟的 Session 存在之前构造那份空的
+ *   合成历史。
+ * @returns 禁用时返回原 API，否则返回包装后的 API。
  */
 export function withSessionDeferral(
   api: BrowserHostApi,
@@ -82,8 +78,8 @@ export function withSessionDeferral(
       if (!created.ok) return created
       entry.materialized = true
     }
-    // All prompts share this barrier, including those arriving during selection.
-    // A changed choice must also succeed before any queued prompt is admitted.
+    // 所有提示共用这道屏障，包括在选择还没做完时到达的那些。
+    // 改动过的选择也得先成功，排队的提示才会放行。
     while (entry.selection !== undefined) {
       const selection = entry.selection
       const selected = await api.call({
@@ -191,13 +187,13 @@ function selectionOf(payload: unknown): ModelSelection | undefined {
   }
 }
 
-/** Build a session.models-shaped answer from the host catalog for a provisional id. */
+/** 给一个临时 id 从宿主 catalog 拼出一份 session.models 形状的答案。 */
 async function provisionalModels(
   api: BrowserHostApi,
   entry: ProvisionalEntry,
   signal: AbortSignal,
 ): Promise<HostRpcResult> {
-  // Inner API (not the deferral wrapper): session.models → session/modelCatalog.
+  // 用内层 API（不是延迟包装器）：session.models → session/modelCatalog。
   const catalog = await api.call({
     rpcId: crypto.randomUUID(),
     method: 'session.models',

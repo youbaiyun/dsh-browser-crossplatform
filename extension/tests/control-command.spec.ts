@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 /**
- * Tests for the composer's input classifier.
+ * composer 输入分类器的测试。
  *
- * The classifier decides whether a typed line runs in the browser or is sent to
- * the model, so the cases that matter are the ambiguous ones: a bare word, a
- * sentence that starts with a tool name, a URL with a path, malformed JSON.
+ * 分类器决定一行输入是在浏览器里执行，还是发给
+ * 模型，所以真正要紧的是那些模棱两可的情形：一个裸词、一句
+ * 以工具名开头的句子、带路径的 URL、格式错误的 JSON。
  */
 
 import { describe, expect, it } from 'vitest'
@@ -53,12 +53,12 @@ describe('classifyInput', () => {
     expect(classifyInput('snapshot')).toMatchObject({ kind: 'command', name: 'browser_snapshot', args: {} })
     expect(classifyInput('tabs')).toMatchObject({ kind: 'command', name: 'browser_list_tabs', args: {} })
     expect(classifyInput('back')).toMatchObject({ kind: 'command', name: 'browser_back', args: {} })
-    // Case-insensitive on the verb, so `Click` works too.
+    // 动词不区分大小写，所以 `Click` 也可以。
     expect(classifyInput('Click index=7')).toMatchObject({ kind: 'command', name: 'browser_click', args: { index: 7 } })
   })
 
   it('fills in the arguments a tool implies', () => {
-    // A leading URL is the destination, and scroll defaults to a page down.
+    // 开头的 URL 就是目标，scroll 默认往下翻一页。
     expect(classifyInput('browser_navigate https://example.com/a?b=1')).toMatchObject({
       kind: 'command',
       name: 'browser_navigate',
@@ -97,15 +97,15 @@ describe('classifyInput', () => {
   })
 
   it('treats a single-label host as prose unless it is really a host', () => {
-    // `wiki` is a word; `localhost` and a bare IP are addresses people type.
+    // `wiki` 是一个词；`localhost` 和裸 IP 是人们会敲进去的地址。
     expect(classifyInput('wiki')).toMatchObject({ kind: 'prompt' })
     expect(classifyInput('localhost:8080')).toMatchObject({ kind: 'command', name: 'browser_navigate' })
     expect(classifyInput('127.0.0.1:3080')).toMatchObject({ kind: 'command', name: 'browser_navigate' })
   })
 
   it('keeps an explicit tool name a command even when the arguments are unreadable', () => {
-    // `browser_*` is unambiguous; the background validates the call and fails
-    // closed, which is a better answer than forwarding it to the model.
+    // `browser_*` 毫不含糊；后台会校验这次调用，
+    // 判不出来就失败关闭，这比把它转发给模型强。
     expect(classifyInput('browser_click oops')).toMatchObject({
       kind: 'command',
       name: 'browser_click',
@@ -114,8 +114,8 @@ describe('classifyInput', () => {
   })
 
   it('treats a shorthand with prose after it as a prompt', () => {
-    // `read` is also an ordinary English word; only a clean argument list makes
-    // it a command, so this stays with the model.
+    // `read` 也是个普通英文单词；只有干净的参数列表才让它成为
+    // 命令，所以这里还是交给模型。
     expect(classifyInput('read the docs please')).toMatchObject({ kind: 'prompt' })
     expect(classifyInput('read index=3')).toMatchObject({
       kind: 'command',
@@ -155,10 +155,10 @@ describe('tool surface', () => {
   })
 
   it('agrees with the registry the background actually dispatches', () => {
-    // The composer's list is imported from `src/background/tools.ts`, and the
-    // background rejects any name outside its own registry. A shorthand that
-    // points at a name the background does not know would be a dead command, so
-    // every alias is resolved back to a real tool here.
+    // composer 的列表是从 `src/background/tools.ts` 导入的，而
+    // 后台会拒掉任何不在自己注册表里的名字。指向后台不认识的
+    // 名字的简写就是一条死命令，所以
+    // 这里把每个别名都解析回真实的工具。
     for (const word of ['snapshot', 'read', 'text', 'click', 'type', 'fill', 'press', 'key', 'scroll', 'wait', 'tabs', 'back', 'forward', 'reload']) {
       const intent = classifyInput(word)
       expect(intent.kind, `shorthand "${word}" must resolve to a command`).toBe('command')
@@ -176,7 +176,7 @@ describe('@open directive', () => {
   it('parses the documented formula and fills in the defaults', () => {
     const parsed = parseOpenDirective('@open https://store.steampowered.com')
     expect(parsed?.url).toBe('https://store.steampowered.com/')
-    // Omitting every key leaves the documented defaults, not an empty object.
+    // 省略所有键得到的是文档里写的默认值，不是空对象。
     expect(parsed?.options).toEqual(OPEN_DEFAULTS)
   })
 
@@ -186,9 +186,9 @@ describe('@open directive', () => {
   })
 
   it('rejects a key it does not implement rather than accepting and ignoring it', () => {
-    // `verify` used to parse and then do nothing, which is worse than refusing:
-    // the user believes a guarantee they were never given. A parameter that
-    // appears to work but does nothing is worse than one that is refused.
+    // `verify` 以前会解析，然后什么都不做，这比直接拒绝更糟：
+    // 用户会以为自己拿到了一项从没得到的保证。一个
+    // 看起来有效却什么都不做的参数，比被拒绝的参数更糟。
     const parsed = parseOpenDirective('@open https://example.com verify=step')
     expect(parsed?.error?.kind).toBe('unknownKey')
     if (parsed?.error?.kind === 'unknownKey') expect(parsed.error.key).toBe('verify')
@@ -204,7 +204,7 @@ describe('@open directive', () => {
     if (intent.kind !== 'open') throw new Error('unreachable')
     expect(intent.url).toBe('https://example.com/')
     expect(intent.options.pace).toBe('fast')
-    // The echo is what the panel shows, so it is the cleaned original line.
+    // 回显是面板展示的东西，所以它就是清理后的原始行。
     expect(intent.echo).toBe('@open https://example.com pace=fast')
   })
 
@@ -216,10 +216,10 @@ describe('@open directive', () => {
   })
 
   it('reports a bad formula instead of quietly forwarding it', () => {
-    // A typo in an explicit directive is the user's problem to see, not prose to
-    // hand the model. The parser reports *why* rather than a sentence, so these
-    // assert on the reason; the wording is `strings.ts`'s business and is covered
-    // by the copy test.
+    // 显式指令里的拼写错误是用户自己该看见的问题，不是要交给
+    // 模型的散文。解析器报的是 *为什么*，不是一句话，所以这些
+    // 断言针对 reason；措辞归 `strings.ts`，由
+    // 文案测试覆盖。
     const cases: [string, OpenError['kind']][] = [
       ['@opne https://example.com', 'unknownDirective'],
       ['@open', 'missingUrl'],
@@ -238,9 +238,9 @@ describe('@open directive', () => {
   })
 
   it('never forwards a malformed directive to the model', () => {
-    // The reason a malformed directive is its own intent kind rather than a
-    // prompt: as a prompt, the complaint itself would have been transmitted as
-    // though the user had typed it as an instruction.
+    // 格式错误的指令之所以自成一类 intent 而不是当成
+    // prompt，原因在于：一旦当成 prompt，这条抱怨本身就会被原样透传，
+    // 就像用户把它当指令打出来一样。
     for (const input of ['@opne https://example.com', '@open', '@open javascript:alert(1)']) {
       const intent = classifyInput(input)
       expect(intent.kind, input).toBe('error')
@@ -248,20 +248,20 @@ describe('@open directive', () => {
   })
 
   it('shows the formula while the directive is still being typed', () => {
-    // Half-typed input is not a mistake yet, so it must not be reported as one.
-    // A bare `@open` is different: the directive is complete and the URL is
-    // genuinely missing, so that case is asserted above as an error.
+    // 输入打到一半还不算错，所以不能报成错误。
+    // 单独的 `@open` 就不一样：指令是完整的，URL
+    // 确实缺了，所以那种情况在上面被断言为错误。
     for (const partial of ['@', '@o', '@op', '@sho']) {
       const intent = classifyInput(partial)
       expect(intent.kind, partial).toBe('error')
-      // The distinction is carried by the error, not by its wording — the panel
-      // reads this flag to choose a hint over an alarm.
+      // 这个区分由错误自己承载，不由措辞承载——面板
+      // 读这个标志来决定给提示还是告警。
       if (intent.kind === 'error') expect(isSoftOpenError(intent.error), partial).toBe(true)
     }
   })
 
   it('is not confused by an @ that is not a directive', () => {
-    // An email handle or a stray @ is prose.
+    // 邮箱句柄、或者一个落单的 @，都算普通文本。
     for (const text of ['@', '@  spaced', 'mail me @ example.com', 'user@example.com']) {
       const parsed = parseOpenDirective(text)
       expect(parsed === undefined || parsed.error !== undefined, text).toBe(true)
@@ -269,7 +269,7 @@ describe('@open directive', () => {
   })
 
   it('rejects a non-http scheme before anything opens a tab', () => {
-    // `javascript:` and `file:` must never reach chrome.tabs.
+    // `javascript:` 和 `file:` 绝不能到达 chrome.tabs。
     for (const bad of ['@open javascript:alert(1)', '@open file:///C:/windows', '@open chrome://settings']) {
       const intent = classifyInput(bad)
       expect(intent.kind, bad).toBe('error')

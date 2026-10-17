@@ -1,172 +1,176 @@
 /**
- * Launching the user's browser so the extension can load.
+ * 启动用户的浏览器，好让扩展加载进来。
  *
- * Every other browser tool executes inside the extension, which means they all
- * need a browser that is already running — and until now the bridge had no way to
- * change that. With the browser closed there is no extension to connect, so the
- * tools failed with `bridge-closed` and the user got a dead end: "the browser is
- * off" is answerable only by starting it, and nothing on the desktop side could.
+ * 其它浏览器工具全都在扩展里跑，所以它们都需要有一个已经开着的浏览器——而在此之前
+ * bridge 对此无能为力。浏览器关着就没有扩展可连，这些工具于是统统以 `bridge-closed`
+ * 失败，用户卡在原地：“浏览器没开”只能靠把浏览器开起来解决，桌面这一侧什么都做不了。
  *
- * Two facts shape the design, both verified against the browsers on this
- * machine rather than assumed:
+ * 这个设计建立在两条事实上，它们都是在这台机器上对着浏览器实测出来的，不是猜的：
  *
- * 1. **A running browser ignores the launch.** Handing `chrome.exe` a flag while
- *    Chrome is already up just opens a window in the existing process; the flag
- *    is discarded. So when a browser is already running, say so instead of
- *    pretending to start something.
- * 2. **The extension cannot be injected into someone else's profile.** Since
- *    Chrome 137, branded Chrome builds removed `--load-extension` entirely
- *    (Chromium and Chrome for Testing still accept it), and even where it works
- *    it only lasts for that session — it is not installed. So the useful launch
- *    is an ordinary one, into the profile where the extension is *already*
- *    installed: the background worker comes back on its own and connects.
+ * 1. **浏览器已经在跑时，这次启动会被忽略。** Chrome 已经起来后再把标志交给
+ *    `chrome.exe`，只会在已有进程里开个窗口，标志被丢掉。所以浏览器本来就在运行时，
+ *    我们就如实说，而不是假装启动了什么。
+ * 2. **扩展塞不进别人的 profile。** 从 Chrome 137 起，品牌版 Chrome 构建彻底移除了
+ *    `--load-extension`（Chromium 和 Chrome for Testing 还收），而且就算它还能用，
+ *    也只在这一会话里有效——它并没有被装上。所以真正有用的启动是普通启动，进入那个
+ *    扩展*已经*装好的 profile：后台 worker 会自己回来连上。
  *
- * The honest consequence: the first time, the user installs the extension (store,
- * or "load unpacked" once). After that, a plain launch is enough and this module
- * makes it automatic. It does not — and cannot — install an extension for the
- * user, so it never claims to have.
+ * 老实说：第一次得用户自己装扩展（从商店装，或者“加载已解压的扩展程序”
+ * （load unpacked）走一遍）。之后普通启动就够了，本模块把这一步自动化。它不会——也
+ * 不可能——替用户装扩展，所以它从不说自己装上了。
  *
  * @module
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** One candidate executable and where the path came from. */
+/** 一个候选可执行文件，以及这个路径的出处。 */
 export interface BrowserCandidate {
-  /** Short id used in messages (`chrome`, `edge`, `brave`, `chromium`, `firefox`). */
+  /** 消息里用的简短 id（`chrome`、`edge`、`brave`、`chromium`、`firefox`）。 */
   id: string
-  /** Absolute path or bare command name. */
+  /** 绝对路径或裸命令名。 */
   path: string
-  /** True when the path exists (a bare command name is resolved by the OS). */
+  /** 路径存在时为 true（裸命令名交给操作系统解析）。 */
   exists: boolean
 }
 
 /**
- * Everything the launcher needs, resolved from plugin config.
+ * 启动器需要的全部输入，由插件配置解析而来。
  *
- * Paths are injectable so the whole decision surface is unit-testable without
- * starting a process or requiring a browser to be installed.
+ * 路径都可以注入，这样整个决策面都能进单元测试：不用真的启动进程，也不要求机器上
+ * 装了浏览器。
  */
 export interface LaunchDeps {
-  /** Explicit executable; when set, detection is skipped entirely. */
+  /** 显式指定的可执行文件；一旦设置就完全跳过探测。 */
   executablePath?: string
   /**
-   * Unpacked extension directory to load. Only used when it exists on disk —
-   * passing a stale path would have Chrome refuse the whole launch.
+   * 要加载的未打包扩展目录。只有它确实躺在磁盘上才会用——传一个过期的路径，Chrome
+   * 会拒绝整次启动。
    */
   extensionPath?: string
   /**
-   * Chrome/Chromium only: profile directory that carries the session the browser
-   * reuses. Required for `--load-extension` to take effect at all on 137+.
+   * 仅 Chrome/Chromium：浏览器复用会话所在的那个 profile 目录。137+ 上
+   * `--load-extension` 要生效就得有它。
    */
   userDataDir?: string
-  /** Extra command-line arguments appended verbatim. */
+  /** 原样追加的额外命令行参数。 */
   extraArgs?: readonly string[]
   /**
-   * Start without a visible window. Used by the e2e suite and by anyone driving
-   * the bridge on a machine with no display; a normal launch leaves it off.
+   * 不带可见窗口启动。e2e 套件以及任何在没有显示器的机器上驱动 bridge 的人会用它；
+   * 普通启动不会打开它。
    */
   headless?: boolean
-  /** How long to wait for the extension to connect; defaults to 25s. */
+  /** 等待扩展连上来的时长；默认 25 秒。 */
   timeoutMs?: number
-  /** Injected for tests. */
+  /** 为测试注入。 */
   exists?: (path: string) => boolean
-  /** Injected for tests. */
+  /** 为测试注入。 */
   spawnDetached?: (command: string, args: readonly string[]) => void
-  /** Injected for tests: the process listing `probeRunningBrowsers` reads. */
+  /** 为测试注入：`probeRunningBrowsers` 所读取的进程列表。 */
   processListing?: (platform: NodeJS.Platform) => Promise<{ name: string; commandLine: string }[] | undefined>
   /**
-   * Injected for tests: the executable of the user's *default* browser.
+   * 为测试注入：用户*默认*浏览器的可执行文件。
    *
-   * Preferred over detection, because the user asked to drive the browser they
-   * already use — a different Chromium means a different profile, with none of
-   * their sessions. Returns undefined when the platform does not record it.
+   * 它优先于自动探测：用户想驱动的本来就是他正在用的那个浏览器，换个 Chromium 就等于
+   * 换个 profile，里面没有他的任何 session；平台不记录这项时返回 undefined。
    */
   executableOfDefaultBrowser?: (platform: NodeJS.Platform) => string | undefined
   /**
-   * Injected for tests: which browsers already have this extension installed.
+   * 为测试注入：哪些浏览器已经装了这个扩展，以及看过哪些 profile。
    *
-   * Decides whether a launch can possibly work, and lets the message name the
-   * real situation ("it is not installed anywhere") instead of proposing steps
-   * that cannot help.
+   * 它决定这次启动有没有可能成功，也让消息说出实情（“在我们能读到的 profile 里它没
+   * 装”），而不是给一堆帮不上忙的步骤。
    */
-  browsersWithExtension?: (platform: NodeJS.Platform) => string[]
-  /** Injected for tests. */
+  extensionInstall?: (platform: NodeJS.Platform) => ExtensionInstallScan
+  /**
+   * 为测试注入：某个目录里的条目；读不到时为 undefined。
+   *
+   * profile 目录归浏览器自己管，不是一张固定列表——多出第四个 profile，`Profile 4+`
+   * 就存在了——所以这里靠枚举。
+   */
+  listDirectory?: (path: string) => string[] | undefined
+  /** 为测试注入。 */
   waitForConnection?: (timeoutMs: number) => Promise<boolean>
   /**
-   * Injected for tests: whether a browser is already running, and with which
-   * profile. Detecting this is what stops the bridge from "launching" a browser
-   * that is already up (which silently does nothing to the running instance).
+   * 为测试注入：浏览器是不是已经在运行、用的是哪个 profile。正因为有这项探测，bridge
+   * 才不会去“启动”一个本来就开着的浏览器（对已在运行的实例，那其实什么都没做）。
    */
   probeRunning?: (candidates: readonly BrowserCandidate[], wantedUserDataDir: string | undefined) => Promise<RunningBrowser[]>
-  /** Injected for tests; defaults to the real platform. */
+  /** 为测试注入；默认取真实平台。 */
   platform?: NodeJS.Platform
-  /** Injected for tests; defaults to `process.env`. */
+  /** 为测试注入；默认取 `process.env`。 */
   env?: NodeJS.ProcessEnv
   /**
-   * Injected for tests: whether the running browser has a visible window.
+   * 为测试注入：正在运行的浏览器有没有可见窗口。
    *
-   * A Chromium process outlives its windows — closing the last window can leave the
-   * process resident, and the extension keeps its socket open — so "connected" and
-   * "there is a window to act on" are different questions. Only a definite `false`
-   * is acted on; `undefined` means this platform could not be asked.
+   * Chromium 进程比它的窗口活得久——关掉最后一个窗口，进程可能还驻留，扩展的 socket
+   * 也还开着——所以“已连接”和“有一个能操作的窗口”是两回事。只有明确的 `false` 才会
+   * 被拿来行动；`undefined` 表示这个平台问不出来。
    */
   visibleWindow?: (candidates: readonly BrowserCandidate[]) => Promise<boolean | undefined>
 }
 
-/** A live browser process, as far as the probe can tell. */
+/** 一次探测所能断定的、还活着的浏览器进程。 */
 export interface RunningBrowser {
-  /** Detected id (`chrome`, `edge`, …), or `other` when it did not match a known path. */
+  /** 探测到的 id（`chrome`、`edge`、…）；不匹配任何已知路径时为 `other`。 */
   id: string
-  /** `--user-data-dir` value, or `''` for the platform's default profile. */
+  /** `--user-data-dir` 的值；使用平台默认 profile 时为 `''`。 */
   userDataDir: string
 }
 
-/** What one launch attempt ended as, for the tool result. */
+/** 一次启动尝试的最终结果，工具拿它当返回值。 */
 export interface LaunchOutcome {
-  /** Whether a browser process was actually started. */
+  /** 是否真的启动了一个浏览器进程。 */
   launched: boolean
-  /** Whether a browser the launch could use was found and targeted. */
+  /** 是否找到并选中了一个本次启动可用的浏览器。 */
   resolved: boolean
   connected: boolean
-  /** Human- and model-readable summary, always non-empty. */
+  /** 人和模型都能读的摘要，永不为空。 */
   message: string
   /**
-   * The extensions page for the browser in play, when the user has to act there.
+   * 必须去那个页面动手时，所涉浏览器的扩展页面。
    *
-   * Present exactly when the extension is not installed in any profile the bridge
-   * can see — the situation with no automatic way out. Carrying the address means
-   * neither the model nor the user has to work out which page to open; a reader
-   * who is told "install it" without a destination is the dead end this avoids.
+   * 它只在一种时候出现：bridge 能看到的所有 profile 里都没装这个扩展——也就是没有自动
+   * 出路的情形。带上地址，模型和用户就不必自己琢磨该打开哪个页面；只丢一句“去安装
+   * 它”却不给去处，正是这里要避免的死胡同。
    */
   installUrl?: string
 }
 
-/** The page where a browser can load or enable an extension. */
+/** 浏览器用来加载或启用扩展的那个页面。 */
 export function extensionsPageUrl(browserId: string): string {
   if (browserId === 'edge') return 'edge://extensions/'
-  // Chromium, Brave and Chrome all use Chrome's scheme.
+  // Chromium、Brave 和 Chrome 都用 Chrome 的 scheme。
   return 'chrome://extensions/'
 }
 
 /**
- * Directory name this extension installs under, used to check whether a profile
- * already has it.
+ * 本扩展安装后用的目录名，用来检查某个 profile 里装了没有。
  *
- * A copy of the first entry of `DEFAULT_EXTENSION_IDS`: this module must not import
- * the plugin entry (that would be a cycle), and `tests/extension-identity.spec.ts`
- * asserts the two agree with the manifest's `key`. Only the development id is useful
- * here — the directory is named after the id a *loaded* profile produced, and the
- * store assigns its own to a store install, which is not checked against a profile
- * directory by this function.
+ * 它是 `DEFAULT_EXTENSION_IDS` 的一份副本：本模块不能 import 插件入口（会形成循环），
+ * 而 `tests/extension-identity.spec.ts` 断言两者一致。两个 id 在这里都重要，因为同一个
+ * 构建有两个名字——开发加载被 manifest 的 `key` 钉死，商店拒绝这个 key 并自己分配一个，
+ * 安装就落在另一个目录名下。只探测第一个——这里原先就是这么做的——每一次商店安装都会被
+ * 读成“哪儿都没装”，用户于是被引上只有开发者才走得通的那条路。
  */
-const EXTENSION_DIRECTORY_NAME = 'kdhkdgfcinfkmogifamoapmheihhcjfk'
+export const EXTENSION_DIRECTORY_NAMES: readonly string[] = [
+  'kdhkdgfcinfkmogifamoapmheihhcjfk',
+  'agpipnjijkpomaannkijkilggoffdiaf',
+]
+
+/**
+ * 读不到浏览器自己的目录列表时，退回来探测这几个 profile。
+ *
+ * 每个 Chromium 浏览器都有这些，所以枚举不可用时它们是个有用的子集——空列表会什么都
+ * 不检查，然后对一台 profile 从没看过的浏览器报“没有安装”。
+ */
+const FALLBACK_PROFILE_NAMES = ['Default', 'Profile 1', 'Profile 2', 'Profile 3'] as const
 
 const DEFAULT_LAUNCH_TIMEOUT_MS = 25_000
 
-/** True only for an absolute `http:`/`https:` URL. */
+/** 仅对绝对的 `http:`/`https:` URL 为 true。 */
 export function isWebUrl(value: string): boolean {
   try {
     const parsed = new URL(value)
@@ -176,7 +180,7 @@ export function isWebUrl(value: string): boolean {
   }
 }
 
-/** A web address to open, trimmed, or undefined when it is not one. */
+/** 要去打开的网址（已去除首尾空白）；不是网址时为 undefined。 */
 export function webUrlOrUndefined(value: string | undefined): string | undefined {
   if (value === undefined) return undefined
   const trimmed = value.trim()
@@ -184,21 +188,19 @@ export function webUrlOrUndefined(value: string | undefined): string | undefined
 }
 
 /**
- * Arguments for one launch.
+ * 一次启动用的参数。
  *
- * A launch of the user's own browser is an *ordinary* launch: just the executable,
- * nothing else. No `--user-data-dir` (that would be a different profile — a
- * different browser from the user's point of view, with none of their tabs or
- * logins) and no `--load-extension` (an unpacked load lasts one session and
- * installs nothing, and since Chrome 137 a branded build ignores it anyway).
+ * 启动用户自己的浏览器就是一次*普通*启动：只给可执行文件，别的什么都不给。不带
+ * `--user-data-dir`（那会换到另一个 profile——在用户看来就是另一个浏览器，没有他的
+ * 标签页和登录），也不带 `--load-extension`（未打包加载只撑一个会话、什么都不安装，
+ * 而且从 Chrome 137 起品牌版构建根本不理会它）。
  *
- * The flags exist only for the one case that genuinely needs them: a launch into a
- * profile the caller named explicitly, which is how a development or test build
- * comes up. `extensionPath` is therefore ignored unless `userDataDir` is set.
+ * 这些标志只在一种情形下真有用：启动进调用方指定的 profile，开发和测试构建就是这么
+ * 起来的。所以除非设了 `userDataDir`，`extensionPath` 一律忽略。
  *
- * @param deps - extension dir, profile, extra args, headless.
- * @param url - a page to open; omit it and the browser opens its own new tab.
- * @returns the argument list.
+ * @param deps - 扩展目录、profile、额外参数、无头。
+ * @param url - 要打开的页面；省掉它，浏览器就打开自己的新标签页。
+ * @returns 参数列表。
  */
 export function buildLaunchArgs(
   deps: Pick<LaunchDeps, 'extensionPath' | 'userDataDir' | 'extraArgs' | 'headless'>,
@@ -209,30 +211,29 @@ export function buildLaunchArgs(
   if (namedProfile) {
     args.push(`--user-data-dir=${deps.userDataDir ?? ''}`)
   }
-  // The unpacked load only means anything inside a named profile.
+  // 未打包加载只在指定的 profile 里才有意义。
   const loadingExtension = namedProfile && deps.extensionPath !== undefined && deps.extensionPath !== ''
   if (loadingExtension) {
-    // Chromium honours the flag as-is; a branded Chrome build ignores it either
-    // way, so this only matters for Chromium/Chrome-for-Testing profiles.
+    // Chromium 原样接受这个标志；品牌版 Chrome 构建无论如何都会忽略它，所以这只对
+    // Chromium/Chrome for Testing 的 profile 有意义。
     args.push('--disable-features=DisableLoadExtensionCommandLineSwitch')
     args.push(`--load-extension=${deps.extensionPath ?? ''}`)
     args.push(`--disable-extensions-except=${deps.extensionPath ?? ''}`)
   }
   if (deps.headless === true) {
-    // `new` is the mode that still runs extensions; the legacy one does not.
+    // `new` 是仍会运行扩展的那个模式；旧模式不会。
     args.push('--headless=new')
   }
-  // A URL becomes a *command-line argument*, so it is treated as one: only a real
-  // http/https address is passed through, or a caller-supplied string like
-  // `--headless` would be read by the browser as a switch rather than as a page.
-  // No URL means the browser opens whatever it normally opens — the new tab page,
-  // or the restored session — and a placeholder is never substituted for that.
+  // URL 会变成*命令行参数*，所以这里就得按参数来对待：只放行真正的 http/https 地址，
+  // 否则调用方传进来的 `--headless` 这类字符串会被浏览器当成开关读，而不是当成页面。
+  // 没有 URL，就意味着让浏览器打开它平时打开的东西——新标签页，或者恢复的会话——
+  // 这个位置永远不会被塞进占位值。
   if (url !== undefined && url !== '' && isWebUrl(url)) args.push(url)
   for (const extra of deps.extraArgs ?? []) args.push(extra)
   return args
 }
 
-/** Well-known install locations per platform, most common first. */
+/** 各平台众所周知的安装位置，最常见的在前。 */
 export function browserCandidates(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -282,14 +283,14 @@ export function browserCandidates(
   }
 }
 
-/** Detection order: Chromium-family browsers first, Firefox (no side panel) last. */
+/** 检测顺序：Chromium 系浏览器在前，Firefox（没有侧边栏）在最后。 */
 const DETECTION_ORDER = ['chrome', 'edge', 'brave', 'chromium', 'firefox'] as const
 
 /**
- * Where a browser keeps its profiles, per platform.
+ * 各平台的浏览器把 profile 根目录放在哪。
  *
- * Used to answer the only question that decides whether starting a browser can
- * help: is this extension actually installed in it? A launch cannot install one.
+ * 用来回答那个唯一决定“启动浏览器有没有用”的问题：这个扩展到底装在它里面没有？
+ * 启动本身装不了扩展。
  */
 export function userDataRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): Record<string, string> {
   if (platform === 'win32') {
@@ -322,11 +323,10 @@ export function userDataRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv)
 }
 
 /**
- * Build a Windows profile path with backslashes, whatever platform builds it.
+ * 拼出一个带反斜杠的 Windows profile 路径，不管在哪个平台上拼。
  *
- * `join` uses the host separator, which would make the Windows layout depend on
- * where the test happened to run. These paths are always compared against
- * Windows-style values, so they are built as such.
+ * `join` 用的是宿主的分隔符，那样 Windows 路径长什么样就取决于测试恰好在哪台机器上跑。
+ * 这些路径始终要和 Windows 风格的值比较，所以一律按 Windows 风格拼。
  */
 function windowsPath(root: string, ...parts: string[]): string {
   if (root === '') return ''
@@ -334,30 +334,122 @@ function windowsPath(root: string, ...parts: string[]): string {
 }
 
 /**
- * Build a POSIX profile path with forward slashes, whatever platform builds it.
+ * 拼出一个带正斜杠的 POSIX profile 路径，不管在哪个平台上拼。
  *
- * The same reason as {@link windowsPath}: platform-dependent separators from the
- * host would change a macOS or Linux layout depending on where the caller runs.
+ * 理由和 {@link windowsPath} 一样：用宿主的分隔符，会让 macOS 或 Linux 的路径长什么样
+ * 随调用方在哪跑而变。
  */
 function posixPath(root: string, ...parts: string[]): string {
   if (root === '') return ''
   return [root.replace(/\/+$/u, ''), ...parts].join('/')
 }
 
+/** 这轮扩展检查查到了什么，以及在哪些地方查的。 */
+export interface ExtensionInstallScan {
+  /** 至少有一个 profile 装了该扩展的浏览器 id。 */
+  installed: string[]
+  /**
+   * 每个读过 profile 的浏览器一个 `<browserId> (<profiles>)` 标签。
+   *
+   * 之所以把它带出扫描结果，是因为“没有安装”那句话曾经断言本机任何浏览器 profile 里
+   * 都没有，而检查其实只在一个扩展 id 下读了四个固定的目录名。把这些名字写出来，那句
+   * 话就不会超出真正看过的范围。
+   */
+  checked: string[]
+}
+
 /**
- * Whether a browser profile already has this extension installed.
+ * Chromium 系浏览器手里真正有的 profile 目录，`Default` 在最前。
  *
- * Installing is a user action — the store, or "load unpacked" once — and no
- * command-line flag substitutes for it; an unpacked load lasts one session and is
- * gone at the next start (verified). So this answers the question that decides
- * the outcome of a launch, and lets the bridge say which of the two situations
- * the user is actually in instead of guessing.
+ * 靠枚举，不靠假定：这里换掉的那张固定列表止于 `Profile 3`，装在 `Profile 4` 或更靠后
+ * 的扩展就被报成到处都没有。只认两种真实存在的 profile 形态——user-data 根目录下还放着
+ * `Local State` 这类文件——带编号的按数值排序，因为按文本比 `Profile 10` 会排在
+ * `Profile 2` 前面。
  *
- * @param platform - target platform.
- * @param env - environment, for the profile roots above.
- * @param extensions - directory name of the extension, or undefined to skip.
- * @param exists - filesystem probe, injected for tests.
- * @returns the browser ids whose default profile has the extension.
+ * 列表读不到时，返回每个浏览器都有的那几个名字，而不是什么都不返回：读不了的目录
+ * 绝不能变成“什么都没检查，所以它没装”。
+ */
+function chromiumProfileNames(root: string, listDirectory: (path: string) => string[] | undefined): string[] {
+  const entries = listDirectory(root)
+  if (entries === undefined) return [...FALLBACK_PROFILE_NAMES]
+  const numbered: number[] = []
+  for (const entry of entries) {
+    const match = /^Profile (\d+)$/u.exec(entry)
+    if (match !== null) numbered.push(Number(match[1]))
+  }
+  numbered.sort((left, right) => left - right)
+  const profiles = entries.includes('Default')
+    ? ['Default', ...numbered.map((value) => `Profile ${value}`)]
+    : numbered.map((value) => `Profile ${value}`)
+  return profiles.length > 0 ? profiles : [...FALLBACK_PROFILE_NAMES]
+}
+
+/**
+ * 一个目录里的条目名；读不到时是 undefined。
+ *
+ * 这里用 `undefined` 而不是空列表，是因为调用方需要这个区分：空列表意味着“这个根目录下
+ * 没有 profile”，那会什么都不检查；而读不到的根目录必须退回那几个始终存在的名字。
+ */
+function readDirectoryNames(path: string): string[] | undefined {
+  try {
+    return readdirSync(path)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 某个浏览器 profile 里装了扩展没有，以及看过哪些 profile。
+ *
+ * 装扩展是用户的动作——从商店装，或者“加载已解压的扩展程序”走一遍——没有任何命令行
+ * 标志能代替它；未打包加载只撑一个会话，下次启动就没了（已验证）。所以这里回答的是
+ * 决定一次启动成败的那个问题，并让 bridge 说出用户实际是哪一种情形，而不是去猜。
+ *
+ * @param platform - 目标平台。
+ * @param env - 环境变量，用来定位上面那些 profile 根目录。
+ * @param extensions - 扩展的目录名，它可能有的每个 id 各一个。
+ * @param exists - 文件系统探测，测试注入。
+ * @param listDirectory - 目录列表，测试注入。
+ * @returns 装了它的浏览器，以及每个浏览器读了哪些 profile。
+ */
+export function scanExtensionInstalls(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  extensions: readonly string[],
+  exists: (path: string) => boolean = existsSync,
+  listDirectory: (path: string) => string[] | undefined = readDirectoryNames,
+): ExtensionInstallScan {
+  const installed: string[] = []
+  const checked: string[] = []
+  const ids = extensions.filter((id) => id !== '')
+  if (ids.length === 0) return { installed, checked }
+  const roots = userDataRoots(platform, env)
+  // 按目标平台的分隔符拼，不用宿主的：这些值要和浏览器自己给出的路径比较。
+  const under = (root: string, ...parts: string[]): string => platform === 'win32'
+    ? windowsPath(root, ...parts)
+    : posixPath(root, ...parts)
+  for (const id of DETECTION_ORDER) {
+    const root = roots[id]
+    if (root === undefined || root === '') continue
+    const profiles = chromiumProfileNames(root, listDirectory)
+    checked.push(`${id} (${profiles.join(', ')})`)
+    const found = profiles.some((profile) => ids.some((extension) => exists(under(root, profile, 'Extensions', extension))))
+    if (found) installed.push(id)
+  }
+  return { installed, checked }
+}
+
+/**
+ * profile 里装了该扩展的浏览器 id，就这些。
+ *
+ * 完整答案在上面那次扫描里；这里的形态是给那些只关心“这次启动到底能不能成”的调用方
+ * 用的。
+ *
+ * @param platform - 目标平台。
+ * @param env - 环境变量，用来定位上面那些 profile 根目录。
+ * @param extensions - 扩展的目录名；为 undefined 时跳过。
+ * @param exists - 文件系统探测，测试注入。
+ * @returns profile 里装了该扩展的浏览器 id。
  */
 export function browsersWithExtensionInstalled(
   platform: NodeJS.Platform,
@@ -366,38 +458,21 @@ export function browsersWithExtensionInstalled(
   exists: (path: string) => boolean = existsSync,
 ): string[] {
   if (extensions === undefined || extensions === '') return []
-  const roots = userDataRoots(platform, env)
-  const installed: string[] = []
-  // Built with the target platform's separator, not the host's: these values are
-  // compared against paths that come from the browser itself.
-  const under = (root: string, ...parts: string[]): string => platform === 'win32'
-    ? windowsPath(root, ...parts)
-    : posixPath(root, ...parts)
-  for (const id of DETECTION_ORDER) {
-    const root = roots[id]
-    if (root === undefined || root === '') continue
-    // Chrome-family keeps profiles as `Default`/`Profile N`; the extension itself
-    // lives under `<profile>/Extensions/<id>`.
-    const profiles = ['Default', 'Profile 1', 'Profile 2', 'Profile 3']
-    const found = profiles.some((profile) => exists(under(root, profile, 'Extensions', extensions)))
-    if (found) installed.push(id)
-  }
-  return installed
+  return scanExtensionInstalls(platform, env, [extensions], exists).installed
 }
 
 /**
- * The executable of the user's default browser, when the platform records it.
+ * 平台记录了用户默认浏览器的可执行文件时，把它返回。
  *
- * The user asked to drive *their* browser, so this is preferred over the first
- * detected install: launching a different Chromium would be a browser they do not
- * use, with none of their sessions. Windows and macOS both record the choice;
- * Linux exposes it only through `xdg-settings`, which is not a file, so it is
- * left to the caller's fallback rather than guessed here.
+ * 用户要驱动的是*他们自己的*浏览器，所以这优先于检测到的第一个安装：启动另一个
+ * Chromium，等于换成一个他们不用的浏览器，里面也没有他们的任何会话。Windows 和 macOS
+ * 都记录了这个选择；Linux 只用 `xdg-settings` 暴露它，而那不是文件，所以交给调用方
+ * 回退，不在这里猜。
  *
- * @param platform - target platform.
- * @param readDefault - returns the recorded command or app bundle id.
- * @param exists - filesystem probe, injected for tests.
- * @returns an absolute executable path, or undefined when it cannot be resolved.
+ * @param platform - 目标平台。
+ * @param readDefault - 返回记录下来的命令或 app bundle id。
+ * @param exists - 文件系统探测，测试注入。
+ * @returns 绝对可执行文件路径；无法解析时为 undefined。
  */
 export function defaultBrowserExecutable(
   platform: NodeJS.Platform,
@@ -407,9 +482,9 @@ export function defaultBrowserExecutable(
   const recorded = readDefault()
   if (recorded === undefined || recorded === '') return undefined
   if (platform === 'darwin') {
-    // LaunchServices reports a bundle id such as `com.google.Chrome`; only the two
-    // that ship this extension's host browser are mapped, and an unknown one falls
-    // back to detection rather than to a guess.
+    // LaunchServices 报出来的是 `com.google.Chrome` 这样的 bundle id；这里只映射承载
+    // 本扩展宿主浏览器的两个，碰上不认识的 bundle id 就退回检测，不猜。
+    // Windows 记录的是 `"C:\...\chrome.exe" --single-argument %1` 这样的命令行。
     const bundles: Record<string, string> = {
       'com.google.chrome': '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       'com.microsoft.edgemac': '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
@@ -419,24 +494,30 @@ export function defaultBrowserExecutable(
     const path = bundles[recorded.toLowerCase()]
     return path !== undefined && exists(path) ? path : undefined
   }
-  // Windows records a command line like `"C:\...\chrome.exe" --single-argument %1`.
+  /** Windows 上指定默认浏览器的注册表值。 */
   const quoted = /^"([^"]+)"/u.exec(recorded)
   const first = quoted?.[1] ?? recorded.split(' ')[0]
   if (first === undefined || first === '') return undefined
   return exists(first) ? first : undefined
 }
 
-/** Registry value that names the default browser on Windows. */
+// 这里故意用同步：这段代码只跑一次，而且是在用户正等着的一次启动里。
 function readWindowsDefaultBrowser(): string | undefined {
   try {
-    // Synchronous on purpose: this runs once, inside a launch the user is waiting on.
+    // ProgId 指定的是处理器，不是路径；路径在它的 shell\open\command 里。
     const { execFileSync } = require('node:child_process') as typeof import('node:child_process')
     const key = 'HKCU\\SOFTWARE\\Microsoft\\Windows\\Shell\\Associations\\UrlAssociations\\http\\UserChoice'
     const output = execFileSync('reg', ['query', key, '/v', 'ProgId'], { encoding: 'utf8', windowsHide: true })
     const match = /ProgId\s+REG_SZ\s+(\S+)/u.exec(output)
     const progId = match?.[1]
     if (progId === undefined) return undefined
-    // The ProgId names the handler, not the path; its shell\open\command does.
+    /**
+ * macOS 上默认浏览器的 bundle id。
+ *
+ * LaunchServices 把用户的选择记在用户偏好设置里；它返回的 bundle id 由
+ * {@link defaultBrowserExecutable} 映射成 app 路径。读偏好设置只是尽力而为——严格管控
+ * 或刚装好的机器上可能没这个键——拿不到答案就顺势退回检测。
+ */
     const command = execFileSync('reg', ['query', `HKCR\\${progId}\\shell\\open\\command`, '/ve'], { encoding: 'utf8', windowsHide: true })
     const commandMatch = /REG_(?:SZ|EXPAND_SZ)\s+(.+)/u.exec(command)
     return commandMatch?.[1]?.trim()
@@ -445,14 +526,7 @@ function readWindowsDefaultBrowser(): string | undefined {
   }
 }
 
-/**
- * The default browser's bundle id on macOS.
- *
- * LaunchServices records the choice in the user's preferences; the bundle id it
- * returns is what {@link defaultBrowserExecutable} maps to an app path. Reading a
- * preference is best-effort — a locked-down or freshly-imaged machine may not have
- * the key — and an absent answer simply falls through to detection.
- */
+// 公开 http 方案下，第一个处理器就是响应链接的那个。
 function readMacDefaultBrowser(): string | undefined {
   try {
     const { execFileSync } = require('node:child_process') as typeof import('node:child_process')
@@ -460,7 +534,7 @@ function readMacDefaultBrowser(): string | undefined {
       encoding: 'utf8',
       windowsHide: true,
     })
-    // The first handler for the public http scheme is the one that answers links.
+    /** 平台自己记的“哪个浏览器负责打开链接”，前提是它有这项记录。 */
     const httpScheme = /LSHandlerURLScheme\s*=\s*"?https?"?;[\s\S]{0,400}?LSHandlerRoleAll\s*=\s*"?([\w.-]+)"?;/u.exec(plist)
     return httpScheme?.[1]
   } catch {
@@ -468,21 +542,21 @@ function readMacDefaultBrowser(): string | undefined {
   }
 }
 
-/** The platform's own record of which browser opens a link, when it has one. */
+/**
+ * 每个候选都带上 `exists` 标志，按检测顺序排。
+ *
+ * @param platform - 目标平台。
+ * @param env - 该平台各安装根目录需要的环境变量。
+ * @param exists - 文件系统探测，测试注入。
+ * @returns 未过滤的候选列表，调用方据此报告到底看了哪些。
+ */
 export function systemDefaultBrowser(platform: NodeJS.Platform): string | undefined {
   if (platform === 'win32') return readWindowsDefaultBrowser()
   if (platform === 'darwin') return readMacDefaultBrowser()
   return undefined
 }
 
-/**
- * Every candidate in detection order, with an `exists` flag.
- *
- * @param platform - target platform.
- * @param env - environment for the platform's install roots.
- * @param exists - filesystem probe, injected for tests.
- * @returns the candidates, unfiltered, so the caller can report what was looked at.
- */
+/** 候选列表中出现的不同浏览器 id，按首次出现的顺序。 */
 export function detectBrowsers(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -498,25 +572,79 @@ export function detectBrowsers(
   return found
 }
 
-/** Distinct browser ids present in a candidate list, in first-seen order. */
+/**
+ * 把路径化成两个路径能直接比较的形式。
+ *
+ * 记录下来的默认浏览器和候选表来源不同，所以分隔符风格和大小写都不算有意义的差异；
+ * 这里把它们抹平，而不是拿去比较。
+ */
 function distinctIds(candidates: readonly BrowserCandidate[]): string[] {
   return [...new Set(candidates.map((candidate) => candidate.id))]
 }
 
+/** 可执行文件的文件名，按和它来源路径一样的方式归一化。 */
+function normaliseExecutablePath(path: string): string {
+  return path.trim().replaceAll('/', '\\').replace(/\\+/gu, '\\').toLowerCase()
+}
+
 /**
- * Which browsers are running right now, and with which profile.
+ * 记录下来的默认浏览器可执行文件对应哪个浏览器 id，而且只在恰好匹配一个时才给。
  *
- * Needed because a launch against a browser that is already up is a no-op on the
- * running instance: Windows/macOS/Linux browsers all hand the request to the
- * existing process and discard the flags. Reporting "it is already running" is
- * the only useful answer in that state.
- *
- * Reads the process list only; nothing is started or signalled.
- *
- * @param platform - target platform.
- * @param known - detected candidates, used to recognise executables.
- * @returns one entry per running browser process, de-duplicated by profile.
+ * 先试完整路径，因为文件名可能重：Chromium 的可执行文件也叫 `chrome.exe`，单看
+ * `chrome.exe` 会匹配上两个浏览器，说不清用户指的是哪一个。有歧义的名字就保持未解析，
+ * 不去猜——指定错了浏览器，用户会被带到那个没装本扩展的扩展页面上，这正是本函数要防的
+ * 那个问题。
  */
+function executableFileName(path: string): string {
+  const normalised = normaliseExecutablePath(path)
+  return normalised.slice(normalised.lastIndexOf('\\') + 1)
+}
+
+/**
+ * “已经在运行”这条消息该指定哪一个运行中的浏览器。
+ *
+ * 用户要驱动自己的浏览器，所以记录下来的默认浏览器优先——但只能在实际正在运行的那几个
+ * 里选，因为这条消息断言的是其中一个在运行。退回项是按检测顺序的第一个运行中浏览器，
+ * `running[0]` 兜最后：先前优先取 `running[0]`，正是它在报告者的机器上指定了 Edge——
+ * 那里 Edge 只是碰巧在进程列表里排在前面，而用户要的默认浏览器是 Chrome。
+ */
+function idOfDefaultExecutable(executable: string | undefined, candidates: readonly BrowserCandidate[]): string | undefined {
+  if (executable === undefined || executable === '') return undefined
+  const wanted = normaliseExecutablePath(executable)
+  const byPath = candidates.find((candidate) => normaliseExecutablePath(candidate.path) === wanted)
+  if (byPath !== undefined) return byPath.id
+  const name = executableFileName(wanted)
+  if (name === '') return undefined
+  const ids = new Set(candidates.filter((candidate) => executableFileName(candidate.path) === name).map((candidate) => candidate.id))
+  return ids.size === 1 ? [...ids][0] : undefined
+}
+
+/**
+ * 现在有哪些浏览器在运行，各自用的是哪个 profile。
+ *
+ * 需要它是因为：对一个已经起来的浏览器再执行启动，对运行中的实例来说是空操作——
+ * Windows/macOS/Linux 上的浏览器都会把请求交给既有进程，然后丢掉这些标志。这种状态下，
+ * 回复“它已经在运行”才是唯一有用的答案。
+ *
+ * 这里只读进程列表；不会启动任何进程，也不会给谁发信号。
+ *
+ * @param platform - 目标平台。
+ * @param known - 检测到的候选，用来识别可执行文件。
+ * @returns 每个运行中的浏览器进程一项，按 profile 去重。
+ */
+function runningBrowserId(
+  running: readonly RunningBrowser[],
+  candidates: readonly BrowserCandidate[],
+  defaultExecutable: string | undefined,
+): string {
+  const ids = new Set(running.map((browser) => browser.id))
+  const preferred = idOfDefaultExecutable(defaultExecutable, candidates)
+  if (preferred !== undefined && ids.has(preferred)) return preferred
+  const byOrder = DETECTION_ORDER.find((id) => ids.has(id))
+  return byOrder ?? running[0]?.id ?? 'chrome'
+}
+
+// 先写入者胜出：Chromium 的可执行文件也叫 `chrome.exe`，而候选条目
 export async function probeRunningBrowsers(
   platform: NodeJS.Platform,
   known: readonly BrowserCandidate[],
@@ -527,9 +655,9 @@ export async function probeRunningBrowsers(
   const executableNames = new Map<string, string>()
   for (const candidate of known) {
     const name = candidate.path.replaceAll('/', '\\').split('\\').pop()
-    // First writer wins: Chromium's executable is also called `chrome.exe`, and
-    // the entries are in detection order, so a running Chrome must not be
-    // reported as "chromium" just because that entry came later.
+    // 按检测顺序排列，所以一个正在运行的 Chrome 不会因为“chromium”
+    // 那个条目排在后面，就被报成 chromium。
+    /** `tasklist`/`ps` 的输出，形如 `{ name, commandLine }`；拿不到时为 undefined。 */
     if (name !== undefined && name !== '' && !executableNames.has(name.toLowerCase())) {
       executableNames.set(name.toLowerCase(), candidate.id)
     }
@@ -549,7 +677,7 @@ export async function probeRunningBrowsers(
   return running
 }
 
-/** `tasklist`/`ps` output as `{ name, commandLine }`, or undefined when unavailable. */
+// 现在的 Windows 构建里已经不带 `wmic` 了；把它排在最后，照顾旧版本。
 async function processListing(platform: NodeJS.Platform): Promise<{ name: string; commandLine: string }[] | undefined> {
   const { execFile } = await import('node:child_process')
   const attempts: { command: string; args: string[]; parse: (stdout: string) => { name: string; commandLine: string }[] }[] =
@@ -557,7 +685,7 @@ async function processListing(platform: NodeJS.Platform): Promise<{ name: string
       ? [
           { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', WIN_GET_CIM], parse: parsePipeSeparated },
           { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', WIN_GET_WMI], parse: parsePipeSeparated },
-          // `wmic` is absent from current Windows builds; kept last for old ones.
+          // 命令跑成功但返回空列表，是真实答案（“什么都没在运行”），
           { command: 'wmic', args: ['process', 'get', 'Name,CommandLine', '/format:csv'], parse: parseWmicCsv },
         ]
       : [{ command: 'ps', args: ['-Axo', 'comm=,args='], parse: parsePs }]
@@ -566,44 +694,45 @@ async function processListing(platform: NodeJS.Platform): Promise<{ name: string
     const stdout = await runOnce(execFile, attempt.command, attempt.args)
     if (stdout === undefined) continue
     const parsed = attempt.parse(stdout)
-    // An empty list from a command that ran is a real answer ("nothing running"),
-    // but a command that produced nothing at all is not — try the next one.
+    // 而完全没有输出的命令就不算——继续试下一个。
+    /** PowerShell：每个进程一行 `Name|CommandLine`。 */
     if (parsed.length > 0 || attempt.command === 'ps') return parsed
   }
   return undefined
 }
 
-/** PowerShell: one `Name|CommandLine` pair per process. */
+/** 宿主只带旧版 cmdlet 时的回退方案。 */
 const WIN_GET_CIM = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.Name)|$($_.CommandLine)" }'
-/** Fallback for hosts with the older cmdlet only. */
+/**
+ * PowerShell：每个浏览器进程有多少个可见顶层窗口。
+ *
+ * 没有窗口的进程 `MainWindowHandle` 是 0，而这正是这里要查的状态。输出成
+ * `name=count`，一次 shell 调用就能把所有浏览器都问清楚，而且没有窗口的进程名会报成
+ * `0`，不会被省掉。
+ *
+ * 有两个特性，第一个正是这条命令写成现在这样的原因。两个都是**实际跑**该命令才发现的，
+ * 不是读代码读出来的，其中第二个读起来像是对的，实际是个陷阱：
+ *
+ * 1. **`Get-Process -Name a,b,c` 只要有一个名字不存在就整体失败。** 一台没装 Brave
+ *    或 Chromium 的机器会让整条命令中断——`-ErrorAction SilentlyContinue` 也救不回来——
+ *    于是这个探测恰好在本来就为它们而写的那些机器上什么答案都给不出。改成先读所有进程、
+ *    再按名字过滤，缺哪个浏览器都无所谓（`-in @(...)` 那份列表就是干这个的）。
+ * 2. **计数必须先落到局部变量，再交给格式化运算符。** 把
+ *    `Where-Object … ).Count` 内联进 `-f`，产出的那一行就只有名字、没有计数——
+ *    `chrome` 而不是 `chrome=1`——解析器随后会把它读成“零个窗口”，
+ *    这既与事实相反，又朝着不安全的方向。
+ *
+ * 命令文本里的双引号没问题：被引号包住的命令作为单个 `execFile` 参数传进去，
+ * 能完整到达 PowerShell。
+ */
 const WIN_GET_WMI = 'Get-WmiObject Win32_Process | ForEach-Object { "$($_.Name)|$($_.CommandLine)" }'
 
 /**
- * PowerShell: how many visible top-level windows each browser process owns.
+ * 读 `name=count` 这些行：只要有任一浏览器带窗口就是 true，浏览器在运行但没有窗口是
+ * false，输出里完全没有可用的答案就是 undefined。
  *
- * `MainWindowHandle` is 0 for a process that has no window, which is exactly the
- * state this exists to detect. Emitted as `name=count` so one shell call answers for
- * every browser at once, and a process name with no windows is reported as `0`
- * rather than omitted.
- *
- * Two properties are needed, and the first one is the reason this exists in the form
- * it does. Both were found by **running** the command, not by reading it, and the
- * second is a trap that reads as correct:
- *
- * 1. **`Get-Process -Name a,b,c` fails outright when any one name is absent.** A
- *    machine without Brave or Chromium terminated the whole command — `-ErrorAction
- *    SilentlyContinue` does not rescue it — so the probe answered nothing at all on
- *    exactly the machines it was written for. Reading every process and filtering by
- *    name afterwards makes an absent browser harmless (this is what the `-in @(...)`
- *    list is for).
- * 2. **The count has to reach a local before the format operator.** Inlining the
- *    `Where-Object … ).Count` expression into `-f` produced a line with the name and no
- *    count — `chrome` instead of `chrome=1` — which the parser then reads as "reported
- *    zero windows", i.e. the opposite of the truth, and the opposite of the safe
- *    direction.
- *
- * Inner double quotes in the command text are fine: the quoted command is passed as a
- * single `execFile` argument and reaches PowerShell intact.
+ * `undefined` 不是抠字眼。答不上来的探测绝不能被读成“没有窗口”，因为调用方会照着这个
+ * 答案去打开浏览器窗口。
  */
 const WIN_WINDOW_COUNTS = [
   'Get-Process -ErrorAction SilentlyContinue |',
@@ -615,11 +744,11 @@ const WIN_WINDOW_COUNTS = [
 ].join(' ')
 
 /**
- * Read `name=count` lines: true if any browser has a window, false if browsers are up
- * without one, and undefined when the output carried no usable answer at all.
+ * 读 `name=count` 那几行：任一浏览器有窗口就是 true，浏览器在跑但都没有窗口是 false，
+ * 输出里根本没给出可用答案时是 undefined。
  *
- * `undefined` is not pedantry. A probe that cannot answer must not be read as "no
- * window", because the caller opens a browser window on that answer.
+ * `undefined` 不是过度讲究：一个答不上来的探测绝不能被读成“没有窗口”，因为调用方会拿
+ * 这个答案去决定要不要打开浏览器窗口。
  */
 function parseWindowCounts(stdout: string): boolean | undefined {
   let sawBrowser = false
@@ -632,27 +761,25 @@ function parseWindowCounts(stdout: string): boolean | undefined {
   return sawBrowser ? false : undefined
 }
 
-/** AppleScript: the number of windows the named app has open. */
+/** AppleScript：指定 app 打开了多少个窗口。 */
 function macWindowCountScript(appName: string): string {
   return `tell application "System Events" to if exists process "${appName}" `
     + `then return count of windows of process "${appName}" else return -1`
 }
 
 /**
- * Whether a running browser has a visible window, or `undefined` when unknown.
+ * 运行中的浏览器有没有可见窗口；不知道时是 `undefined`。
  *
- * A Chromium process outlives its windows: closing the last window can leave the
- * process resident while the extension keeps its socket open, so the bridge sees a
- * healthy connection and every page tool then fails with "no active tab". Asking the
- * window manager is the only way to tell that state apart from a browser that is
- * genuinely usable — and `undefined` is a real answer, meaning this platform could
- * not be asked, so callers must not treat it as "no window".
+ * Chromium 进程比它的窗口活得久：关掉最后一个窗口后进程可能还驻留，扩展也还握着它的
+ * socket，于是 bridge 看到的是一条健康连接，随后每个页面工具都以 “no active tab” 失败。
+ * 要分清这种状态和真正能用的浏览器，唯一的办法就是问窗口管理器——而 `undefined` 是真实
+ * 答案，表示这个平台问不出来，所以调用方不能把它当成“没有窗口”。
  *
- * @param platform - the platform whose window manager to ask.
- * @param candidates - the browsers to look for.
- * @param run - the command runner; injected by tests so the parsing and the
- *   branch it drives are checked without starting a shell.
- * @returns true (a window exists), false (running without one), or undefined.
+ * @param platform - 要问窗口管理器的平台。
+ * @param candidates - 要查找的浏览器。
+ * @param run - 命令运行器；由测试注入，这样解析逻辑和它驱动的分支都能在不启动 shell 的
+ *   情况下验证。
+ * @returns true（有窗口）、false（在运行但没有窗口）或 undefined。
  */
 export async function hasVisibleBrowserWindow(
   platform: NodeJS.Platform,
@@ -681,26 +808,27 @@ export async function hasVisibleBrowserWindow(
     return sawBrowser ? false : undefined
   }
 
-  // Linux has as many window managers as distributions; guessing would risk
-  // launching a browser the user did not ask for, so this answer is withheld.
+  // Linux 的窗口管理器和发行版一样多；猜错就可能启动用户没要求的浏览器，
+  // 所以这里把答案留空。
   return undefined
 }
 
-/** The real command runner; `runOnce` needs an `execFile` it does not have yet. */
+/** 要去问窗口管理器的候选 app/进程名。 */
+/** 真正执行命令的那个运行器；`runOnce` 需要一个此时它还没有的 `execFile`。 */
 async function defaultRunOnce(command: string, args: readonly string[]): Promise<string | undefined> {
   const { execFile } = await import('node:child_process')
   return await runOnce(execFile, command, args)
 }
 
-/** The candidate app/process names to ask the window manager about. */
+// macOS 用的是应用程序包名，不是进程名；这份映射是固定的、简短的，
 function candidateExecutables(candidates: readonly BrowserCandidate[], platform: NodeJS.Platform): string[] {
   const names: string[] = []
   for (const candidate of candidates) {
     const file = candidate.path.replaceAll('/', '\\').split('\\').pop() ?? ''
     const stem = file.replace(/\.exe$/iu, '')
     if (stem === '') continue
-    // macOS names the application bundle, not the process; the mapping is fixed and
-    // short, and an unknown bundle is simply skipped.
+    // 遇到不认识的包名直接跳过。
+    /** `Name|CommandLine` 行，也就是上面那些 PowerShell 命令的输出格式。 */
     const name = platform === 'darwin'
       ? ({ chrome: 'Google Chrome', chromium: 'Chromium', msedge: 'Microsoft Edge', brave: 'Brave Browser' } as Record<string, string>)[stem.toLowerCase()]
       : stem
@@ -721,7 +849,7 @@ function runOnce(
   })
 }
 
-/** `Name|CommandLine` lines, as the PowerShell commands above emit them. */
+/** `wmic ... /format:csv` 的行：`Node,Name,CommandLine`（仅旧版 Windows）。 */
 export function parsePipeSeparated(stdout: string): { name: string; commandLine: string }[] {
   const parsed: { name: string; commandLine: string }[] = []
   for (const line of stdout.split(/\r?\n/u)) {
@@ -736,11 +864,11 @@ export function parsePipeSeparated(stdout: string): { name: string; commandLine:
   return parsed
 }
 
-/** `wmic ... /format:csv` rows: `Node,Name,CommandLine` (old Windows only). */
+// CommandLine 本身可能带逗号，所以只切前两段。
 export function parseWmicCsv(stdout: string): { name: string; commandLine: string }[] {
   const parsed: { name: string; commandLine: string }[] = []
   for (const line of stdout.split(/\r?\n/u)) {
-    // CommandLine may itself contain commas, so only the first two are split off.
+    /** `ps -Axo comm=,args=` 的行：先是可执行文件路径，然后是它的参数。 */
     const first = line.indexOf(',')
     if (first === -1) continue
     const second = line.indexOf(',', first + 1)
@@ -752,7 +880,14 @@ export function parseWmicCsv(stdout: string): { name: string; commandLine: strin
   return parsed
 }
 
-/** `ps -Axo comm=,args=` lines: an executable path, then its arguments. */
+/**
+ * 一句“没有找到扩展”的话能断言到什么程度，这里以短语形式给出。
+ *
+ * 它替掉的那句话断言本机任何浏览器 profile 里都不存在，而检查其实只在一个扩展 id 下读了
+ * 四个固定目录名——于是商店安装（目录名不同）被报成到处都没有，用户只被指向开发者那条路。
+ * 把实际读过的 profile 写出来，这句话就不会超出 bridge 真正看过的范围；连一个根目录都读
+ * 不到时，它就照实这么说，而不是断言不存在。
+ */
 export function parsePs(stdout: string): { name: string; commandLine: string }[] {
   const parsed: { name: string; commandLine: string }[] = []
   for (const line of stdout.split('\n')) {
@@ -766,22 +901,26 @@ export function parsePs(stdout: string): { name: string; commandLine: string }[]
 }
 
 /**
- * Start a browser (if needed) and wait for the extension to connect.
+ * 需要的话启动浏览器，然后等扩展连上来。
  *
- * The order matters: an already-connected extension means the browser is running
- * and there is nothing to do, so a launch is never started while a working
- * connection exists — **unless the caller has established that the running browser
- * has no window left**. A Chromium process outlives its last window and the
- * extension keeps its socket open while it does, so a live connection is not proof
- * that there is anything to operate; `ignoreConnected` is how that case gets past
- * this early return and asks the resident process for a window.
+ * 顺序很重要：扩展已经连上就说明浏览器正在运行、无事可做，所以只要还有可用的连接就绝不
+ * 发起启动——**除非调用方已经确认运行中的浏览器没有窗口了**。Chromium 进程比它最后一个
+ * 窗口活得久，这期间扩展一直开着 socket，所以有一条活连接并不等于有东西可操作；
+ * `ignoreConnected` 就是让这种情况越过提前返回、向驻留进程要一个窗口的开关。
  *
- * @param deps - resolved configuration and injectable effects.
- * @param connected - whether the bridge currently has an authenticated extension.
- * @param url - optional page to open in the launched browser.
- * @param ignoreConnected - start anyway, for the known windowless case above.
- * @returns what happened, in words that name the next step.
+ * @param deps - 已解析的配置和可注入的副作用。
+ * @param connected - bridge 当前有没有已通过认证的扩展。
+ * @param url - 可选，要在启动的浏览器里打开的页面。
+ * @param ignoreConnected - 强制启动，用在上面那种已知没有窗口的情形里。
+ * @returns 发生了什么，措辞里点明下一步。
  */
+function profilesReadClause(checked: readonly string[]): string {
+  return checked.length > 0
+    ? `the browser profiles this bridge read (${checked.join('; ')})`
+    : 'the browser profile directories this bridge could locate'
+}
+
+// 优先顺序：用户实际在用的浏览器，然后是显式配置的浏览器，
 export async function launchBrowser(
   deps: LaunchDeps,
   connected: () => boolean,
@@ -797,9 +936,9 @@ export async function launchBrowser(
   const exists = deps.exists ?? existsSync
   const candidates = detectBrowsers(platform, env, exists)
 
-  // Preference order: the browser the user actually uses, then an explicitly
-  // configured one, then the first Chromium-family install found. Never a
-  // different browser than the user's own unless they asked for one by path.
+  // 然后是找到的第一个 Chromium 系安装。绝不用一个和用户自己的浏览器
+  // 不同的浏览器，除非用户按路径点名要了它。
+  // `chosen.id` 只是两个按路径解析出来的候选（`default`、`configured`）的占位符，
   const readDefault = deps.executableOfDefaultBrowser
     ?? ((target: NodeJS.Platform) => defaultBrowserExecutable(target, () => systemDefaultBrowser(target)))
   const defaultExecutable = readDefault(platform)
@@ -809,8 +948,20 @@ export async function launchBrowser(
     : configured !== undefined
       ? { id: 'configured', path: configured, exists: true }
       : candidates.find((candidate) => candidate.exists)
-  const browsersWithExtension = deps.browsersWithExtension
-    ?? ((target: NodeJS.Platform) => browsersWithExtensionInstalled(target, env, EXTENSION_DIRECTORY_NAME, exists))
+  const installScan = deps.extensionInstall
+    ?? ((target: NodeJS.Platform) => scanExtensionInstalls(
+      target,
+      env,
+      EXTENSION_DIRECTORY_NAMES,
+      exists,
+      deps.listDirectory ?? readDirectoryNames,
+    ))
+  // 而不是浏览器名。要在消息里指定浏览器，就得先把可执行文件解析回检测到的 id：
+  // `extensionsPageUrl('default')` 匹配不上任何分支，会返回 `chrome://extensions/`，
+  // 那是错的页面——而且在修好之前，上面几条消息纠正的正是同一个“指定错浏览器”的方向。
+  // 已经起来的浏览器不会因为这次启动加载任何新东西：
+  // 请求交给运行中的进程，标志被丢掉。
+  const browserId = idOfDefaultExecutable(chosen?.path, candidates) ?? chosen?.id ?? 'chrome'
 
   if (chosen === undefined) {
     return {
@@ -824,10 +975,10 @@ export async function launchBrowser(
     }
   }
 
-  // A browser that is already up will not load anything new from this command:
-  // the request is handed to the running process and the flags are discarded.
-  // Launching the user's *default* profile is exactly that case, so this check is
-  // what stops the bridge from opening a pointless second window.
+  // 启动用户的*默认* profile 恰恰就是这种情况，所以这项检查
+  // 正是拦住 bridge、不让它去开一个毫无意义的第二个窗口的东西。
+  // 要打开的页面可选，而且必须是真正的网址：这个值最终会进
+  // 浏览器的 argv（见 `buildLaunchArgs`），而不可用的值会悄悄
   const probeRunning = deps.probeRunning ?? ((known, wanted) => defaultProbeRunning(platform, known, wanted, deps.processListing))
   const running = await probeRunning(candidates, deps.userDataDir)
   const ownProfile = deps.userDataDir !== undefined && deps.userDataDir !== ''
@@ -835,8 +986,8 @@ export async function launchBrowser(
     ? browser.userDataDir === deps.userDataDir
     : browser.userDataDir === '')
   if (running.length > 0 && !ownProfile && runningSameProfile) {
-    const installed = browsersWithExtension(platform)
-    const browserId = running[0]?.id ?? 'chrome'
+    const { installed, checked } = installScan(platform)
+    const browserId = runningBrowserId(running, candidates, defaultExecutable)
     return {
       launched: false,
       resolved: true,
@@ -844,7 +995,7 @@ export async function launchBrowser(
       message: `${browserId} is already running, so starting it again would only open a window in the existing one — no extension would load from it. `
         + (installed.length > 0
           ? `The extension is installed in ${installed.join(', ')}; ask the user to make sure it is enabled at ${extensionsPageUrl(browserId)}, and the connection returns on its own.`
-          : `The extension is not installed in any browser profile on this machine, which is why nothing connects. It has to be installed once at ${extensionsPageUrl(browserId)} (turn on developer mode, then "Load unpacked" and pick the built extension folder), or from the extension store. After that single install a normal start reconnects on its own.`),
+          : `The extension was not found in ${profilesReadClause(checked)}, which is why nothing connects. It has to be installed once at ${extensionsPageUrl(browserId)} — from the extension store, or by turning on developer mode and using "Load unpacked" to pick the built extension folder. After that single install a normal start reconnects on its own.`),
       ...(installed.length === 0 ? { installUrl: extensionsPageUrl(browserId) } : {}),
     }
   }
@@ -853,9 +1004,9 @@ export async function launchBrowser(
     ? deps.extensionPath
     : undefined
 
-  // A page to open is optional and must be a real web address: the value ends up
-  // in the browser's argv (see `buildLaunchArgs`), and an unusable one silently
-  // becomes "open the new tab page" rather than being handed to the process.
+  // 变成“打开新标签页”，而不是交给那个进程。
+  /** 靠真实进程列表来探测，并过滤到所问的那个 profile。 */
+  /** 启动一个在插件进程退出后仍继续跑的进程。 */
   const openUrl = webUrlOrUndefined(url)
   const args = buildLaunchArgs(
     {
@@ -893,22 +1044,34 @@ export async function launchBrowser(
     }
   }
 
-  const installed = browsersWithExtension(platform)
+  const { installed, checked } = installScan(platform)
   const extensionHint = installed.length > 0
-    ? `The extension is installed in ${installed.join(', ')}; confirm it is enabled at ${extensionsPageUrl(chosen.id)} and that this browser is the one that profile belongs to.`
-    : `The extension is not installed in any browser profile on this machine, so there was nothing to connect. `
-      + `It has to be installed once at ${extensionsPageUrl(chosen.id)} (turn on developer mode, then "Load unpacked" and pick the built extension folder), or from the extension store; `
+    ? `The extension is installed in ${installed.join(', ')}; confirm it is enabled at ${extensionsPageUrl(browserId)} and that this browser is the one that profile belongs to.`
+    : `The extension was not found in ${profilesReadClause(checked)}, so there was nothing to connect. `
+      + `It has to be installed once at ${extensionsPageUrl(browserId)} — from the extension store, or by turning on developer mode and using "Load unpacked" to pick the built extension folder; `
       + 'a command-line load only lasts one session and would have to be repeated every start.'
   return {
     launched: true,
     resolved: true,
     connected: false,
     message: `Started ${chosen.path}, but the extension did not connect within ${Math.round(timeoutMs / 1000)}s. ${extensionHint}`,
-    ...(installed.length === 0 ? { installUrl: extensionsPageUrl(chosen.id) } : {}),
+    ...(installed.length === 0 ? { installUrl: extensionsPageUrl(browserId) } : {}),
   }
 }
 
-/** Probe through the real process list, filtered to the profile asked about. */
+/**
+ * 在用户自己的浏览器里打开扩展页面。
+ *
+ * 这是用户唯一必须亲手到达的页面，所以 bridge 一确认他们需要它，就*替*他们打开。走操作
+ * 系统的处理器，而不是写死某个浏览器，这个页面才会落在用户实际用的浏览器里——包括
+ * Firefox，本扩展同样支持它，而任何 Chromium 参数都到不了它。
+ *
+ * 失败一律悄悄吞掉：打不开一个便利页面，绝不能在本就存在的问题之上再添一个错误。
+ *
+ * @param url - 扩展页面（`chrome://extensions/` 或 `edge://extensions/`）。
+ * @param spawnDetached - 测试注入；默认是分离式 spawn。
+ * @param platform - 测试注入。
+ */
 async function defaultProbeRunning(
   platform: NodeJS.Platform,
   known: readonly BrowserCandidate[],
@@ -920,28 +1083,13 @@ async function defaultProbeRunning(
   return running.filter((browser) => browser.userDataDir === wanted)
 }
 
-/** Start a process that keeps running after the plugin's own process exits. */
+// `start`/`open` 这条路是常规走法；可执行文件那条回退覆盖的是
 function defaultSpawnDetached(command: string, args: readonly string[]): void {
   const child = spawn(command, [...args], { detached: true, stdio: 'ignore' })
   child.unref()
 }
 
-/**
- * Open the extensions page in the user's own browser.
- *
- * The one page a user must reach by hand, so it is opened *for* them at the moment
- * the bridge has established they need it. Going through the OS handler rather
- * than a hard-coded browser means the page lands in whichever browser they
- * actually use — including Firefox, which the extension also supports and which no
- * Chromium argument would reach.
- *
- * Failures are swallowed: not being able to open a convenience page must never
- * turn into an error on top of the problem the user already has.
- *
- * @param url - the extensions page (`chrome://extensions/` or `edge://extensions/`).
- * @param spawnDetached - injected for tests; defaults to a detached spawn.
- * @param platform - injected for tests.
- */
+// 宿主没有给这个 URL 方案注册默认处理器的情况。
 export async function openExtensionsPage(
   url: string,
   spawnDetached: (command: string, args: readonly string[]) => void = defaultSpawnDetached,
@@ -959,29 +1107,27 @@ export async function openExtensionsPage(
     execFile(opener.command, opener.args, { windowsHide: true }, () => { resolve() })
   }).catch(() => {})
 
-  // The `start`/`open` route is the normal one; the executable fallback covers a
-  // host where the default handler is not registered for this URL scheme.
+  // `start`/`open` 这条路是常规走法；可执行文件回退是给那种没为这个 URL 方案注册默认
+  // 处理器的机器用的。
   if (platform !== 'win32') return
   try {
     const executable = defaultBrowserExecutable(platform, readWindowsDefaultBrowser)
     if (executable !== undefined) spawnDetached(executable, [url])
   } catch {
-    // Nothing to do: the page either opened above or the user can navigate.
+    // 没什么可做：页面要么上面已经打开了，要么用户自己能导航过去。
   }
 }
 
 /**
- * Default connection wait, used when no host-specific one is injected.
+ * 默认的连接等待，调用方没有注入宿主专用的等待器时用它。
  *
- * It must actually wait. An earlier version returned `false` immediately when the
- * caller had not injected a wait, which made a launch look like "started and the
- * extension never came back" within milliseconds — while the plugin's own call
- * site happened to inject a real waiter, so the defect stayed invisible in
- * production and in the injected tests.
+ * 它必须真的等。早先的版本在调用方没注入等待时会立刻返回 `false`，一次启动于是几毫秒内
+ * 就看起来像“启动了，但扩展再也没回来”——而插件自己的调用点恰好注入了真正的等待器，
+ * 所以这个缺陷在生产环境和这些注入了等待器的测试里都看不见。
  *
- * @param timeoutMs - how long to keep asking.
- * @param isConnected - connection test; the bridge's own `hasConnection`.
- * @returns whether a connection appeared before the deadline.
+ * @param timeoutMs - 持续询问多久。
+ * @param isConnected - 连接判定；就是 bridge 自己的 `hasConnection`。
+ * @returns 截止时间之前有没有出现连接。
  */
 export async function pollForConnection(timeoutMs: number, isConnected: () => boolean): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
@@ -989,8 +1135,8 @@ export async function pollForConnection(timeoutMs: number, isConnected: () => bo
     if (isConnected()) return true
     if (Date.now() >= deadline) return false
     await new Promise((resolve) => { setTimeout(resolve, 250) })
-    // Re-check immediately after the pause: an extension that connects while we
-    // sleep must be noticed before the next full interval is spent waiting.
+    // 暂停之后马上复查：在我们的休眠期间连上来的扩展，
+    // 必须赶在下一次完整间隔被等完之前被发现。
     if (isConnected()) return true
   }
 }

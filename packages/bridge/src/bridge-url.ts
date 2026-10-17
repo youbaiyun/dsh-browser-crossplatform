@@ -1,12 +1,12 @@
 /**
- * Resolve the browser-extension bridge WebSocket URL from the current page
- * location or a discovery response. Shared by the settings row and tests.
+ * 浏览器扩展 bridge 的 WebSocket URL 从哪来：当前页面的 location，或者
+ * 发现（discovery）响应。设置项那一行与测试共用同一段逻辑。
  * @module dsh-browser-crossplatform/src/bridge-url
  */
 
 import { BRIDGE_CONFIG_PATH, BRIDGE_PATH } from '@dsh-browser/protocol'
 
-/** Minimal Location fields needed to rebuild a loopback-friendly ws URL. */
+/** 重建一个 loopback 可用的 ws URL 所需的最小 Location 字段。 */
 export interface BridgeLocationLike {
   protocol: string
   hostname: string
@@ -15,9 +15,9 @@ export interface BridgeLocationLike {
 }
 
 /**
- * Build `ws(s)://…/ext/bridge` from the page that hosts the dsh web UI.
- * Loopback hostnames are normalized to `127.0.0.1` so the address pastes cleanly
- * into the Chrome extension settings.
+ * 从 dsh web UI 所在页面构造 `ws(s)://…/ext/bridge`。
+ * loopback 主机名会归一成 `127.0.0.1`，这样粘进 Chrome 扩展设置里的
+ * 地址就是干净的。
  */
 export function bridgeWsUrlFromLocation(
   location: BridgeLocationLike,
@@ -30,9 +30,9 @@ export function bridgeWsUrlFromLocation(
 }
 
 /**
- * Prefer the discovery endpoint; fall back to reconstructing from `location`.
- * @param fetchImpl - injectable fetch (defaults to global fetch).
- * @param location - page location used for fallback and relative discovery URL.
+ * 能拿到发现端点就用它，否则退回按 `location` 重建的地址。
+ * @param fetchImpl - 可注入的 fetch，默认用全局 fetch。
+ * @param location - 页面 location，用来回退，也用来拼出相对的发现 URL。
  */
 export async function resolveBridgeWsUrl(
   location: BridgeLocationLike & { origin?: string },
@@ -51,7 +51,7 @@ export async function resolveBridgeWsUrl(
       return body.wsUrl
     }
   } catch {
-    // Discovery is best-effort: the settings row still shows the reconstructed URL.
+    // 发现只是尽力而为：设置项那一行照样显示重建出来的 URL。
   }
   return fallback
 }

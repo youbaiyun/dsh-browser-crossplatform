@@ -1,33 +1,33 @@
 /**
- * Track session ids that the browser extension has driven through the bridge.
- * Desktop-native sessions must keep the host userQuestions waterfall so the
- * Desktop UI can render ask_user_question cards.
+ * 记录浏览器扩展经 bridge 驱动过的 session id。
+ * 桌面原生 session 必须保留宿主机上的 userQuestions waterfall，桌面 UI 才渲染得出
+ * ask_user_question 卡片。
  * @module dsh-browser-crossplatform/src/extension-sessions
  */
 
-/** Mutable registry of extension-owned session ids. */
+/** 扩展自有的 session id 的可变注册表。 */
 export class ExtensionSessionRegistry {
   private readonly ids = new Set<string>()
 
-  /** Remember a session the extension successfully created or prompted. */
+  /** 记住一个由扩展成功创建、或成功发过提示的 session。 */
   note(sessionId: string | undefined): void {
     if (typeof sessionId === 'string' && sessionId.length > 0) this.ids.add(sessionId)
   }
 
-  /** Whether the extension has touched this session over the bridge. */
+  /** 扩展有没有通过 bridge 碰过这个 session。 */
   has(sessionId: string | undefined): boolean {
     return typeof sessionId === 'string' && this.ids.has(sessionId)
   }
 
-  /** Test helper: drop all tracked ids. */
+  /** 测试辅助方法：丢弃所有已跟踪的 id。 */
   clear(): void {
     this.ids.clear()
   }
 }
 
 /**
- * Decide whether the bridge should own ask_user_question for this request.
- * Desktop sessions must fall through to the native answerer waterfall.
+ * 决定这次请求的 ask_user_question 该不该由 bridge 接管。
+ * 桌面 session 必须继续走原生应答者那条 waterfall。
  */
 export function shouldBridgeOwnQuestion(input: {
   hasExtensionConnection: boolean

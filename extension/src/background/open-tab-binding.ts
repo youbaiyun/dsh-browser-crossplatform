@@ -1,9 +1,8 @@
 /**
- * Affinity binding for tabs created by `browser_open_tab`.
+ * `browser_open_tab` 建出来的标签页的亲和性绑定。
  *
- * Foreground opens (`active !== false`) follow the new tab; background opens
- * keep the visible tab and rebind only the controlled target so later tools
- * hit the new tab without activating it.
+ * 前台打开（`active !== false`）跟着新标签页走；后台打开则留着当前可见的那一个，
+ * 只把受控目标重新绑过去，这样后面的工具会打到新标签页，又不会把它激活。
  *
  * @module
  */
@@ -11,14 +10,14 @@
 import type { AffinityTab, TabAffinityController } from './tab-affinity.ts'
 
 export interface BindOpenedTabOptions {
-  /** When false, bind as controlled without following the visible tab. */
+  /** 为 false 时只当受控目标绑上，不跟随可见标签页。 */
   active?: boolean
 }
 
 /**
- * Bind a newly opened tab into the affinity controller.
+ * 把新打开的标签页绑进亲和性控制器。
  *
- * @returns Whether the affinity controller accepted the bind.
+ * @returns 亲和性控制器有没有接受这次绑定。
  */
 export function bindOpenedTabAffinity(
   affinity: TabAffinityController,

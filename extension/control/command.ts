@@ -1,15 +1,15 @@
 /**
- * Input parsing for the bottom composer.
+ * 底部输入框的输入解析。
  *
- * The composer accepts two very different things on the same line:
+ * 同一行输入里，输入框要接两种完全不同的东西：
  *
- *  - a **browser command**, which the extension executes itself (`browser_click
- *    {"index":3}`), and
- *  - an **instruction for the model**, which is forwarded to the desktop dsh app.
+ *  - **浏览器命令**，由扩展自己执行（`browser_click
+ *    {"index":3}`），以及
+ *  - **给模型的指令**，转发给桌面端 dsh 应用。
  *
- * Misreading one as the other is the only dangerous failure here, so the rule is
- * deliberately conservative: a line is a command only when it names a real tool
- * or is unambiguously a URL. Everything else is a prompt for the model.
+ * 两者一旦搞混，就是这里唯一危险的失败方式，所以规则故意定得很保守：
+ * 一行里点名了真实工具、或者本身就是一个 URL，才算命令。
+ * 其余一切都是给模型的提示词。
  *
  * @module
  */
@@ -17,22 +17,22 @@
 import { BROWSER_TOOL_NAMES as TOOL_NAMES } from '../src/background/tools.ts'
 
 /**
- * The tool surface, re-exported for the composer.
+ * 工具集，重新导出给输入框用。
  *
- * This list is imported rather than duplicated on purpose: the background
- * rejects any typed command whose name is not in its own registry, so a second
- * copy here could offer the user a command that is guaranteed to fail.
+ * 这份列表是 import 来的，不是照抄一份——这是有意的：后台会拒掉任何名字不在
+ * 它自己注册表里的命令，这里再抄一份，就可能向用户给出一个注定会失败的
+ * 命令。
  */
 export const BROWSER_TOOL_NAMES: readonly string[] = TOOL_NAMES
 
-/** One tool name the composer may dispatch. */
+/** 输入框可以派发的一个工具名。 */
 export type BrowserToolName = string
 
 /**
- * Bare words a person actually types, mapped onto tool names.
+ * 用户真会敲的裸词，对应到工具名。
  *
- * Only unambiguous read/positional actions are aliased. Nothing here changes
- * page state except `goto`/`open`, and both of those need a URL anyway.
+ * 只给无歧义的读取/定位类动作设了别名。这里除了 `goto`/`open`，没有别的会改
+ * 页面状态，而这两个本来也都需要一个 URL。
  */
 const SHORTHANDS: Readonly<Record<string, BrowserToolName>> = {
   snapshot: 'browser_snapshot',
@@ -52,47 +52,44 @@ const SHORTHANDS: Readonly<Record<string, BrowserToolName>> = {
 }
 
 export type InputIntent =
-  /** The user typed a browser command; run it here. */
+  /** 用户敲了一条浏览器命令；在这里执行它。 */
   | { kind: 'command'; name: BrowserToolName; args: Record<string, unknown>; echo: string }
   /**
-   * The user declared "open this and show me".
+   * 用户明确说了“打开这个给我看”。
    *
-   * Unlike a command, this is not one tool call: the extension opens the tab,
-   * brings it to the front, binds it as the controlled tab, and opens the panel
-   * itself, in that order, with no model involvement. That is what makes
-   * "so I can watch it" a guarantee rather than a request the model may skip.
+   * 和命令不同，这不算一次工具调用：扩展自己开标签页、带到前台、绑成受控
+   * 标签页、再打开面板，就按这个顺序来，模型完全不参与。正因如此，“这样我
+   * 就能看着它做”是一条保证，而不是模型可以顺手跳过的请求。
    */
   | { kind: 'open'; url: string; options: OpenOptions; echo: string }
-  /** The user typed an instruction; forward it to the model. */
+  /** 用户敲了一条指令；把它转发给模型。 */
   | { kind: 'prompt'; text: string }
   /**
-   * The user typed something that looks like a directive but is unusable.
+   * 用户敲的东西看起来像 @ 指令，但没法用。
    *
-   * Distinct from `prompt` so the message is never sent to the model: it is
-   * between the user and the parser, and the wording depends on the panel's
-   * language. When this was a `prompt` carrying a sentence, submitting a typo
-   * would have transmitted the complaint as though it were an instruction.
+   * 和 `prompt` 分开，是为了让这条消息永远不发给模型：它只发生在用户和
+   * 解析器之间，措辞随面板语言走。以前它是一个带句子的 `prompt`，于是打错
+   * 一个字，这条抱怨就会被当成指令原样传上去。
    */
   | { kind: 'error'; error: OpenError }
 
-/** How an `@open` should behave while it runs. */
+/** 一次 `@open` 跑起来该是什么样。 */
 export interface OpenOptions {
-  /** Delay between the steps, so a person can follow what is happening. */
+  /** 各步骤之间的延迟，好让人跟得上正在发生什么。 */
   pace: 'fast' | 'normal' | 'slow'
-  /** Whether the opened tab becomes the tab the browser tools act on. */
+  /** 打开的标签页是否就交给浏览器工具去操作。 */
   pin: boolean
 }
 
 /**
- * Why an `@open` directive could not be used.
+ * 一条 `@open` 指令为什么用不了。
  *
- * A code plus its parts, not a sentence. The sentence belongs to the locale table
- * (`strings.ts`), because a user who chose English must not be answered in
- * Chinese — which is what happened while the parser built its own messages: nine
- * of them, in Chinese, whatever language the panel was in.
+ * 是一个 code 加上它的组成部分，而不是一个句子。句子归语言表（`strings.ts`），
+ * 因为选了英文的用户不该收到中文答复——以前恰好就是这样：解析器自己拼消息
+ * 那段时间，不管面板是什么语言，都有九条消息是中文的。
  *
- * Returning the reason rather than the wording also keeps this module a pure
- * function of its input, which is what makes it testable without a DOM.
+ * 返回原因而不是措辞，也让这个模块保持为输入的纯函数，所以它不用 DOM
+ * 就能测。
  */
 export type OpenError =
   | { kind: 'directiveFormat'; known: string; soft: true }
@@ -106,37 +103,36 @@ export type OpenError =
   | { kind: 'unparsable' }
 
 /**
- * Whether a directive error is worth interrupting the user for.
+ * 一条指令错误值不值得打断用户。
  *
- * `directiveFormat` fires while a correct directive is still being typed — the
- * user has written `@op` and the rest is coming — so it is shown quietly as a
- * reminder of the shape. Everything else is a mistake the user needs to see.
+ * `directiveFormat` 在一条正确的指令还没敲完时就会触发——用户刚写完 `@op`，
+ * 后面还在输入——所以它只是安静地提示一下格式长什么样。其他一切都属于用户
+ * 需要看到的错误。
  *
- * This lives here, as a property of the error, rather than being inferred from
- * the message text. The panel used to decide by testing whether the string began
- * with a particular Chinese phrase, which meant the distinction disappeared the
- * moment the text was translated: a half-typed directive would be shown as a hard
- * error in English, and the browser would then have been right.
+ * 这件事放在错误自己身上，作为一个属性，而不是从消息文本里猜。面板以前
+ * 靠判断字符串是不是以某个中文词开头，文本一翻译，这个区分就没了：敲到一半
+ * 的指令在英文下被当成硬错误显示，而浏览器反倒是对的。
+ * 对的。
  */
 export const isSoftOpenError = (error: OpenError): boolean =>
   error.kind === 'directiveFormat'
 
-/** Milliseconds to pause between `@open` steps, by pace. */
+/** 按 pace 分档的 `@open` 各步骤间暂停毫秒数。 */
 export const OPEN_PACE_MS: Record<OpenOptions['pace'], number> = {
   fast: 0,
   normal: 350,
   slow: 1_200,
 }
 
-/** The default formula options, used when a key is omitted. */
+/** formula 的默认选项，某个键省略时用这些。 */
 export const OPEN_DEFAULTS: OpenOptions = { pace: 'normal', pin: true }
 
-/** Accepted spellings of the directive. */
+/** 这条指令可以接受的写法。 */
 const OPEN_DIRECTIVES = new Set(['open', 'show', 'watch'])
 
 const PACES = new Set<OpenOptions['pace']>(['fast', 'normal', 'slow'])
 
-/** A truthy/falsy word for a boolean formula key. */
+/** 布尔型 formula 键的真/假取值词。 */
 function parseToggle(raw: string): boolean | undefined {
   if (['on', 'true', 'yes', '1'].includes(raw.toLowerCase())) return true
   if (['off', 'false', 'no', '0'].includes(raw.toLowerCase())) return false
@@ -144,13 +140,12 @@ function parseToggle(raw: string): boolean | undefined {
 }
 
 /**
- * Parse `@open <url> [key=value …]`.
+ * 解析 `@open <url> [key=value …]`。
  *
  * `@open https://store.steampowered.com pace=slow pin=off`
  *
- * Returns `undefined` when the text is not an `@` directive at all, and an
- * `error` when it is one but unusable — a typo in an explicit directive should
- * be reported, not silently forwarded to the model as prose.
+ * 文本根本不是 `@` 指令，就返回 `undefined`；是指令但没法用，就返回
+ * `error`——显式指令里的笔误应该报出来，而不是当成大白话悄悄转给模型。
  */
 export function parseOpenDirective(text: string): { directive: string; url?: string; options?: OpenOptions; error?: OpenError } | undefined {
   if (!text.startsWith('@')) return undefined
@@ -158,22 +153,19 @@ export function parseOpenDirective(text: string): { directive: string; url?: str
   const match = /^([A-Za-z]+)(?:\s+([\s\S]*))?$/.exec(body)
   const directive = (match?.[1] ?? '').toLowerCase()
   const rest = (match?.[2] ?? '').trim()
-  // The list is joined with a comma-space rather than an ideographic comma: this
-  // is a name list rendered inside a sentence written in either language, and the
-  // Chinese comma reads as a mistake in English.
+  // 这份列表用逗号加空格拼，而不是用顿号：它只是一串名字，要塞进不管哪种
+  // 语言写成的句子里，而中文顿号放在英文里读着就像个错误。
   const known = [...OPEN_DIRECTIVES].map((name) => `@${name}`).join(', ')
 
-  // A word that is a prefix of a real directive is still being typed, so it gets
-  // the formula rather than a complaint. A *complete* directive with no argument
-  // is a different thing — the URL is genuinely missing — and falls through to
-  // the error below. That distinction is why this checks the prefix rather than
-  // "contains only letters".
+  // 一个词只要是某条真实指令的前缀，就说明还在输入中，于是给格式提示而不是
+  // 报错。一条*完整*指令却没有参数是另一回事——URL 是真缺了——会落到下面的
+  // 错误分支。也正因为这个区分，这里查的是前缀，而不是“只含字母”。
   if (!OPEN_DIRECTIVES.has(directive)) {
     if ([...OPEN_DIRECTIVES].some((name) => name.startsWith(directive))) {
       return { directive, error: { kind: 'directiveFormat', known, soft: true } }
     }
-    // An unknown directive is almost always a typo of a known one, so name the
-    // known ones instead of guessing what was meant.
+    // 未知指令几乎都是某条已知指令的笔误，所以把已知指令列出来，而不是去猜
+    // 用户想说什么。
     return { directive, error: { kind: 'unknownDirective', directive, known } }
   }
 
@@ -181,7 +173,7 @@ export function parseOpenDirective(text: string): { directive: string; url?: str
   if (first === undefined) {
     return { directive, error: { kind: 'missingUrl', directive } }
   }
-  // A leading URL may be followed by key=value pairs; anything else is a typo.
+  // 开头的 URL 后面可以跟 key=value 对；别的写法都是笔误。
   const url = parseUrlLike(first)
   if (url === undefined) {
     return { directive, error: { kind: 'firstArgumentNotUrl', directive, received: first } }
@@ -225,7 +217,7 @@ function isToolName(value: string): boolean {
   return BROWSER_TOOL_NAMES.includes(value)
 }
 
-/** A complete http(s) URL, optionally without its scheme. */
+/** 一个完整的 http(s) URL，可以不带 scheme。 */
 export function parseUrlLike(value: string): string | undefined {
   const trimmed = value.trim()
   if (trimmed === '' || /\s/.test(trimmed)) return undefined
@@ -233,8 +225,8 @@ export function parseUrlLike(value: string): string | undefined {
   try {
     const url = new URL(candidate)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
-    // A bare word with no dot is far more likely to be prose than a host. The
-    // names that really are single-label are allowed explicitly.
+    // 不带点的裸词，更可能是普通文字而不是主机名。真的只有单段的名字，
+    // 在这里显式放行。
     if (!/^https?:\/\//i.test(trimmed) && !isUsableHostname(url.hostname)) return undefined
     return url.toString()
   } catch {
@@ -249,12 +241,12 @@ function isUsableHostname(hostname: string): boolean {
 }
 
 /**
- * `key=value` pairs as an alternative to JSON.
+ * `key=value` 对，JSON 之外的另一条路。
  *
- * `click index=3 frame=1` is easier to type than `{"index":3,"frame":1}`, and a
- * value that parses as JSON (number, boolean, quoted string) keeps its type so
- * `index=3` becomes the number the tool schema requires. A double-quoted value
- * may contain spaces, which is what makes `type text="hello world"` work.
+ * `click index=3 frame=1` 比 `{"index":3,"frame":1}` 好敲，而且能按 JSON
+ * 解析的值（数字、布尔、带引号的字符串）会保住自己的类型，于是 `index=3`
+ * 就是工具 schema 要的那个数字。双引号里的值可以带空格，这才让
+ * `type text="hello world"` 能用。
  */
 function parseAssignments(tokens: readonly string[]): Record<string, unknown> | undefined {
   const args: Record<string, unknown> = {}
@@ -269,7 +261,7 @@ function parseAssignments(tokens: readonly string[]): Record<string, unknown> | 
   return Object.keys(args).length === 0 ? undefined : args
 }
 
-/** One assignment value: JSON when it parses, otherwise the literal text. */
+/** 赋值右侧的值：能按 JSON 解析就用 JSON，否则就用字面文本。 */
 function parseAssignmentValue(raw: string): unknown {
   try {
     return JSON.parse(raw) as unknown
@@ -279,10 +271,10 @@ function parseAssignmentValue(raw: string): unknown {
 }
 
 /**
- * Split an argument list, keeping double-quoted runs together.
+ * 切分参数列表，同时让双引号里的内容不被打散。
  *
- * A naive `split(/\s+/)` would break `text="hello world"` into two tokens and
- * silently drop the argument, so the quoted form is honoured here.
+ * 直接 `split(/\s+/)` 会把 `text="hello world"` 切成两个 token，这个参数
+ * 就悄悄丢了，所以这里必须认带引号的写法。
  */
 function tokenize(rest: string): string[] {
   const tokens: string[] = []
@@ -306,10 +298,10 @@ function tokenize(rest: string): string[] {
 }
 
 /**
- * Fill in the arguments a tool obviously implies.
+ * 补上某个工具显然会隐含需要的参数。
  *
- * These are conveniences, not policy: the background still validates every
- * argument and fails closed on anything it does not recognize.
+ * 这些只是顺手帮忙，不是策略：后台照样会校验每一个参数，碰到它不认识的
+ * 任何东西一律按失败关闭。
  */
 function withImpliedArgs(name: BrowserToolName, args: Record<string, unknown>, url: string | undefined): Record<string, unknown> {
   if (name === 'browser_navigate' || name === 'browser_open_tab') {
@@ -325,18 +317,18 @@ function withImpliedArgs(name: BrowserToolName, args: Record<string, unknown>, u
 }
 
 /**
- * Decide what the user meant.
+ * 判断用户想干什么。
  *
- * `browser_click {"index":3}`, `click index=3`, and `https://example.com` are
- * commands. `总结这个页面` and everything else is a prompt.
+ * `browser_click {"index":3}`、`click index=3` 和 `https://example.com` 都是
+ * 命令。`总结这个页面` 以及别的一切都是提示词。
  */
 export function classifyInput(value: string): InputIntent {
   const text = value.trim()
   if (text === '') return { kind: 'prompt', text: '' }
 
-  // An `@` directive is explicit, so it is resolved before anything that could
-  // mistake it for prose. A malformed one stays a prompt carrying its error, so
-  // the panel can report the typo instead of the model silently receiving it.
+  // `@` 指令是显式的，所以要抢在任何可能把它当大白话的解析之前处理。
+  // 格式出错的指令仍然是一条带着自己错误的提示词，这样面板能报出这个笔误，
+  // 而不是让模型悄悄收到它。
   const directive = parseOpenDirective(text)
   if (directive !== undefined) {
     const echo = text.replace(/\s+/g, ' ')
@@ -362,15 +354,14 @@ export function classifyInput(value: string): InputIntent {
         echo: text.replace(/\s+/g, ' '),
       }
     }
-    // An `browser_*` name is unambiguous even with unreadable arguments: the
-    // background validates the call and fails closed, which is a better answer
-    // than quietly forwarding a malformed command to the model.
+    // `browser_*` 这个名字即使配上看不懂的参数也是无歧义的：后台会校验这次
+    // 调用并按失败关闭处理，这比把一条格式错误的命令悄悄转给模型要好。
     if (isToolName(head)) return { kind: 'command', name: explicit, args: {}, echo: text.replace(/\s+/g, ' ') }
-    // A shorthand is an ordinary English word. "read the docs please" is prose,
-    // so a shorthand with arguments we cannot read stays a prompt.
+    // 简写只是一个普通的英文单词。“read the docs please” 是大白话，所以一个
+    // 带着我们读不懂的参数的简写仍然算提示词。
   }
 
-  // A bare URL or a single dotted host both mean "go here".
+  // 光秃秃一个 URL，或者一个带点的单段主机名，都表示“去这里”。
   const url = parseUrlLike(text)
   if (url !== undefined) {
     return { kind: 'command', name: 'browser_navigate', args: { url }, echo: text }
@@ -381,7 +372,7 @@ export function classifyInput(value: string): InputIntent {
 
 interface ParsedArguments {
   args: Record<string, unknown>
-  /** The URL the arguments named, if any, for tools that need one separately. */
+  /** 参数里点名的 URL（如果有），给需要单独拿到它的工具用。 */
   url: string | undefined
 }
 
@@ -401,7 +392,7 @@ function parseCommandArguments(rest: string): ParsedArguments | undefined {
   const tokens = tokenize(rest)
   const head = tokens[0] ?? ''
 
-  // A leading URL, optionally followed by `key=value` pairs.
+  // 开头的 URL，后面可以跟 `key=value` 对。
   const url = parseUrlLike(head)
   if (url !== undefined) {
     const tail = tokens.slice(1)
@@ -409,7 +400,7 @@ function parseCommandArguments(rest: string): ParsedArguments | undefined {
     return { args: { ...extra, url }, url }
   }
 
-  // A lone directional word is the scroll argument, not an assignment.
+  // 单独一个方向词是 scroll 的参数，不是一次赋值。
   if (tokens.length === 1 && /^[a-z]+$/i.test(head)) {
     return { args: { direction: head.toLowerCase() }, url: undefined }
   }
@@ -418,7 +409,7 @@ function parseCommandArguments(rest: string): ParsedArguments | undefined {
   return assignments === undefined ? undefined : { args: assignments, url: undefined }
 }
 
-/** Whether a call needs an explicit confirmation argument before it may run. */
+/** 一次调用在运行之前是否需要显式的确认参数。 */
 export function requiresConfirmArgument(name: string): boolean {
   return name === 'browser_close_tab'
 }

@@ -1,9 +1,7 @@
 /**
- * Build all three extension targets sequentially into dist/ (or dist-firefox/
- * with --firefox):
- * background (es|iife) → content (iife) → control (html popup). The first
- * target cleans the output; the later ones append. Pass --watch for dev
- * rebuilds.
+ * 把三个扩展目标依次构建进 dist/（加了 --firefox 则是 dist-firefox/）：
+ * background (es|iife) → content (iife) → control (html popup)。第一个目标会
+ * 清空输出；后面的目标追加。开发时反复重建传 --watch。
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -14,15 +12,14 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const watch = process.argv.includes('--watch')
 
-// --firefox switches the manifest and background bundle for the Firefox build.
+// --firefox 会把 manifest 和 background bundle 切到 Firefox 构建。
 if (process.argv.includes('--firefox')) {
   process.env.EXT_TARGET = 'firefox'
 }
 
-// --store builds into dist-store/ (or dist-firefox-store/) with the manifest's
-// `key` removed, which is what a store requires: the repository manifests carry
-// one to pin the extension id, and the Chrome Web Store refuses an upload that
-// has it. The id a store assigns instead is what the bridge must be told.
+// --store 构建进 dist-store/（或 dist-firefox-store/），并去掉 manifest 里的
+// `key`，这正是商店要求的：仓库里的 manifest 带着它来钉住扩展 id，而 Chrome Web
+// Store 会拒绝带着它的上传。商店另行分配的 id 才是必须告诉 bridge 的那个。
 if (process.argv.includes('--store')) {
   process.env.EXT_STORE = '1'
 }
@@ -34,19 +31,18 @@ const configs = [
 ]
 
 /**
- * Run Vite through Node, not through a shim.
+ * 通过 Node 跑 Vite，而不是通过 shim。
  *
- * `vite.cmd` cannot be spawned without `shell: true` on current Node — Windows
- * returns `EINVAL`, and `shell: true` with an argument list is deprecated
- * (DEP0190) because the arguments get concatenated rather than escaped. Naming
- * Vite's JavaScript entry point and running it with this same Node removes the
- * question: no shell, no shim, no escaping, identical on every platform. Same
- * trick as `benchmark/lib/browser-install.mjs`, and for the same reason.
+ * 在当前 Node 上，不加 `shell: true` 就 spawn 不了 `vite.cmd`——Windows 会返回
+ * `EINVAL`，而带参数列表的 `shell: true` 已经被弃用（DEP0190），因为参数会被
+ * 拼接而不是转义。点名 Vite 的 JavaScript 入口并用同一个 Node 来跑，就把这个问题
+ * 消掉了：没有 shell、没有 shim、没有转义，在每个平台上都一样。和
+ * `benchmark/lib/browser-install.mjs` 用的是同一个办法，原因也一样。
  */
 function viteCommand() {
   const entry = join(root, 'node_modules', 'vite', 'bin', 'vite.js')
   if (existsSync(entry)) return { command: process.execPath, prefix: [entry] }
-  // A hoisted install can put it somewhere else; fall back to PATH.
+  // 某个被提升安装的依赖可能把它放在别处；回落到 PATH。
   return { command: process.platform === 'win32' ? 'vite.cmd' : 'vite', prefix: [] }
 }
 
@@ -67,9 +63,9 @@ if (watch) {
       cwd: root,
       stdio: 'inherit',
     })
-    // A spawn that never started (missing binary, EINVAL) has `status === null`
-    // and reports the reason only in `error`; without this the build exited 1 with
-    // no output at all, which is the least debuggable failure there is.
+    // 一个根本没启动起来的 spawn（二进制缺失、EINVAL）`status === null`，只在
+    // `error` 里说明原因；没有这一段的话，构建会以退出码 1 结束却毫无输出，那是
+    // 最难调试的失败形式。
     if (result.error !== undefined) {
       console.error(`Could not start the Vite build: ${result.error.message}`)
       process.exit(1)

@@ -9,7 +9,7 @@ import {
   type ImageFetchResult,
 } from '../src/background/image-fetch.ts'
 
-/** Minimal `Response` stand-in: only what the fetcher reads. */
+/** 最小的 `Response` 替身：只留 fetcher 会读的那部分。 */
 function response(init: {
   ok?: boolean
   status?: number
@@ -39,8 +39,8 @@ describe('base64Of', () => {
   })
 
   it('encodes a body larger than the argument-list limit', () => {
-    // The whole point of chunking: one spread call with 100k arguments throws,
-    // and the resulting error reads as a stack overflow rather than a size bug.
+    // 分块的意义就在这里：一次展开 10 万个参数的调用会抛错，
+    // 而抛出的错误读起来像栈溢出，不像尺寸问题。
     const big = new Uint8Array(100_000).fill(65)
     const encoded = base64Of(big.buffer)
     expect(encoded.length).toBe(Math.ceil(100_000 / 3) * 4)
@@ -84,9 +84,9 @@ describe('fetchImageBytes', () => {
   })
 
   it('fetches a real image host, which the manifest now allows', async () => {
-    // The worker carries the user's cookies, which the desktop relay cannot, so a
-    // login-gated image is readable only from here. `connect-src` allows `https:`
-    // for exactly this and nothing else.
+    // worker 带着用户的 cookie，桌面中继做不到，所以
+    // 需要登录的图片只能从这里读。`connect-src` 允许 `https:`
+    // 就是为这件事，别无其他。
     const fetchImpl = vi.fn(async () => response({ contentType: 'image/png', body: new Uint8Array([1, 2, 3]).buffer }))
     const result = await fetchImageBytes('https://vcg05.cfp.cn/creative/a.jpg', fetchImpl as unknown as typeof fetch)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
@@ -120,8 +120,8 @@ describe('fetchImageBytes', () => {
     }) as unknown as Response)
     const result = await fetchImageBytes('https://x.test/huge.png', fetchImpl as unknown as typeof fetch)
     expect(result).toMatchObject({ failure: { code: 'too-large', permanent: true } })
-    // The header is enough: reading 4MB to discover it is too big wastes the
-    // bandwidth the budget exists to protect.
+    // 只看响应头就够了：为了发现它太大去读 4MB，浪费的正是
+    // 预算本来要保护的带宽。
     expect(body).not.toHaveBeenCalled()
   })
 
@@ -152,10 +152,10 @@ describe('chooseImageSource', () => {
   })
 
   it('does not download an image whose description is already known', async () => {
-    // The regression this pins. Fetching before the cache check cost a real download
-    // on every repeated question once the manifest stopped refusing real hosts; the
-    // source it returns is never read, because the coordinator answers from the cache
-    // before it looks at what it was handed.
+    // 这里钉住的那个回归。在查缓存之前就去抓，曾让每个重复提问
+    // 都付出一次真实下载的代价——那是在 manifest 不再拦真实主机之后；
+    // 它返回的来源从没被读过，因为协调器在看拿到的东西之前
+    // 就已经从缓存给出答案了。
     const fetchImpl = vi.fn()
     const chosen = await chooseImageSource('https://vcg05.cfp.cn/creative/a.jpg', true, fetchImpl)
     expect(fetchImpl).not.toHaveBeenCalled()

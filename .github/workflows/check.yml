@@ -1,13 +1,12 @@
-# Every push and pull request, checked the way a release is.
+# 每次 push 和 pull request，都按发布的标准检查一遍。
 #
-# The build runs before the tests on purpose: two assertions skip themselves without a
-# build — the e2e in the bridge and the licence-notice check in the extension —
-# so building first is what makes them actually run here instead of reporting green.
+# 构建故意排在测试之前：有两条断言在没有构建产物时会自己跳过——桥接包里的 e2e
+# 和扩展里的许可证声明检查——所以先构建才能让它们真正跑起来，而不是报个绿灯。
 #
-# The e2e drives the built extension through Playwright's chromium API. It must use
-# Playwright's own Chromium: system Chrome/Edge 137+ ignores --load-extension, and a
-# skip is silent, so pointing this job at /usr/bin/google-chrome used to turn the e2e
-# into a green no-op. The browser is installed below and its path is exported.
+# 这条 e2e 通过 Playwright 的 chromium API 驱动构建出来的扩展。它必须使用
+# Playwright 自带的 Chromium：系统的 Chrome/Edge 137+ 会忽略 --load-extension，
+# 而跳过是静默的，所以以前把这个 job 指向 /usr/bin/google-chrome，会让 e2e
+# 变成一次绿灯空跑。浏览器在下面安装，并导出它的路径。
 name: Check
 
 on:
@@ -22,7 +21,7 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         with:
-          # Matches the pnpm this project is developed against.
+          # 与本项目开发时使用的 pnpm 版本保持一致。
           version: 11
 
       - uses: actions/setup-node@v6
@@ -40,42 +39,40 @@ jobs:
           pnpm --filter dsh-browser-extension run build:firefox
 
       - name: Package both store archives
-        # Fails the build if the packer regresses (it refuses backslash entries and
-        # names each archive after the manifest inside it).
+        # 打包器一旦回退就让构建失败（它拒绝含反斜杠的条目，
+        # 并按包内 manifest 给每个归档命名）。
         run: pnpm --filter dsh-browser-extension run package
 
       - name: Install the e2e browser and point the suite at it
         run: |
           pnpm --dir benchmark install-browser
-          # Resolved through playwright-core's own registry, so the path cannot
-          # drift from the browser version that the lockfile pins.
+          # 通过 playwright-core 自己的注册表解析，所以这个路径不会
+          # 偏离 lockfile 锁定的那个浏览器版本。
           chromium="$(node benchmark/lib/chromium-path.mjs)"
           echo "PLAYWRIGHT_CHROMIUM_PATH=$chromium" >> "$GITHUB_ENV"
           "$chromium" --version
 
       - name: Typecheck
-        # Forced, not incremental. `tsc -b` keeps a build cache in lib/, and a stale one
-        # has already reported a green typecheck for a file that did not compile.
+        # 强制全量，不用增量。`tsc -b` 会在 lib/ 里留一份构建缓存，而一份过期的缓存
+        # 已经导致过：某个根本没编译通过的文件却报出类型检查绿灯。
         run: |
           pnpm --filter dsh-browser-crossplatform exec tsc -b --force
           pnpm --filter @dsh-browser/protocol run typecheck
           pnpm --filter dsh-browser-extension run typecheck
 
       - name: Benchmark tooling unit tests
-        # No model, no browser, no dsh: this only checks the harness itself, which is
-        # otherwise the least-exercised code in the repository.
+        # 不用模型、不用浏览器、不用 dsh：这里只检查测试框架本身，
+        # 否则它是整个仓库里被跑到最少的代码。
         run: pnpm --dir benchmark test
 
       - name: Test
-        # Sequentially, not in parallel. `pnpm -r run test` runs the workspace packages
-        # at once, which puts the bridge's end-to-end suite (a real Chromium) alongside
-        # the extension suite on the same cores. One extension test asserts that exactly
-        # one WebSocket was opened, and a discovery retry that is merely slow under that
-        # contention opens a second one. Running the packages in turn keeps the check
-        # meaningful instead of occasionally red.
+        # 串行执行，不并行。`pnpm -r run test` 会同时跑各个工作区包，
+        # 这会把桥接包的端到端套件（一个真实的 Chromium）和扩展套件挤在同一批核心上。
+        # 有一条扩展测试断言只打开了一个 WebSocket，而在这种争抢下仅仅变慢的
+        # 发现重试就会打开第二个。逐个跑包，能让这项检查保持有意义，而不是偶尔变红。
         #
-        # DSH_E2E_COLD_START opts the launch-path test in: it starts a browser, which
-        # must never happen behind a developer's back, so it is off by default.
+        # DSH_E2E_COLD_START 用来让启动路径的测试加入进来：它会启动一个浏览器，
+        # 这种事绝不能背着开发者发生，所以默认关闭。
         env:
           DSH_E2E_COLD_START: '1'
         run: pnpm -r --workspace-concurrency=1 run test

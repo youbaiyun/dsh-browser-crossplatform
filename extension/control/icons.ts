@@ -1,10 +1,10 @@
 /**
- * Inline SVG icon set.
+ * 内联 SVG 图标集。
  *
- * The rule for this UI: interface glyphs are code (SVG, `currentColor`, no
- * sprites, no icon fonts, no network), while image assets such as the whale mark
- * stay the original PNG files. Every path below is a 24×24 Material-style
- * outline so the icons sit correctly next to Segoe UI text.
+ * 这套 UI 的规矩：界面图标一律是代码（SVG、`currentColor`，不用
+ * sprite 图、不用图标字体、不联网），而鲸鱼标志一类的图片资源
+ * 仍是原始 PNG 文件。下面每条 path 都是 24×24 的 Material 风格
+ * 轮廓线，好让图标摆在 Segoe UI 文字旁边时位置正确。
  *
  * @module
  */
@@ -33,10 +33,10 @@ const ICONS = {
 export type IconName = keyof typeof ICONS
 
 /**
- * Build one icon element.
+ * 构建一个图标元素。
  *
- * Icons are decorative: they are `aria-hidden` and take the surrounding colour,
- * so the label next to them stays the accessible name.
+ * 图标是装饰性的：它们带 `aria-hidden`，并沿用周围颜色，
+ * 这样紧挨着它们的 label 才是无障碍名称。
  */
 export function icon(name: IconName, size = 18): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -50,12 +50,12 @@ export function icon(name: IconName, size = 18): SVGSVGElement {
   return svg
 }
 
-/** The same markup as a string, for the few places that build HTML fragments. */
+/** 同样的标记以字符串形式给出，供少数拼接 HTML 片段的地方使用。 */
 export function iconMarkup(name: IconName, size = 18): string {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" aria-hidden="true" focusable="false">${ICONS[name]}</svg>`
 }
 
-/** The state marker for one timeline row. */
+/** 时间线某一行上的状态标记。 */
 export function markerIcon(state: string): IconName {
   switch (state) {
     case 'done': return 'check'

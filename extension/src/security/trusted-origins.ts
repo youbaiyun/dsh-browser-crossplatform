@@ -1,8 +1,8 @@
 import type { ApprovalPrompt } from './approval.ts'
 
 /**
- * Normalize an exact origin or a wildcard origin for persistent storage.
- * Bare wildcards are HTTPS aliases; explicit schemes and ports stay scoped.
+ * 把精确 origin 或通配 origin 规范化，供持久化存储使用。
+ * 裸通配符是 HTTPS 的别名；显式写出的 scheme 和端口会保留它们的限定范围。
  */
 export function normalizeTrustedOrigin(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
@@ -20,7 +20,7 @@ export function normalizeTrustedOrigin(value: unknown): string | undefined {
   }
 }
 
-/** Whether one concrete web origin is covered by an exact or wildcard entry. */
+/** 某个具体的 web origin 有没有被某条精确或通配条目覆盖。 */
 export function originMatchesTrusted(origin: string, trusted: Iterable<string>): boolean {
   let parsedOrigin: URL | undefined
   for (const entry of trusted) {
@@ -40,9 +40,9 @@ export function originMatchesTrusted(origin: string, trusted: Iterable<string>):
 }
 
 /**
- * Skip an action prompt only when its full destination boundary is known.
- * Cross-origin browser_navigate names both origins; history and invalid URLs
- * deliberately remain untrusted because their destination is not represented.
+ * 只有某个动作的完整目标边界已知，才跳过它的提示。
+ * 跨域 browser_navigate 会列出两个 origin；历史导航和无效 URL 刻意保持不可信，
+ * 因为它们的目标没有被表示出来。
  */
 export function actionCoveredByTrustedOrigins(
   prompt: ApprovalPrompt,
@@ -95,15 +95,13 @@ function parseWildcard(value: string): WildcardOrigin | undefined {
 }
 
 /**
- * Whether a wildcard's host part can be a registrable domain.
+ * 通配符的主机部分有没有可能是一个可注册域名。
  *
- * Two properly formed labels are required, which is what the previous
- * Public-Suffix-List lookup actually enforced here: a single label (an
- * intranet host such as `wiki`) and an IP address may both be real hosts, so
- * `*.` must not be allowed to claim them. The suffix list itself is not
- * consulted — matching `*.co.uk` would need it, and Chrome hands `co.uk` to
- * its registry anyway, so a public suffix is not a domain anyone can control.
- * Skipping the lookup keeps a ~100 KB suffix trie out of the extension.
+ * 要求两个格式正确的标签，这正是这里以前那次 Public-Suffix-List 查询实际在做的事：
+ * 单个标签（比如内网主机 `wiki`）和 IP 地址都可能是真实主机，所以不能让 `*.`
+ * 去认领它们。后缀列表现在不再查了——匹配 `*.co.uk` 才需要它，
+ * 而 Chrome 本来就把 `co.uk` 交给它自己的注册表处理，所以公共后缀不是谁能控制的域名。
+ * 不查这一步，就能让一棵约 100 KB 的后缀 trie 不进扩展。
  */
 function isDomainName(hostname: string): boolean {
   const labels = hostname.split('.')

@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { fillImageStates } from '../src/background/tools.ts'
 import type { VisionSink } from '../src/background/vision.ts'
 
-/** A content answer carrying one numbered image. */
+/** 一条内容回答，携带一张带编号的图片。 */
 function answerWith(index: number, identity: string): { ok: true; result: unknown } {
   return { ok: true, result: { text: 'ignored', imageIdentities: [{ index, identity }] } }
 }
 
-/** A sink whose only known image is `identity`. */
+/** 一个 sink，它知道的图片只有 `identity`。 */
 function sinkFor(identity: string, state: string | undefined): VisionSink {
   return {
     states: (asked) => asked === identity ? state : undefined,
@@ -38,8 +38,8 @@ describe('fillImageStates', () => {
   })
 
   it('reports what the page already knows over what the cache holds', () => {
-    // An image whose load failed is never requested, so no cache entry can exist
-    // for it: the reason has to come from the page's own report.
+    // 加载失败的图片永远不会被请求，所以不可能有它的缓存条目：
+    // 失败原因只能来自页面自己的报告。
     const response = {
       ok: true,
       result: { text: 'x', imageIdentities: [{ index: 1, identity: 'a', unavailable: 'load-failed' }] },
@@ -52,8 +52,8 @@ describe('fillImageStates', () => {
     const sawPageText = vi.fn()
     const sink: VisionSink = { states: () => undefined, sawPageText }
     fillImageStates('⟦i1 img:not-requested⟧', answerWith(1, 'a'), sink)
-    // Filling does not report page text; that is the dispatcher's separate call,
-    // which strips markers first. Asserted here so the two never get merged.
+    // fill 不报页面文本；那是 dispatcher 的另一次调用，
+    // 那一次会先剥掉标记。这里断言两者永远不会被合并。
     expect(sawPageText).not.toHaveBeenCalled()
   })
 })

@@ -1,27 +1,27 @@
 /**
- * Bridge-owned Host API consumed by the WebSocket carrier.
+ * bridge 自有的 Host API，由 WebSocket 承载层使用。
  *
- * This boundary keeps release-specific Host topology out of the browser wire
- * server. dsh 0.1.5 implements it with Typert Remotes and Connection.
+ * 这道边界把与发行版本相关的 Host 拓扑挡在浏览器 wire server 之外。dsh 0.1.5 用 Typert
+ * Remotes 和 Connection 把它实现出来。
  *
  * @module
  */
 
 import type { RespondResult } from '@dsh-browser/protocol'
 
-/** Stable failure envelope understood by the extension panel. */
+/** 扩展面板看得懂的稳定失败信封。 */
 export interface HostRpcFailure {
   readonly code: string
   readonly message: string
   readonly details: object
 }
 
-/** Business result returned by the active dsh Host adapter. */
+/** 当前 dsh Host 适配器返回的业务结果。 */
 export type HostRpcResult<T = unknown> =
   | { readonly ok: true; readonly value: T }
   | { readonly ok: false; readonly error: HostRpcFailure }
 
-/** One extension-originated unary call after WebSocket decoding. */
+/** WebSocket 解码之后的一次由扩展发起的 unary 调用。 */
 export interface HostRpcCall {
   readonly rpcId: string
   readonly method: string
@@ -29,21 +29,21 @@ export interface HostRpcCall {
   readonly signal: AbortSignal
 }
 
-/** Event retained as the private bridge-to-extension protocol. */
+/** 留给 bridge 到扩展这条私有协议的事件。 */
 export interface HostEventFrame {
   readonly rpcId: string
   readonly method: string
   readonly payload: unknown
 }
 
-/** API surface the WebSocket carrier needs from a dsh Host. */
+/** WebSocket 承载层要用到的 dsh Host API 面。 */
 export interface BrowserHostApi {
   call(call: HostRpcCall): Promise<HostRpcResult>
   events(signal: AbortSignal): AsyncIterable<HostEventFrame>
   respond(rpcId: string, result: RespondResult, signal: AbortSignal): Promise<unknown>
 }
 
-/** Convert an arbitrary Host rejection to the open wire failure vocabulary. */
+/** 把任何 Host 拒绝都转换成开放的 wire 失败词汇。 */
 export function hostFailure(error: unknown): HostRpcFailure {
   if (isRecord(error)) {
     const code = typeof error.code === 'string' ? error.code : 'internal'
@@ -58,7 +58,7 @@ export function hostFailure(error: unknown): HostRpcFailure {
   }
 }
 
-/** Narrow unknown JSON-like data without accepting arrays. */
+/** 收窄未知的类 JSON 数据，数组不算。 */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

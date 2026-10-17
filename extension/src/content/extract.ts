@@ -1,16 +1,14 @@
 /**
- * Text extraction primitives for the text-only page snapshot: visibility,
- * accessible names, interactive inventory, main-content heuristic, and
- * truncation helpers.
+ * 纯文本页面快照用的文本提取基础件：可见性、可访问名称、交互元素清单、
+ * 正文启发式规则，以及截断小工具。
  *
- * The snapshot is the model's entire view of the page (no screenshots), so
- * every helper is written to produce dense, model-usable text under a hard
- * character budget.
+ * 模型看到的整个页面就是这份快照（没有截图），所以每个辅助函数都冲着同一件事去：
+ * 在严格的字符预算里产出密集、模型用得上的文本。
  *
  * @module
  */
 
-/** Every element type the model may be asked to operate on. */
+/** 模型可能被要求操作的所有元素类型。 */
 const INTERACTIVE_SELECTOR = [
   'a[href]',
   'button',
@@ -28,22 +26,19 @@ const INTERACTIVE_SELECTOR = [
   '[contenteditable=""]',
 ].join(', ')
 
-/** Default cap on one item's rendered name/state text. */
+/** 单个条目的名称/状态文本的默认渲染上限。 */
 const MAX_ITEM_NAME_CHARS = 80
 
 /**
- * Whether an element is visible to the user: not display/visibility/opacity
- * hidden and occupying layout space.
+ * 元素对用户可不可见：没被 display/visibility/opacity 藏起来，而且占着布局空间。
  *
- * Visibility is decided by the computed style and the box, never by the
- * element's constructor. An inline `<svg>` is not an `HTMLElement`, and gating
- * on that type reported every SVG in the page as hidden — including the ones
- * that are themselves the image, and the SVG icons that wrap a real click
- * target. `getComputedStyle` and `getBoundingClientRect` are both defined for
- * any `Element`, so they answer the question directly.
+ * 可见与否看的是计算样式和盒子，绝不看元素的构造函数。内联 `<svg>` 不是
+ * `HTMLElement`，拿这个类型当门槛，页面里每个 SVG 都会被报成隐藏——本身是图片的那些，
+ * 以及包着真实点击目标的 SVG 图标都算。`getComputedStyle` 和 `getBoundingClientRect`
+ * 对任何 `Element` 都有定义，所以这个问题它们答得上来。
  *
- * @param el - candidate element.
- * @returns true when the element renders.
+ * @param el - 候选元素。
+ * @returns 元素会渲染时为 true。
  */
 export function isVisible(el: Element): boolean {
   const style = getComputedStyle(el)
@@ -53,31 +48,29 @@ export function isVisible(el: Element): boolean {
 }
 
 /**
- * Whether the element is inside the current viewport (used to order the
- * inventory: what the user sees comes first).
- * @param el - element.
- * @returns true when any part is within the viewport.
+ * 元素在不在当前视口里（用来给清单排序：用户看得见的排前面）。
+ * @param el - 元素。
+ * @returns 只要有任意一部分在视口里就为 true。
  */
 export function isInViewport(el: Element): boolean {
   const rect = el.getBoundingClientRect()
   return rect.bottom >= 0 && rect.top <= window.innerHeight && rect.right >= 0 && rect.left <= window.innerWidth
 }
 
-/** Normalize whitespace and trim. */
+/** 把空白压平，再去掉首尾空白。 */
 function clean(text: string): string {
   return text.replace(/\s+/g, ' ').trim()
 }
 
 /**
- * Text of an element: innerText when available (browsers), textContent
- * otherwise (jsdom/edge cases).
+ * 元素的文本：能用就用 innerText（浏览器），否则用 textContent
+ * （jsdom／边角情况）。
  *
- * Exported because the annotated render has to read text exactly the way the
- * plain render does; two readings that disagreed would make the annotated text
- * a different page.
+ * 之所以导出，是因为带标注的渲染必须和普通渲染用一模一样的方式读文本；
+ * 两次读得不一样，带标注的文本就成了另一个页面。
  *
- * @param el - element.
- * @returns the element's text.
+ * @param el - 元素。
+ * @returns 元素的文本。
  */
 export function elementText(el: Element): string {
   if (el instanceof HTMLElement && typeof el.innerText === 'string') return el.innerText
@@ -85,10 +78,10 @@ export function elementText(el: Element): string {
 }
 
 /**
- * Truncate text at a character budget, marking the cut.
- * @param text - source text.
- * @param max - maximum characters.
- * @returns `{ text, truncated }` with `truncated` counting removed characters.
+ * 按字符预算截断文本，并在截断处做标记。
+ * @param text - 源文本。
+ * @param max - 最多多少字符。
+ * @returns `{ text, truncated }`，`truncated` 记的是被砍掉的字符数。
  */
 export function truncate(text: string, max: number): { text: string; truncated: number } {
   if (text.length <= max) return { text, truncated: 0 }
@@ -96,11 +89,11 @@ export function truncate(text: string, max: number): { text: string; truncated: 
 }
 
 /**
- * The accessible name of an element, following the ARIA precedence chain
- * (aria-label → aria-labelledby → associated label → own text →
- * placeholder/alt).
- * @param el - element.
- * @returns a ≤80-char name, or the tag name as last resort.
+ * 元素的可访问名称，按 ARIA 的优先级链来
+ * （aria-label → aria-labelledby → 关联 label → 自身文本 →
+ * placeholder/alt）。
+ * @param el - 元素。
+ * @returns 不超过 80 个字符的名称，实在没有才退回标签名。
  */
 export function accessibleName(el: Element): string {
   const ariaLabel = el.getAttribute('aria-label')
@@ -130,9 +123,8 @@ export function accessibleName(el: Element): string {
   if (ownText !== undefined && ownText.trim() !== '') return truncate(clean(ownText), MAX_ITEM_NAME_CHARS).text
 
   if (el instanceof HTMLInputElement) {
-    // Button-like inputs carry their label in `value`; other inputs never use
-    // the current value as a name (it is data, not identity — and for
-    // password/credit fields it would leak the secret into the snapshot).
+    // 按钮式的 input 把标签放在 `value` 里；其他 input 绝不拿当前值当名称
+    // （那是数据，不是身份——密码/信用卡字段尤其如此，那会把机密泄进快照里）。
     const buttonLike = el.type === 'submit' || el.type === 'button' || el.type === 'reset'
     if (buttonLike && el.value !== '') return truncate(clean(el.value), MAX_ITEM_NAME_CHARS).text
     if (el.placeholder !== '') return truncate(clean(el.placeholder), MAX_ITEM_NAME_CHARS).text
@@ -143,17 +135,16 @@ export function accessibleName(el: Element): string {
   return el.tagName.toLowerCase()
 }
 
-/** CSS.escape with a fallback for environments that lack it (jsdom). */
+/** 带降级实现的 CSS.escape，给没有它的环境用（jsdom）。 */
 function cssEscape(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value)
   return value.replace(/[^a-zA-Z0-9_-]/g, (ch) => `\\${ch}`)
 }
 
 /**
- * Collect the page's interactive elements in document order, deduplicated and
- * visibility-filtered.
- * @param root - document or element to scan.
- * @returns the interactive inventory.
+ * 按文档顺序收齐页面里的交互元素，顺带去重、过滤可见性。
+ * @param root - 要扫的 document 或元素。
+ * @returns 交互元素清单。
  */
 export function collectInteractive(root: Document | Element): Element[] {
   const seen = new Set<Element>()
@@ -167,15 +158,14 @@ export function collectInteractive(root: Document | Element): Element[] {
 }
 
 /**
- * The element {@link mainText} reads: a main landmark, a single article, the
- * largest multi-paragraph block, or the body.
+ * {@link mainText} 读的那个元素：main 地标、单篇 article、最大的多段落块，
+ * 或者 body。
  *
- * Exposed separately because the annotated render has to walk the same root the
- * plain render reads. Choosing the root twice would let the two disagree about
- * what the page's content is.
+ * 单独暴露出来，是因为带标注的渲染必须遍历和普通渲染同一个根。
+ * 根选两次，两边对"页面内容是什么"就会各说各话。
  *
- * @param doc - the document.
- * @returns the element holding the main content.
+ * @param doc - 文档。
+ * @returns 装着正文的元素。
  */
 export function mainRoot(doc: Document): Element {
   const main = doc.querySelector('main, [role="main"]')
@@ -199,21 +189,20 @@ export function mainRoot(doc: Document): Element {
 }
 
 /**
- * Best-effort main-content extraction (readability-lite): prefer a main
- * landmark, then a single standalone article, else the largest block
- * containing at least two paragraphs. Multiple articles commonly represent
- * cards or feed entries, so selecting only the first would hide page content.
- * @param doc - the document.
- * @returns the cleaned main text (unbounded; callers apply budgets).
+ * 尽力而为的正文提取（readability-lite）：先取 main 地标，再取单篇独立 article，
+ * 都没有就取至少含两个段落的最大块。多篇 article 通常意味着卡片或信息流条目，
+ * 只挑第一篇会把页面内容藏起来。
+ * @param doc - 文档。
+ * @returns 清洗过的正文文本（不设上限，预算由调用方来加）。
  */
 export function mainText(doc: Document): string {
   return clean(elementText(mainRoot(doc)))
 }
 
 /**
- * The full text of an element (or the whole document).
- * @param root - element to read; defaults to the document body.
- * @returns normalized text.
+ * 一个元素（或整篇文档）的完整文本。
+ * @param root - 要读的元素；默认是 document body。
+ * @returns 规范化后的文本。
  */
 export function pageText(root?: Element | null): string {
   const source = root ?? document.body

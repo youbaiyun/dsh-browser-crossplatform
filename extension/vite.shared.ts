@@ -4,16 +4,15 @@ import tsconfigPaths from 'vite-tsconfig-paths'
 import { defineConfig } from 'vite'
 
 /**
- * Shared build plumbing for the extension's three targets (background ES
- * service worker, iife content script, control-strip popup page). Each target
- * has its own config file; scripts/build.mjs runs them sequentially into one
- * dist/.
+ * 扩展三个目标共用的构建管线（background 的 ES service worker、iife 的
+ * content script、control-strip 弹窗页面）。每个目标有自己的配置文件；
+ * scripts/build.mjs 把它们依次跑进同一个 dist/。
  */
 
 /**
- * Build target: `chrome` (default) or `firefox` (set EXT_TARGET=firefox or
- * pass --firefox to scripts/build.mjs). Each target gets its own manifest and
- * output directory so both builds can coexist.
+ * 构建目标：`chrome`（默认）或 `firefox`（设置 EXT_TARGET=firefox，
+ * 或给 scripts/build.mjs 传 --firefox）。每个目标有自己的 manifest 和输出目录，
+ * 所以两份构建可以共存。
  */
 export const browserTarget = process.env.EXT_TARGET === 'firefox' ? 'firefox' : 'chrome'
 export const targetManifest = browserTarget === 'firefox' ? 'manifest.firefox.json' : 'manifest.json'
@@ -27,13 +26,12 @@ export const outDir = resolve(
 )
 
 /**
- * The manifest a store will accept.
+ * 商店会接受的 manifest。
  *
- * The repository's manifests carry a `key`, which pins the extension id — the
- * bridge's token-free loopback path is bound to that exact id, so a development
- * build needs it. A store refuses it outright: "清单文件中不得包含 key 字段"
- * (the Chrome Web Store's own wording). The store assigns the id instead, so the
- * `key` is dropped and nothing else is touched.
+ * 仓库里的 manifest 带着一个 `key`，它钉住扩展 id——bridge 那条免 token 的
+ * loopback 路径就绑定在这个确切的 id 上，所以开发构建需要它。商店则直接拒绝它：
+ * "清单文件中不得包含 key 字段"（这是 Chrome Web Store 自己的措辞）。商店会另行
+ * 分配 id，所以这里把 `key` 去掉，别的什么都不动。
  */
 function manifestForOutput(): string {
   const text = readFileSync(resolve(import.meta.dirname, targetManifest), 'utf8')
@@ -43,7 +41,7 @@ function manifestForOutput(): string {
   return `${JSON.stringify(parsed, null, 2)}\n`
 }
 
-/** Copy manifest, locale catalogs, icons, and the licence into the target's outDir. */
+/** 把 manifest、语言目录、图标和许可证复制进目标的 outDir。 */
 export const copyManifest = {
   name: 'copy-manifest',
   closeBundle(): void {
@@ -51,19 +49,18 @@ export const copyManifest = {
     writeFileSync(resolve(outDir, 'manifest.json'), manifestForOutput(), 'utf8')
     cpSync(resolve(import.meta.dirname, '_locales'), resolve(outDir, '_locales'), { recursive: true })
     cpSync(resolve(import.meta.dirname, 'assets'), resolve(outDir, 'assets'), { recursive: true })
-    // The licence travels with the build, not only with the repository: a packaged
-    // extension is a distribution of the software, and MIT requires the notice and
-    // the permission text to be included with copies of it. The repo root is one
-    // level up from this package.
+    // 许可证随构建一起走，而不是只留在仓库里：一个打包好的扩展就是本软件的
+    // 分发，而 MIT 要求随它的副本一起附上版权声明和许可文本。
+    // 仓库根目录在本包的上一级。
     copyFileSync(resolve(import.meta.dirname, '..', 'LICENSE'), resolve(outDir, 'LICENSE'))
   },
 }
 
-/** Shared plugins for every target: tsconfig paths (plugin protocol source,
- * SDK-like source consumption) plus the manifest copy. */
+/** 每个目标共用的插件：tsconfig paths（直接消费插件 protocol 源码，
+ * 类似 SDK 的源码消费方式）加上 manifest 复制。 */
 export const sharedPlugins = [tsconfigPaths({ projects: ['./tsconfig.json'] }), copyManifest]
 
-/** Shared build options for the non-panel targets. */
+/** 非面板目标共用的构建选项。 */
 export function targetBuild(entry: string, format: 'es' | 'iife', entryFileNames: string, emptyOutDir: boolean) {
   return defineConfig({
     define: {

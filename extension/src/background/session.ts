@@ -1,33 +1,30 @@
 /**
- * Live session view for the full-page control UI: the assistant's streamed text,
- * the execution timeline, and the turn/queue flags the page renders.
+ * 整页控制 UI 的实时会话视图：助手流式文本、执行时间线，以及页面渲染要看的轮次/队列标志。
  *
- * The worker keeps exactly one dsh session per lifetime and holds nothing
- * durable: no transcript, no history, no frame buffer. The desktop dsh app owns
- * the conversation log, and a page that opens mid-turn repaints from the pushed
- * `ControlState`, so nothing here is persisted or replayed.
+ * worker 一辈子只持有一个 dsh 会话，也不存任何持久数据：没有 transcript、没有历史、没有帧
+ * 缓冲。会话日志归桌面 dsh 应用，而轮次中途打开的页面会照着推来的 `ControlState` 重绘，所以
+ * 这里没有东西会被持久化或者重放。
  *
  * @module
  */
 
 import type { ActivityEntry, AssistantStreamEvent, ControlState, TimelineEntry } from '../settings.ts'
 
-/** Rows kept in the timeline; the oldest are dropped once it is full. */
+/** 时间线最多留几行；满了就丢最旧的。 */
 export const TIMELINE_LIMIT = 200
 
 /**
- * Shortest gap between two streaming publishes.
+ * 两次流式发布之间最少隔多久。
  *
- * Each publish clones the assistant's whole text and posts it across the port, so at the
- * rate a fast model streams, doing it per delta is both wasteful and quadratic in the reply
- * length. 50 ms keeps the text visibly live (20 updates a second is smoother than reading)
- * while making the cross-process cost depend on elapsed time rather than on delta count.
+ * 每次发布都要克隆整段助手文本、再通过 port 发出去；按快模型的流式速度，每个 delta 都发一遍
+ * 既浪费，代价还会随回复长度二次增长。50 ms 让文本看着仍然是实时的（每秒 20 次更新，比人读得
+ * 还快），同时把跨进程开销绑在流逝的时间上，而不是 delta 的个数上。
  */
 export const STREAM_NOTIFY_MS = 50
 
-/** What the page's rendered view is told whenever the session view changed. */
+/** 会话视图变了的时候，通知页面重绘的出口。 */
 export interface ControlSessionSinks {
-  /** Called after a change the page should repaint; never called per stream delta. */
+  /** 在页面需要重绘的变化之后调；绝不按流式 delta 调。 */
   changed(): void
 }
 
@@ -43,17 +40,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Normalize one `session/assistant-stream` push for the active session.
+ * 把一次 `session/assistant-stream` 推送规整成当前会话的形式。
  *
- * The bridge payload is `{ sessionId, snapshotId?, frame }`; a `snapshot` frame
- * is an authoritative baseline and every other frame is a dense delta. The port
- * event mirrors that split: a snapshot keeps its `snapshotId` beside the frame
- * (`{ snapshotId?, frame }`), while a delta IS its frame. Frames for another
- * session are dropped: one worker follows one session, and a second dsh window
- * sharing the bridge must not paint into this page's conversation.
- * @param payload - raw bridge payload.
- * @param activeSessionId - the session this worker drives, if any.
- * @returns the port event to forward, or null when it is not this session's.
+ * bridge payload 是 `{ sessionId, snapshotId?, frame }`；`snapshot` 帧是权威基线，其余每个帧都是
+ * 密集 delta。port 事件照搬了这个区分：snapshot 把 `snapshotId` 放在帧旁边
+ * （`{ snapshotId?, frame }`），而 delta 就是它的帧本身。别的会话的帧一律丢掉：一个 worker 只跟
+ * 一个会话，共用一个 bridge 的第二个 dsh 窗口不许画进这个页面的对话里。
+ * @param payload - 原始 bridge payload。
+ * @param activeSessionId - 这个 worker 驱动的会话（如果有）。
+ * @returns 要转发的 port 事件；不属于本会话时返回 null。
  */
 export function assistantStreamEvent(payload: unknown, activeSessionIds: ReadonlySet<string>): AssistantStreamEvent | null {
   if (!isRecord(payload)) return null
@@ -73,7 +68,7 @@ export function assistantStreamEvent(payload: unknown, activeSessionIds: Readonl
   }
 }
 
-/** The stream frame inside one normalized assistant-stream event. */
+/** 一条规整过的 assistant-stream 事件里的流式帧。 */
 function streamFrame(event: AssistantStreamEvent): Record<string, unknown> | undefined {
   if (!isRecord(event.payload)) return undefined
   if (event.kind !== 'snapshot') return event.payload
@@ -82,14 +77,13 @@ function streamFrame(event: AssistantStreamEvent): Record<string, unknown> | und
 }
 
 /**
- * Normalize one `session/event` push for the active session.
+ * 把一次 `session/event` 推送规整成当前会话的形式。
  *
- * The event is forwarded raw: the page renders tool calls, messages, and turn
- * boundaries itself, so the worker only decides whether it belongs to the
- * session this worker is driving.
- * @param payload - raw bridge payload.
- * @param activeSessionId - the session this worker drives, if any.
- * @returns the port message to forward, or null when it is not this session's.
+ * 事件原样往下转：工具调用、消息、轮次边界都由页面自己渲染，worker 只判断它属不属于正在驱动的
+ * 那个会话。
+ * @param payload - 原始 bridge payload。
+ * @param activeSessionId - 这个 worker 驱动的会话（如果有）。
+ * @returns 要转发的 port 消息；不属于本会话时返回 null。
  */
 export function sessionEventMessage(
   payload: unknown,
@@ -103,7 +97,7 @@ export function sessionEventMessage(
   return { sessionId, event }
 }
 
-/** Text of the `text` blocks in one content array, or undefined when there is none. */
+/** 把 content 数组里各个 `text` 块拼起来；没有就返回 undefined。 */
 function textFromBlocks(blocks: unknown): string | undefined {
   if (!Array.isArray(blocks)) return undefined
   const parts: string[] = []
@@ -115,7 +109,7 @@ function textFromBlocks(blocks: unknown): string | undefined {
   return parts.length === 0 ? undefined : parts.join('\n')
 }
 
-/** Authoritative assistant text of one durable `assistant/message` event. */
+/** 一条持久 `assistant/message` 事件里的权威助手文本。 */
 function assistantMessageText(event: Record<string, unknown>): string | undefined {
   const data = isRecord(event.data) ? event.data : undefined
   if (data === undefined) return undefined
@@ -124,10 +118,10 @@ function assistantMessageText(event: Record<string, unknown>): string | undefine
 }
 
 /**
- * Text carried by an authoritative stream baseline.
+ * 权威流式基线里带的文本。
  *
- * A baseline holds the attempt already in progress: `text-chunks` records carry
- * joined groups of deltas, and raw `chunk` records carry a single one.
+ * 基线握着已经开了的那次尝试：`text-chunks` 记录里是一组拼在一起的 delta，裸 `chunk` 记录里
+ * 只有一个。
  */
 function baselineText(baseline: unknown): string {
   if (!isRecord(baseline)) return ''
@@ -149,39 +143,36 @@ function baselineText(baseline: unknown): string {
 }
 
 /**
- * The session and timeline the control page renders.
+ * 供控制页面渲染的会话与时间线。
  *
- * Rows are chronological (oldest first) and capped; model text updates ONE
- * assistant row per turn instead of appending a row per delta; and the
- * accumulated per-turn text is dropped at `turn/end`, so a long conversation
- * cannot grow the worker's memory.
+ * 行按时间排（最旧的在前）且有上限；模型文本每轮只更新**一行**助手行，不是每个 delta 追加
+ * 一行；本轮攒下的文本在 `turn/end` 丢掉，所以再长的对话也不会让 worker 的内存涨起来。
  */
 export class ControlSession {
   private readonly entries: TimelineEntry[] = []
   private sessionId: string | null = null
   private turn: 'idle' | 'running' = 'idle'
   private pendingPrompt = false
-  /** Assistant text committed by durable messages in this turn. */
+  /** 本轮里由持久消息定下来的助手文本。 */
   private committedText: string[] = []
-  /** Text streamed since the last commit or baseline. */
+  /** 自上次提交或基线以来流式到达的文本。 */
   private attemptText = ''
   private assistantRowId: string | null = null
-  /** Pending coalesced streaming publish, or null when none is scheduled. */
+  /** 已经合并、待发布的流式更新；没排程时为 null。 */
   private streamNotifyTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly sinks: ControlSessionSinks) {}
 
-  /** The one session this worker talks to, or null before the first prompt. */
+  /** 这个 worker 对话的那个会话；第一条提示之前为 null。 */
   get id(): string | null {
     return this.sessionId
   }
 
   /**
-   * Every conversation whose events this worker forwards to the panel.
+   * 这个 worker 会把事件转发给面板的每一个对话。
    *
-   * One entry in the ordinary modes — the conversation the panel is bound to — plus
-   * whatever 「工作区内」 mirrors. Always a set, so the event router does not have to
-   * know which mode is in force.
+   * 普通模式下只有一项——面板绑定的那个对话——再加上「工作区内」镜像的那些。它永远是个集合，
+   * 这样事件路由器不用管当前生效的是哪种模式。
    */
   activeSessionIds(): ReadonlySet<string> {
     const ids = new Set(this.mirrored.keys())
@@ -190,56 +181,54 @@ export class ControlSession {
   }
 
   /**
-   * The extra conversations being mirrored, keyed by id, with the label to show.
+   * 正在镜像的那几个额外对话，按 id 索引，各带一个要显示的标签。
    *
-   * @param sessions - the conversations 「工作区内」 is mirroring; empty to stop.
+   * @param sessions - 「工作区内」正在镜像的对话；传空就是停下。
    */
   setMirrored(sessions: ReadonlyMap<string, string>): void {
     this.mirrored = new Map(sessions)
   }
 
-  /** The label for one mirrored conversation, for the panel's row headers. */
+  /** 某个被镜像对话的标签，给面板的行标题用。 */
   labelFor(sessionId: string): string | undefined {
     return this.mirrored.get(sessionId)
   }
 
-  /** The `ControlState.session` slice. */
+  /** `ControlState.session` 切片。 */
   session(): ControlState['session'] {
     return { id: this.sessionId, turn: this.turn, pendingPrompt: this.pendingPrompt }
   }
 
-  /** The `ControlState.timeline` slice, oldest row first. */
+  /** `ControlState.timeline` 切片，最旧的行在前。 */
   timeline(): TimelineEntry[] {
     return this.entries.map((entry) => ({ ...entry }))
   }
 
-  /** Remember the session this worker drives; the page reports it in `state`. */
+  /** 认下这个 worker 驱动的会话；页面会在 `state` 里报它。 */
   adopt(id: string): void {
     if (this.sessionId === id) return
     this.sessionId = id
     this.sinks.changed()
   }
 
-  /** Ids of the rows whose work has already begun. */
+  /** 已经开始干活的那些行的 id。 */
   inFlightRowIds(activeToolCallIds: Iterable<string>): Set<string> {
     const ids = new Set<string>(activeToolCallIds)
     for (const entry of this.entries) {
-      // A submitted prompt is in flight; a queued tool step is not.
+      // 已提交的提示还在路上；排队中的工具步骤不算。
       if (entry.kind === 'request' && entry.state === 'pending') ids.add(entry.id)
     }
     return ids
   }
 
   /**
-   * Forget every conversation except the ones named, keeping rows that belong to none.
+   * 只留下指定的对话，其余的都忘掉，不属于任何对话的行照留。
    *
-   * 「工作区内」 mirrors a set of conversations, and the set changes as the desktop
-   * starts and archives work. This is the narrow version of {@link detach}: a
-   * conversation that left the set loses its rows, while the others keep theirs —
-   * which is what makes the mode readable at all, since clearing everything would
-   * wipe the conversations the user is still watching.
+   * 「工作区内」镜像的是一组对话，而桌面端一边开新活儿一边归档，这个集合是会变的。这是
+   * {@link detach} 的窄版本：离开集合的对话丢掉自己的行，别的对话保住自己的行——这个模式能读
+   * 就是因为这一点，一把全清会抹掉用户还在看的那些对话。
    *
-   * @param keep - sessions still being mirrored.
+   * @param keep - 仍在镜像的会话。
    */
   retainSessions(keep: ReadonlySet<string>): void {
     const dropped = this.entries.filter((entry) => entry.sessionId !== undefined && !keep.has(entry.sessionId))
@@ -247,8 +236,7 @@ export class ControlSession {
     const kept = this.entries.filter((entry) => entry.sessionId === undefined || keep.has(entry.sessionId))
     this.entries.length = 0
     this.entries.push(...kept)
-    // A row that vanishes while its conversation is gone must not leave the panel
-    // claiming a turn is still running for it.
+    // 行跟着它所属的对话一起消失，不能让面板还口口声声说有一轮在跑。
     if (dropped.some((entry) => entry.sessionId === this.sessionId)) {
       this.turn = 'idle'
       this.committedText = []
@@ -259,32 +247,31 @@ export class ControlSession {
   }
 
   /**
-   * Which conversation the rows being created right now belong to.
+   * 此刻新建的行属于哪个对话。
    *
-   * Set by the event router before it applies anything, and read by `push`, so that
-   * 「工作区内」 can mirror several conversations at once without every row-producing
-   * method having to carry a session id. It is `null` for the panel's own transcript,
-   * where the binding is the only conversation there is.
+   * 事件路由器在应用任何东西之前设好它，`push` 再读它，这样「工作区内」能同时镜像多个对话，
+   * 而每个产生行的方法不必都捎一个 session id。面板自己的 transcript 是 `null`，因为那里绑定
+   * 就是唯一的对话。
    */
   private attributedSessionId: string | null = null
 
-  /** Extra conversations 「工作区内」 is mirroring: id → label. Empty in every other mode. */
+  /** 「工作区内」正在镜像的额外对话：id → 标签。别的模式下都是空的。 */
   private mirrored = new Map<string, string>()
 
   /**
-   * Name the conversation the next rows belong to.
+   * 指定接下来这些行归属哪个对话。
    *
-   * @param sessionId - the conversation being applied, or null for the panel's own.
+   * @param sessionId - 正在应用的那个对话；面板自己的传 null。
    */
   attributeTo(sessionId: string | null): void {
     this.attributedSessionId = sessionId
   }
 
   /**
-   * Tag a row with the conversation it came from.
+   * 给一行标上它来自哪个对话。
    *
-   * @param entry - the row about to be appended.
-   * @returns the row, with `sessionId` set when one is being attributed.
+   * @param entry - 马上要追加的行。
+   * @returns 该行；正在归属某个会话时会给它设上 `sessionId`。
    */
   private attributed(entry: TimelineEntry): TimelineEntry {
     if (this.attributedSessionId === null) return entry
@@ -292,26 +279,21 @@ export class ControlSession {
   }
 
   /**
-   * Forget the session and everything shown for it.
+   * 把这个会话以及为它显示的一切都忘掉。
    *
-   * Used when the user points the panel at a different conversation, or back at
-   * one of its own. The transcript belongs to the session it came from, so
-   * keeping the rows would present one conversation's history as another's.
+   * 用户把面板指向另一个对话、或者指回它自己的某个对话时会走这里。transcript 属于它来自的那个
+   * 会话，把这些行留着就等于拿一个对话的历史冒充另一个对话的。
    *
-   * `keepIds` names work that is genuinely in flight — a prompt already
-   * submitted, a tool already dispatched. Those rows stay because their outcome
-   * is still coming and erasing them would remove the only sign of it. A row
-   * that is merely *queued* is dropped: it has not started, and it is about to
-   * run against the conversation the user just moved to.
+   * `keepIds` 给的是确实还在路上的活儿——已经提交的提示、已经派发的工具。这些行要留下，因为
+   * 结果还在路上，抹掉它们就等于抹掉它唯一的迹象。仅仅是*排队中*的行直接丢掉：它还没开始，
+   * 而且马上就要在用户刚切走的那个对话上跑。
    *
-   * @param keepIds - ids of rows whose work is already under way.
+   * @param keepIds - 已经开始干活的行 id。
    */
   detach(keepIds: ReadonlySet<string> = new Set()): void {
     this.sessionId = null
-    // A tool step row carries the id of the activity row it belongs to, not its
-    // own, so matching on `id` alone silently dropped exactly the rows this
-    // parameter exists to preserve — and the outcome arriving later then created
-    // a fresh row instead of filling the one that was already on screen.
+    // 工具步骤行带的是它所属活动行的 id，不是自己的 id，所以只按 `id` 匹配会悄悄丢掉这个参数
+    // 本来要保的那些行——之后到的结果就会新建一行，而不是填进屏幕上已经有的那一行。
     const inFlight = this.entries.filter((entry) => keepIds.has(entry.callId ?? entry.id))
     this.entries.length = 0
     this.entries.push(...inFlight)
@@ -319,15 +301,15 @@ export class ControlSession {
     this.committedText = []
     this.attemptText = ''
     this.assistantRowId = null
-    // `pendingPrompt` describes the kept row above, not the binding that changed.
+    // `pendingPrompt` 说的是上面保留下来的那一行，不是已经换掉的那个绑定。
     if (inFlight.length === 0) this.pendingPrompt = false
     this.sinks.changed()
   }
 
   /**
-   * Append the user's submitted request and mark the prompt queue busy.
-   * @param text - the text the user submitted.
-   * @returns the row id, so a rejected prompt can drop exactly this row.
+   * 追加用户提交的请求，并把提示队列标成忙。
+   * @param text - 用户提交的文本。
+   * @returns 该行 id，这样被拒的提示能精确地丢掉这一行。
    */
   beginPrompt(text: string): string {
     const entry: TimelineEntry = {
@@ -336,25 +318,23 @@ export class ControlSession {
       text,
       state: 'pending',
       at: Date.now(),
-      // The conversation the next prompt goes to, which in workspace mode is the
-      // panel's own session rather than any of the ones being mirrored.
+      // 下一条提示要去哪个对话；工作区模式下是面板自己的会话，不是任何被镜像的会话。
       ...(this.sessionId === null ? {} : { sessionId: this.sessionId }),
     }
     this.push(entry)
-    // Set before the gateway answers rather than after admission: the first
-    // `turn/start` can arrive while the prompt reply is still in flight, and a
-    // later admission must not resurrect a flag that turn already cleared.
+    // 在 gateway 作答之前就置位，不是等准入之后：第一条 `turn/start` 可能在提示回复还在路上时
+    // 就到了，而随后的准入不能把这个已经被那一轮清掉的标志又救活。
     this.pendingPrompt = true
     this.sinks.changed()
     return entry.id
   }
 
-  /** The gateway admitted the prompt: the desktop owns it from here. */
+  /** gateway 收下了这条提示：从这儿起归桌面端管。 */
   admitPrompt(id: string): void {
     if (this.updateRow(id, { state: 'done' })) this.sinks.changed()
   }
 
-  /** The prompt never reached the desktop: drop its row and clear the queue flag. */
+  /** 这条提示压根没到桌面端：丢掉它的行，再把队列标志清掉。 */
   rejectPrompt(id: string): void {
     this.pendingPrompt = false
     const index = this.entries.findIndex((entry) => entry.id === id)
@@ -362,7 +342,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** `turn/start`: the model is working; a queued prompt is no longer pending. */
+  /** `turn/start`：模型开工了；排队中的提示不再是待处理状态。 */
   startTurn(): void {
     this.turn = 'running'
     this.pendingPrompt = false
@@ -370,7 +350,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** `turn/end`: the turn is over, so its row is finished and its live text dropped. */
+  /** `turn/end`：本轮结束，它的行就算完成，实时文本丢掉。 */
   endTurn(): void {
     this.turn = 'idle'
     this.pendingPrompt = false
@@ -380,7 +360,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** The user stopped the turn: nothing is queued any more, so say so at once. */
+  /** 用户停掉了本轮：队列里没东西了，得马上说出来。 */
   cancelTurn(): void {
     this.turn = 'idle'
     this.pendingPrompt = false
@@ -393,20 +373,19 @@ export class ControlSession {
   }
 
   /**
-   * Apply one assistant-stream push.
+   * 应用一次 assistant-stream 推送。
    *
-   * Only the row's text changes: `session.stream` already carries every delta
-   * to the live page, and re-pushing the whole timeline per token would flood
-   * the port. The worker's copy still tracks the text so a page that opens
-   * mid-turn repaints what has arrived so far.
-   * @param event - the normalized stream event already forwarded to the page.
+   * 变的只有该行的文本：`session.stream` 已经把每个 delta 送到了活着的页面上，每来一个 token
+   * 就重推整条时间线会把 port 淹掉。worker 这份副本照样跟着文本走，这样轮次中途打开的页面能
+   * 重绘出到目前为止收到的东西。
+   * @param event - 已经转发给页面的规整流式事件。
    */
   applyStream(event: AssistantStreamEvent): void {
     const frame = streamFrame(event)
     if (frame === undefined) return
     if (event.kind === 'snapshot') {
-      // A baseline is authoritative for the attempt in progress: replace the
-      // live suffix so a mid-turn opener never shows a half-accumulated prefix.
+      // 对正在进行的那次尝试，基线说了算：直接换掉实时后缀，这样中途打开的页面永远不会显示
+      // 一截攒了一半的前缀。
       this.attemptText = baselineText(frame.baseline)
       this.refreshAssistantRow()
       return
@@ -424,8 +403,8 @@ export class ControlSession {
   }
 
   /**
-   * Apply one durable session event to the turn flags and the assistant row.
-   * @param event - the raw `session/event` payload event.
+   * 把一条持久会话事件落到轮次标志和助手行上。
+   * @param event - 原始 `session/event` payload 事件。
    */
   applyEvent(event: unknown): void {
     if (!isRecord(event) || typeof event.type !== 'string') return
@@ -439,12 +418,12 @@ export class ControlSession {
       case 'assistant/message': {
         const text = assistantMessageText(event)
         if (text === undefined) return
-        // The durable message repeats what the stream already showed. Commit it
-        // as this step's authoritative text and stop showing the live suffix.
+        // 持久消息把流里已经显示过的内容又给了一遍。把它当本步骤的权威文本提交，实时后缀
+        // 就不显示了。
         if (this.committedText.at(-1) !== text) this.committedText.push(text)
         this.attemptText = ''
-        // Drop any coalesced streaming publish: the authoritative row below supersedes it,
-        // and leaving it pending would repaint the same text a moment later.
+        // 已经合并但没发的流式更新一并丢掉：下面那行权威内容会取代它，留在待处理状态只会稍后
+        // 把同一段文本再画一遍。
         this.flushStreamNotify()
         this.refreshAssistantRow(true)
         return
@@ -455,10 +434,10 @@ export class ControlSession {
   }
 
   /**
-   * Add one tool or command run to the timeline.
-   * @param callId - id shared with the matching `ActivityEntry`.
-   * @param tool - tool name, such as `browser_click`.
-   * @param text - safe display summary of the run.
+   * 把一次工具或命令运行加进时间线。
+   * @param callId - 和对应 `ActivityEntry` 共用的 id。
+   * @param tool - 工具名，比如 `browser_click`。
+   * @param text - 这次运行的安全显示摘要。
    */
   addStep(callId: string, tool: string, text: string): void {
     const index = this.stepIndex(callId)
@@ -481,7 +460,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** The browser work actually began; a step still queued is now running. */
+  /** 浏览器这边真开工了；还在排队的步骤现在转成运行中。 */
   startStep(callId: string): void {
     const index = this.stepIndex(callId)
     if (index === -1) return
@@ -491,7 +470,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** Mirror one activity transition onto its step row (creating it when needed). */
+  /** 把一次活动状态变化镜像到它的步骤行上（没有这行就建一个）。 */
   applyActivity(entry: ActivityEntry): void {
     const index = this.stepIndex(entry.id)
     if (index === -1) {
@@ -527,12 +506,11 @@ export class ControlSession {
   }
 
   /**
-   * Create or update the turn's single assistant row.
+   * 建出或更新本轮唯一那行助手行。
    *
-   * Only the text changes on an existing row: its state belongs to the turn, so
-   * a late durable message cannot resurrect a row that `turn/end` already
-   * settled.
-   * @param notify - force a repaint even when the row already exists.
+   * 已有的行只改文本：状态归本轮管，所以一条迟到的持久消息救不活一个 `turn/end` 已经结算过的
+   * 行。
+   * @param notify - 行已经存在也强制重绘。
    */
   private refreshAssistantRow(notify = false): void {
     const text = this.assistantText()
@@ -550,15 +528,14 @@ export class ControlSession {
         else this.scheduleStreamNotify()
         return
       }
-      // The cap dropped the row; the next update starts a fresh one.
+      // 这一行被上限挤掉了；下次更新会另起一行。
       this.assistantRowId = null
     }
     const entry: TimelineEntry = {
       id: newId('assistant'),
       kind: 'assistant',
       text,
-      // Text that arrives outside a live turn (a durable message delivered
-      // after `turn/end`) is already final.
+      // 活跃轮次之外到的文本（`turn/end` 之后送来的持久消息）已经是最终态了。
       state: this.turn === 'running' ? 'running' : 'done',
       at: Date.now(),
     }
@@ -569,13 +546,11 @@ export class ControlSession {
   }
 
   /**
-   * Publish a streaming update at most once per {@link STREAM_NOTIFY_MS}.
+   * 每 {@link STREAM_NOTIFY_MS} 最多发一次流式更新。
    *
-   * Each publish clones the whole assistant text and posts it across the port, and a reply
-   * can produce hundreds of deltas per second, so notifying per delta made the cross-process
-   * cost grow with the square of the reply length. Coalescing keeps the row in step while
-   * making that cost linear. A plain timer rather than an animation frame: this runs in the
-   * service worker, where a frame callback is not guaranteed to arrive.
+   * 每次发布都要克隆整段助手文本、再通过 port 发出去，而一次回复每秒能产出几百个 delta，所以
+   * 照着 delta 通知会让跨进程开销随回复长度平方增长。合并之后该行照样同步，开销却变成线性的。
+   * 用普通定时器，不用 animation frame：这段代码跑在 service worker 里，那儿不保证帧回调送得到。
    */
   private scheduleStreamNotify(): void {
     if (this.streamNotifyTimer !== null) return
@@ -585,7 +560,7 @@ export class ControlSession {
     }, STREAM_NOTIFY_MS)
   }
 
-  /** Publish any coalesced streaming update right away; used when a turn settles. */
+  /** 把已经合并的流式更新立刻发出去；轮次结算时用。 */
   private flushStreamNotify(): void {
     if (this.streamNotifyTimer === null) return
     clearTimeout(this.streamNotifyTimer)
@@ -593,7 +568,7 @@ export class ControlSession {
     this.sinks.changed()
   }
 
-  /** Finish the turn's assistant row, when it has one and the cap kept it. */
+  /** 给本轮的助手行收尾——得有这么一行、而且没被上限挤掉。 */
   private settleAssistantRow(state: 'done' | 'cancelled'): void {
     if (this.assistantRowId === null) return
     const index = this.entries.findIndex((entry) => entry.id === this.assistantRowId)

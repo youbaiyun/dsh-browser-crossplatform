@@ -1,24 +1,22 @@
 /**
- * A stand-in vision endpoint, for measuring the round trip without a provider.
+ * 一个替身视觉端点，用来在没有提供方的情况下测量整个往返。
  *
- * Answers the same request shape a real endpoint would, after a delay you choose.
- * Because the delay is the only slow part, whatever you observe beyond it is the
- * extension, the bridge and the fill — which is the part worth knowing before
- * paying anyone to find out.
+ * 它会以真实端点会接受的同一种请求形状作答，延迟由你指定。
+ * 因为延迟是唯一慢的部分，你在延迟之外观察到的一切就是扩展、桥接和填充的耗时
+ * ——而这正是值得在花钱找人测出来之前先搞清楚的部分。
  *
- * It is also the cheapest way to check the direct path end to end: loopback
- * addresses are already allowed by the extension's policy, so pointing the panel
- * at this needs no manifest change and no key.
+ * 它也是端到端检查直连路径最便宜的方式：扩展的策略本来就允许回环地址，
+ * 所以把面板指向它不需要改 manifest，也不需要 key。
  *
- * The request body is never printed: it holds the user's image. Only its size is.
+ * 请求体从不打印：里面是用户的图片。只打印它的大小。
  *
- * Usage:
- *   node tools/vision-stub.mjs                 # answers after 800ms
- *   STUB_MS=2500 node tools/vision-stub.mjs    # or whatever you want to feel
+ * 用法：
+ *   node tools/vision-stub.mjs                 # 800ms 后作答
+ *   STUB_MS=2500 node tools/vision-stub.mjs    # 或者任何你想感受的数值
  *   STUB_DESC=一张季度营收折线图 node tools/vision-stub.mjs
  *
- * Then set the panel's cloud address to http://127.0.0.1:9099/v1 and leave the key
- * empty. Ask for an image, and the console prints what it received and when.
+ * 然后把面板的云端地址设为 http://127.0.0.1:9099/v1，key 留空。
+ * 请求一张图片，控制台就会打印它收到了什么、以及是什么时候收到的。
  */
 
 import { createServer } from 'node:http'
@@ -45,8 +43,8 @@ const server = createServer((request, response) => {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const body = Buffer.concat(chunks)
-    // How much of the request is the image itself rather than the wrapper around
-    // it. The base64 is measured, never printed: it is the user's picture.
+    // 请求里有多少是图片本身，而不是包着它的外壳。
+    // base64 只测量、从不打印：那是用户的图片。
     const imageChars = /"url":\s*"data:[^;]+;base64,([A-Za-z0-9+/=]*)"/.exec(body.toString('utf8'))?.[1].length ?? 0
     console.log(
       `[vision-stub] request in  ${(body.length / 1024).toFixed(1)}KB`

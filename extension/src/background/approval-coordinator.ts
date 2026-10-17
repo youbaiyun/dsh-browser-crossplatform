@@ -11,30 +11,28 @@ interface PendingApproval {
 }
 
 interface ApprovalCoordinatorCallbacks {
-  /** Offer the request to every open control strip; true when one accepted it. */
+  /** 把请求交给每个开着的控制条；有谁接下就返回 true。 */
   deliver: (request: ApprovalRequest) => boolean
-  /** Fall back to an OS notification when no control strip is open. */
+  /** 一个控制条都没开时，退回系统通知。 */
   notify: (request: ApprovalRequest) => void
   clearNotification: (id: string) => void
   resolved: (id: string) => void
 }
 
 /**
- * Time allowed for a user to decide.
+ * 留给用户做决定的时间。
  *
- * The control strip is a popup, so an approval usually arrives while it is
- * closed: the user has to notice the notification or the toolbar badge, open the
- * strip, and read the summary. Two minutes is the smallest window that leaves
- * room for that without letting a stale request sit around indefinitely.
+ * 控制条是个弹出面板，审批到达时它通常正关着：用户得先看到通知或工具栏徽标，
+ * 打开控制条，再把摘要读一遍。两分钟是容得下这一串动作的最小窗口，
+ * 又不至于让一个过期的请求无限期地挂着。
  */
 export const APPROVAL_TIMEOUT_MS = 120_000
 
 /**
- * Own pending approvals independently of any view's lifetime.
+ * 管着待审批请求，不跟着任何视图的生命周期走。
  *
- * The control strip is a short-lived popup, so a request decides nothing about
- * who is looking: it is offered to whatever views exist, kept in `pending`, and
- * replayed to the next one that opens.
+ * 控制条是短命弹窗，所以一个请求该不该被看到，不取决于此刻谁在看：
+ * 它交给当时存在的视图，留在 `pending` 里，之后再打开视图时重放一遍。
  */
 export class ApprovalCoordinator {
   private readonly pending = new Map<string, PendingApproval>()
@@ -72,19 +70,19 @@ export class ApprovalCoordinator {
     this.settle(id, { status: 'decision', decision })
   }
 
-  /** Every request still waiting for a decision, oldest first. */
+  /** 每个还在等决定的请求，最旧的在前。 */
   pendingRequests(): ApprovalRequest[] {
     return [...this.pending.values()].map(({ request }) => ({ ...request, origins: [...request.origins] }))
   }
 
-  /** Drop one caller's pending request without claiming the user decided it. */
+  /** 丢掉某个调用方挂起的请求，但不说用户已经决定过它。 */
   cancelAll(): void {
     for (const id of [...this.pending.keys()]) {
       this.settle(id, { status: 'cancelled' })
     }
   }
 
-  /** Notify for requests that lost their final visible control strip. */
+  /** 那些已经没有可见控制条的请求，给它们发通知。 */
   notifyPending(): void {
     for (const { request } of this.pending.values()) {
       this.callbacks.notify(request)

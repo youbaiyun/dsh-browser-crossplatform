@@ -1,17 +1,17 @@
 <!doctype html>
 <!--
-  The dsh control page: the browser side panel's conversation.
+  dsh 控制页：浏览器侧边栏里的那段对话。
 
-  `#control-root` is the mount point, and it carries the height that every
-  descendant resolves against, so it must stay styled.
+  `#control-root` 是挂载点，它承载了所有后代元素据以计算的高度，
+  所以它必须保留样式。
 
-  The page's content security policy is declared in `manifest.json`, not here,
-  and it permits exactly three things: scripts and objects from this extension,
-  and outbound connections to loopback only (`connect-src ws://127.0.0.1:*
-  http://127.0.0.1:*`) — which is how the panel reaches the desktop app and
-  nothing else. So this document loads one module and one stylesheet and inlines
-  nothing: no inline <script>, no inline <style>, no event-handler attributes.
-  Interface icons are inline SVG built in JS.
+  本页的内容安全策略声明在 `manifest.json` 里，不在这个文件里，
+  它只允许三件事：来自本扩展的脚本与对象，
+  以及仅限 loopback 的出站连接（`connect-src ws://127.0.0.1:*
+  http://127.0.0.1:*`）——面板正是靠它连到桌面端，
+  别的都连不上。因此本文件只加载一个 module 和一张样式表，不内联
+  任何东西：没有内联 <script>、没有内联 <style>、没有事件处理属性。
+  界面图标是用 JS 构建的内联 SVG。
 -->
 <html lang="zh">
   <head>

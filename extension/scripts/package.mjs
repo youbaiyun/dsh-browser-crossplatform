@@ -1,27 +1,23 @@
 /**
- * Build the two store/release archives from an already-built extension.
+ * 从已经构建好的扩展打出两个商店/发布用归档。
  *
- * Two properties matter and are enforced here rather than left to whoever runs
- * the upload by hand:
+ * 有两条性质很重要，而且是在这里强制的，而不是留给手工上传的人：
  *
- * 1. **Entry names use `/`, never `\`.** A store upload containing backslash
- *    entries is rejected. This is why the packer is hand-written instead of
- *    shelling out to `Compress-Archive`: on Windows that cmdlet produces
- *    backslash entries, and `zip` is not present on a stock machine. A ZIP
- *    writer over `node:zlib` keeps the tooling dependency-free and correct on
- *    every platform.
- * 2. **The name carries the version of the manifest inside it**, so a file name
- *    and its contents cannot disagree.
+ * 1. **条目名用 `/`，绝不用 `\`。** 含有反斜杠条目的商店上传会被拒绝。这就是
+ *    打包器是手写、而不是调 `Compress-Archive` 的原因：在 Windows 上那个 cmdlet
+ *    会产出反斜杠条目，而 `zip` 在开箱的机器上并不存在。一个跑在 `node:zlib`
+ *    之上的 ZIP writer 让整套工具没有依赖，并且在每个平台上都正确。
+ * 2. **文件名带着里面那份 manifest 的版本号**，这样一个文件名和它的内容就无法
+ *    互相矛盾。
  *
- * Usage (from the repository root, after both builds):
+ * 用法（在仓库根目录，两个构建都做完之后）：
  *   node extension/scripts/package.mjs
  *
- * Writes `dsh-browser-crossplatform-<version>.zip` (Chrome) and
- * `dsh-browser-crossplatform-<version>-firefox.zip` (Firefox) into the repo root,
- * plus `…-<version>-store.zip` / `…-store-firefox.zip` when the `--store` builds
- * exist. **Upload the `-store` archive to a store**; the other pair carries the
- * manifest `key` that keeps a development extension id stable, and the Chrome Web
- * Store rejects it.
+ * 把 `dsh-browser-crossplatform-<version>.zip`（Chrome）和
+ * `dsh-browser-crossplatform-<version>-firefox.zip`（Firefox）写进仓库根目录；
+ * 当 `--store` 构建存在时，还会写 `…-<version>-store.zip` /
+ * `…-store-firefox.zip`。**要上传到商店的是 `-store` 归档**；另一对带着让开发
+ * 扩展 id 保持稳定的 manifest `key`，Chrome Web Store 会拒绝它。
  */
 
 import { deflateRawSync } from 'node:zlib'
@@ -31,10 +27,10 @@ import { resolve } from 'node:path'
 const root = resolve(import.meta.dirname, '..', '..')
 const extensionDir = resolve(root, 'extension')
 
-/** Date/time fields use the DOS epoch; the build time is the honest value. */
+/** 日期/时间字段用 DOS 纪元；构建时间才是那个诚实值。 */
 const DOS_EPOCH = new Date(1980, 0, 1).getTime()
 
-/** Read one built manifest and fail loudly rather than shipping a stale dist. */
+/** 读一份已构建的 manifest，宁可大声报错，也不要发出去一份过期的 dist。 */
 function readManifest(dir) {
   const file = resolve(extensionDir, dir, 'manifest.json')
   if (!existsSync(file)) {
@@ -43,7 +39,7 @@ function readManifest(dir) {
   return JSON.parse(readFileSync(file, 'utf8'))
 }
 
-/** Both target manifests must agree, and that version is the archive name. */
+/** 两份目标 manifest 必须一致，那个版本号就是归档名。 */
 function resolveVersion() {
   const chrome = readManifest('dist')
   const firefox = readManifest('dist-firefox')
@@ -55,7 +51,7 @@ function resolveVersion() {
 
 let crcTable
 
-/** Standard CRC-32 (IEEE 802.3 polynomial), computed lazily. */
+/** 标准 CRC-32（IEEE 802.3 多项式），惰性计算。 */
 function crc32(buffer) {
   if (crcTable === undefined) {
     crcTable = new Uint32Array(256)
@@ -70,7 +66,7 @@ function crc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-/** Every file under `dir`, as `/`-separated names relative to it, sorted. */
+/** `dir` 下的每个文件，名字以 `/` 分隔、相对于 `dir`，已排序。 */
 function collectFiles(dir, prefix = '') {
   const files = []
   for (const name of readdirSync(dir).sort()) {
@@ -82,7 +78,7 @@ function collectFiles(dir, prefix = '') {
   return files
 }
 
-/** MINIZIP-compatible date/time pair for one mtime. */
+/** 某个 mtime 对应的 MINIZIP 兼容日期/时间对。 */
 function dosDateTime(mtime) {
   const date = new Date(Math.max(mtime, DOS_EPOCH))
   const time = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1)
@@ -91,9 +87,9 @@ function dosDateTime(mtime) {
 }
 
 /**
- * Pack one directory into a ZIP buffer.
- * @param {string} sourceDir - absolute directory to pack.
- * @returns {Buffer} the archive.
+ * 把一个目录打成 ZIP buffer。
+ * @param {string} sourceDir - 要打包的绝对目录。
+ * @returns {Buffer} 归档。
  */
 function packDirectory(sourceDir) {
   const files = collectFiles(sourceDir)
@@ -109,9 +105,9 @@ function packDirectory(sourceDir) {
     const { time, day } = dosDateTime(statSync(absolute).mtimeMs)
 
     const header = Buffer.alloc(30)
-    header.writeUInt32LE(0x04034b50, 0) // local file header
-    header.writeUInt16LE(20, 4) // version needed
-    header.writeUInt16LE(0x0800, 6) // UTF-8 names
+    header.writeUInt32LE(0x04034b50, 0) // 本地文件头
+    header.writeUInt16LE(20, 4) // 所需版本
+    header.writeUInt16LE(0x0800, 6) // UTF-8 名称
     header.writeUInt16LE(8, 8) // deflate
     header.writeUInt16LE(time, 10)
     header.writeUInt16LE(day, 12)
@@ -123,7 +119,7 @@ function packDirectory(sourceDir) {
     local.push(header, name, deflated)
 
     const entryHeader = Buffer.alloc(46)
-    entryHeader.writeUInt32LE(0x02014b50, 0) // central directory header
+    entryHeader.writeUInt32LE(0x02014b50, 0) // 中央目录头
     entryHeader.writeUInt16LE(0x031e, 4) // made by: UNIX, 3.0
     entryHeader.writeUInt16LE(20, 6)
     entryHeader.writeUInt16LE(0x0800, 8)
@@ -134,7 +130,7 @@ function packDirectory(sourceDir) {
     entryHeader.writeUInt32LE(deflated.length, 20)
     entryHeader.writeUInt32LE(content.length, 24)
     entryHeader.writeUInt16LE(name.length, 28)
-    entryHeader.writeUInt32LE(0o100644 * 0x10000, 38) // external attrs: -rw-r--r--
+    entryHeader.writeUInt32LE(0o100644 * 0x10000, 38) // 外部属性：-rw-r--r--
     entryHeader.writeUInt32LE(offset, 42)
     central.push(entryHeader, name)
 
@@ -143,7 +139,7 @@ function packDirectory(sourceDir) {
 
   const centralBuffer = Buffer.concat(central)
   const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0) // end of central directory
+  end.writeUInt32LE(0x06054b50, 0) // 中央目录结束记录
   end.writeUInt16LE(files.length, 8)
   end.writeUInt16LE(files.length, 10)
   end.writeUInt32LE(centralBuffer.length, 12)
@@ -151,7 +147,7 @@ function packDirectory(sourceDir) {
   return Buffer.concat([...local, centralBuffer, end])
 }
 
-/** Pack a build directory into `<repo root>/<name>` and report it. */
+/** 把一个构建目录打成 `<仓库根>/<name>` 并报告结果。 */
 function writeArchive(sourceDir, outputName) {
   const target = resolve(root, outputName)
   rmSync(target, { force: true })
@@ -165,11 +161,10 @@ const archives = [
   writeArchive('dist', `dsh-browser-crossplatform-${version}.zip`),
   writeArchive('dist-firefox', `dsh-browser-crossplatform-${version}-firefox.zip`),
 ]
-// The store archives come from `--store` builds, whose manifest has no `key`.
-// The Chrome Web Store refuses an upload that carries one ("清单文件中不得包含 key
-// 字段"), while a development build needs it to keep a predictable extension id.
-// Packing them here rather than by hand keeps the two from being confused: the
-// file name says which is which.
+// 商店归档来自 `--store` 构建，它们的 manifest 里没有 `key`。
+// Chrome Web Store 会拒绝带着 key 的上传（"清单文件中不得包含 key
+// 字段"），而开发构建需要它来保持一个可预测的扩展 id。
+// 在这里而不是手工打包，就是为了不让两者被搞混：文件名说明了哪个是哪个。
 for (const [dir, suffix] of [['dist-store', '-store'], ['dist-firefox-store', '-store-firefox']]) {
   if (existsSync(resolve(extensionDir, dir))) {
     archives.push(writeArchive(dir, `dsh-browser-crossplatform-${version}${suffix}.zip`))

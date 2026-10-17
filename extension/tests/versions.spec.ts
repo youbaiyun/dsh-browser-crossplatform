@@ -1,26 +1,26 @@
 /**
  * @vitest-environment jsdom
  *
- * The suite's shared setup stubs `Element.prototype` and `CSS`, so every spec
- * file needs the DOM environment whether or not it touches the DOM — including
- * this one, which only reads JSON.
+ * 测试套件的共享 setup 会给 `Element.prototype` 和 `CSS` 打桩，所以每个 spec
+ * 文件都要 DOM 环境，不管它碰不碰 DOM——包括
+ * 这一个，它只读 JSON。
  */
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * One version for the whole tree.
+ * 整棵源码树只用同一个版本号。
  *
- * The repository's headline claim is that the root package, the extension
- * package, and both manifests always agree, so a plugin list, a manifest and a
- * release tag cannot disagree. It has drifted before (the manifests carried
- * 0.37.1 while the tree said otherwise), so the claim is asserted here rather
- * than restated in prose.
+ * 仓库的核心主张是：根 package、扩展
+ * package 以及两份 manifest 始终一致，这样插件列表、manifest 和
+ * 发布 tag 就不可能互相矛盾。它以前就漂移过（manifest 里写着
+ * 0.37.1，而源码树说的不是这个），所以这里来断言这个主张，
+ * 而不是在散文里重复一遍。
  *
- * Plain file reads, on purpose: importing a `.json` here would pull in the
- * suite's jsdom setup, which needs `Element` and does not exist under the node
- * environment.
+ * 刻意只用文件读取：在这里 import 一个 `.json` 会牵进
+ * 测试套件的 jsdom setup，而它需要 `Element`，在 node
+ * 环境下并不存在。
  */
 const extensionDir = resolve(import.meta.dirname, '..')
 
@@ -38,13 +38,13 @@ describe('version agreement', () => {
   })
 
   it('keeps the root package and the protocol package on the same version', () => {
-    // The protocol has no manifest of its own, but it is one of the four packages
-    // the README says move together.
+    // 协议自己没有 manifest，但它是 README 所说
+    // 需要跟着一起改的四个 package 之一。
     expect(readVersion('package.json')).toBe(readVersion('../package.json'))
     expect(readVersion('../packages/protocol/package.json')).toBe(readVersion('../package.json'))
     expect(readVersion('../packages/bridge/package.json')).toBe(readVersion('../package.json'))
-    // The benchmark harness is the fourth package. It was missing from this test, which is
-    // why it was the one a version bump could quietly leave behind.
+    // 基准测试工具是第四个 package。它以前从这个测试里漏掉了，这
+    // 正是版本号变更可能悄悄把它落下的原因。
     expect(readVersion('../benchmark/package.json')).toBe(readVersion('../package.json'))
   })
 })

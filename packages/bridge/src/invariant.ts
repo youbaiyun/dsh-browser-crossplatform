@@ -1,5 +1,5 @@
 /**
- * Package-owned invariant companion for `dsh-browser-crossplatform`.
+ * 本包自有的 invariant 伴生插件（package-owned），属于 `dsh-browser-crossplatform`。
  * @module dsh-browser-crossplatform/invariant
  */
 
@@ -9,24 +9,22 @@ import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 
 const PACKAGE_NAME = 'dsh-browser-crossplatform'
 
-/** Cordis companion plugin name. */
+/** Cordis 伴生插件名。 */
 export const name = 'bridge-browser-invariant'
-/** Service required before the companion can reserve package ownership. */
+/** 伴生插件要保留包所有权，就得先就绪的服务。 */
 export const inject = ['invariants']
 
 /**
- * No runtime invariant: the bridge's connection registry and pending tool map
- * are instance-private (no published event stream to assert against), and the
- * wire contract is pinned by protocol.ts and covered by its unit tests. The
- * tools are plain ctx.tools registrations observed by dsh-tools' own
- * invariant.
+ * 没有运行时 invariant：bridge 的连接注册表和待处理工具映射都是实例私有的（没有可供断言
+ * 的已发布事件流），线上协议由 protocol.ts 固定，并由它的单元测试覆盖。这些工具只是普通的
+ * ctx.tools 注册，由 dsh-tools 自己的 invariant 观察。
  */
 const install: InvariantInstaller = () => {}
 
 /**
- * Register this package's invariant companion.
- * @param ctx - Cordis context carrying the invariant service.
- * @returns the installed registration's disposer after setup succeeds.
+ * 注册本包的 invariant 伴生插件。
+ * @param ctx - 带着 invariant 服务的 Cordis 上下文。
+ * @returns 初始化成功后返回已安装注册项的 disposer。
  */
 export const apply = (ctx: Context): Promise<() => void> =>
   Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))

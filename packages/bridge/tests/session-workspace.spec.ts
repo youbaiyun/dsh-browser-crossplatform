@@ -148,10 +148,9 @@ describe('withSessionWorkspace', () => {
   })
 
   it('names the workspace, so the group is not left called "browser-sessions"', async () => {
-    // The desktop derives a new workspace's title from its directory, and the
-    // registered directory is named `browser-sessions`. Nothing in the interface
-    // renames a workspace, so without this the user's browser conversations sit
-    // in a group that reads like an internal detail.
+    // 桌面端从一个工作区的目录推导出它的标题，而注册的目录叫
+    // `browser-sessions`。接口里没有任何东西能重命名工作区，所以少了这一步，
+    // 用户的浏览器对话就会待在一个读起来像内部细节的分组里。
     const workspacePath = await tempWorkspacePath()
     const { api, rename } = apiHarness(workspaceSuccess())
     const wrapped = withSessionWorkspace(api, workspacePath, '浏览器对话', vi.fn())
@@ -181,8 +180,8 @@ describe('withSessionWorkspace', () => {
   })
 
   it('keeps grouping when naming fails, because the name is only a label', async () => {
-    // The name is already taken by a workspace the user made, which the desktop
-    // rejects. Grouping still works; the group simply keeps its directory name.
+    // 这个名字已经被用户自己建的一个工作区占了，桌面端会拒绝。分组照常可用；
+    // 这个分组只是继续用它的目录名。
     const workspacePath = await tempWorkspacePath()
     const { api, sessionCreate } = apiHarness(workspaceSuccess(), async () => ({
       ok: false,

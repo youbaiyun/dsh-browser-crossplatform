@@ -12,17 +12,16 @@ function tab(tabId: number, title = `Tab ${tabId}`): AffinityTab {
 }
 
 /**
- * A controller bound to tab 1, now looking at `tabId`, in the mode that raises
- * the handoff prompt.
+ * 一个绑定到 tab 1、现在看着 `tabId` 的控制器，处于会弹出交接询问的模式。
  *
- * `ask` is no longer the default — a prompt on every switch is what the user
- * asked to remove — so the tests about that prompt opt into it explicitly.
+ * `ask` 已经不是默认值了——用户要求去掉的正是每次切换都弹一次询问——所以针对这个询问
+ * 的测试会显式选这个模式。
  */
 function switchedTo(tabId: number): TabAffinityController {
   return switchedToIn('ask', tabId)
 }
 
-/** The same setup, with the switch mode named by the caller. */
+/** 同样的搭建，只是切换模式由调用方指定。 */
 function switchedToIn(mode: 'ask' | 'follow' | 'keep', tabId: number): TabAffinityController {
   const affinity = new TabAffinityController()
   affinity.setSwitchMode(mode)
@@ -45,7 +44,7 @@ describe('TabAffinityController', () => {
     expect(affinity.resolveTarget()).toEqual({ kind: 'initial' })
 
     expect(affinity.observeActive(tab(1))).toBe(true)
-    // Observing the active tab does not bind it: the first tool call does.
+    // 看活动标签页不会绑定它：第一次工具调用才会。
     expect(affinity.resolveTarget()).toEqual({ kind: 'initial' })
 
     expect(affinity.bindInitial(tab(1))).toBe(true)
@@ -56,7 +55,7 @@ describe('TabAffinityController', () => {
       pinned: false,
     })
 
-    // One connection owns exactly one controlled tab: no hidden second target.
+    // 一个连接恰好有一个受控标签页：没有藏着的第二个目标。
     expect(affinity.bindInitial(tab(2))).toBe(false)
     expect(affinity.snapshot()).toMatchObject({ controlled: { tabId: 1 } })
 
@@ -65,10 +64,10 @@ describe('TabAffinityController', () => {
       kind: 'target',
       tab: { tabId: 1, title: 'Updated title' },
     })
-    // Unchanged metadata is not a state change and must not burn a revision.
+    // 元数据没变就不算状态变化，也不能消耗一个 revision。
     expect(affinity.observeTab(tab(1, 'Updated title'))).toBe(false)
 
-    // A snapshot is a broadcast copy: a reader cannot rewrite tracked state.
+    // snapshot 是拿来广播的副本：读取方改不了被跟踪的状态。
     const exposed = affinity.snapshot()
     exposed.controlled!.title = 'tampered'
     exposed.active!.url = 'https://tampered.example/'
@@ -93,7 +92,7 @@ describe('TabAffinityController', () => {
     expect(affinity.tracks(1)).toBe(true)
     expect(affinity.tracks(2)).toBe(true)
 
-    // A decision that describes an older revision must not be applied.
+    // 描述更旧 revision 的决定不得被应用。
     expect(affinity.decide('follow', handoff.revision - 1)).toBe(false)
     expect(affinity.snapshot().status).toBe('handoff')
     expect(affinity.resolveTarget()).toEqual({ kind: 'handoff' })
@@ -117,7 +116,7 @@ describe('TabAffinityController', () => {
     expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 1 } })
     expect(affinity.allowsTarget(1)).toBe(true)
 
-    // `keep` covers one switch only; the next manual switch asks again.
+    // `keep` 只管一次切换；下一次手动切换还会再问一遍。
     affinity.observeActive(tab(3))
     expect(affinity.snapshot()).toMatchObject({ status: 'handoff', active: { tabId: 3 } })
     expect(affinity.resolveTarget()).toEqual({ kind: 'handoff' })
@@ -143,10 +142,10 @@ describe('TabAffinityController', () => {
       controlled: { tabId: 1 },
     })
     expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 1 } })
-    // Pinning never widens what the tools may touch.
+    // pin 永远不会扩大工具能碰的范围。
     expect(affinity.allowsTarget(3)).toBe(false)
 
-    // Returning to the controlled tab and leaving again must still not prompt.
+    // 回到受控标签页再离开，同样不能弹询问。
     affinity.observeActive(tab(1))
     expect(affinity.snapshot()).toMatchObject({ status: 'following', pinned: true })
     affinity.observeActive(tab(4))
@@ -208,7 +207,7 @@ describe('TabAffinityController', () => {
     })
     expect(affinity.resolveTarget()).toEqual({ kind: 'handoff' })
 
-    // Undoing a pin that is not set is a no-op rather than a state change.
+    // 撤销一个本来就没设的 pin 是空操作，不算状态变化。
     expect(affinity.decide('ask-again', affinity.snapshot().revision)).toBe(false)
 
     const neverPinned = switchedTo(2)
@@ -222,16 +221,16 @@ describe('TabAffinityController', () => {
     affinity.observeActive(tab(3))
     const before = affinity.snapshot()
 
-    // Re-observing the same visible tab is not a new decision point.
+    // 反复看同一个可见标签页，不算新的决策点。
     expect(affinity.observeActive(tab(3))).toBe(false)
     expect(affinity.snapshot()).toEqual(before)
 
-    // Metadata for an untracked tab is not a switch either.
+    // 没被跟踪的标签页，其元数据同样不算一次切换。
     expect(affinity.observeTab(tab(8, 'Unrelated'))).toBe(false)
     expect(affinity.snapshot()).toEqual(before)
     expect(affinity.tracks(8)).toBe(false)
 
-    // Refreshing the visible tab's own metadata is reported, and the pin holds.
+    // 刷新可见标签页自己的元数据会被报出来，pin 依然保持。
     expect(affinity.observeActive(tab(3, 'Tab 3 reloaded'))).toBe(true)
     expect(affinity.snapshot()).toMatchObject({
       status: 'background',
@@ -259,7 +258,7 @@ describe('TabAffinityController', () => {
     })
     expect(restored.restorePinned()).toBe(false)
 
-    // A pin can never be restored for a binding the user has not approved.
+    // 用户还没批准过的绑定，永远不能恢复 pin。
     const lost = new TabAffinityController()
     expect(lost.restoreLost()).toBe(true)
     expect(lost.restorePinned()).toBe(false)
@@ -278,7 +277,7 @@ describe('TabAffinityController', () => {
     })
     expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 2 } })
 
-    // It is also the explicit way back from the fail-closed lost state.
+    // 它也是从 fail-closed 的 lost 状态明确走回来的方式。
     expect(affinity.removeTab(2)).toBe(true)
     expect(affinity.snapshot().status).toBe('lost')
     expect(affinity.rebindActive(tab(9))).toBe(true)
@@ -292,8 +291,8 @@ describe('TabAffinityController', () => {
 
   it('rebinds control to a listed background tab without changing the active tab', () => {
     const affinity = new TabAffinityController()
-    // The prompt is what makes "leaving the tab re-raises the prompt" observable,
-    // so this test runs in the mode that has one.
+    // 正因为有这个询问，「离开标签页会再次弹出询问」才可观察，所以这个测试
+    // 跑在会弹询问的模式下。
     affinity.setSwitchMode('ask')
     affinity.observeActive(tab(1))
     affinity.bindInitial(tab(1))
@@ -308,7 +307,7 @@ describe('TabAffinityController', () => {
     expect(affinity.allowsTarget(2)).toBe(true)
     expect(affinity.allowsTarget(1)).toBe(false)
 
-    // Leaving the newly controlled tab re-raises the prompt for the visible tab.
+    // 离开新受控的标签页，会为可见标签页再弹一次询问。
     affinity.observeActive(tab(3))
     expect(affinity.snapshot()).toMatchObject({
       status: 'handoff',
@@ -332,7 +331,7 @@ describe('TabAffinityController', () => {
     expect(affinity.allowsTarget(2)).toBe(false)
     expect(affinity.bindInitial(tab(2))).toBe(false)
 
-    // Only an explicit decision moves the tools onto the visible tab.
+    // 只有明确的决定才会把工具挪到可见标签页上。
     const lost = affinity.snapshot()
     expect(affinity.decide('follow', lost.revision)).toBe(true)
     expect(affinity.snapshot()).toMatchObject({ status: 'following', controlled: { tabId: 2 } })
@@ -424,7 +423,7 @@ describe('TabAffinityController', () => {
   it('refuses a follow decision unless a handoff or lost binding is waiting', () => {
     const unbound = new TabAffinityController()
     unbound.observeActive(tab(1))
-    // The first bind is automatic and fail-closed: follow alone never binds.
+    // 首次绑定是自动的，也是 fail-closed 的：光靠 follow 永远不会绑定。
     expect(unbound.decide('follow', unbound.snapshot().revision)).toBe(false)
     expect(unbound.snapshot()).toMatchObject({ status: 'unbound', controlled: null })
     expect(unbound.resolveTarget()).toEqual({ kind: 'initial' })
@@ -458,8 +457,7 @@ describe('tab switch mode', () => {
   it('follows the user by default, with no prompt', () => {
     const affinity = switchedToIn('follow', 2)
     expect(affinity.snapshot()).toMatchObject({ status: 'following', controlled: { tabId: 1 } })
-    // The tool target is the page the user is looking at, and it resolves with
-    // no decision from anyone.
+    // 工具目标就是用户正在看的那张页面，解析它不需要任何人做决定。
     expect(affinity.resolveTarget()).toEqual({ kind: 'target', tab: tab(2) })
     expect(affinity.allowsTarget(2)).toBe(true)
     expect(affinity.allowsTarget(1)).toBe(false)
@@ -468,7 +466,7 @@ describe('tab switch mode', () => {
   it('stays on the bound tab in keep mode, with no prompt', () => {
     const affinity = switchedToIn('keep', 2)
     expect(affinity.snapshot()).toMatchObject({ status: 'background', controlled: { tabId: 1 } })
-    // Dispatch still goes to the tab the user originally approved.
+    // 派发照样发往用户最初批准的那个标签页。
     expect(affinity.resolveTarget()).toEqual({ kind: 'target', tab: tab(1) })
     expect(affinity.allowsTarget(1)).toBe(true)
     expect(affinity.allowsTarget(2)).toBe(false)
@@ -477,7 +475,7 @@ describe('tab switch mode', () => {
   it('asks in ask mode, blocking dispatch until the user answers', () => {
     const affinity = switchedTo(2)
     expect(affinity.snapshot()).toMatchObject({ status: 'handoff' })
-    // Fail closed: nothing may run while the question is open.
+    // Fail closed：问题还悬着，就什么都不能跑。
     expect(affinity.resolveTarget()).toEqual({ kind: 'handoff' })
     expect(affinity.allowsTarget(1)).toBe(false)
     expect(affinity.allowsTarget(2)).toBe(false)
@@ -486,7 +484,7 @@ describe('tab switch mode', () => {
   it('changes the mode in place and reports whether anything moved', () => {
     const affinity = switchedToIn('keep', 2)
     expect(affinity.mode).toBe('keep')
-    // Already in the requested mode.
+    // 已经处在所请求的模式里。
     expect(affinity.setSwitchMode('keep')).toBe(false)
     expect(affinity.setSwitchMode('follow')).toBe(true)
     expect(affinity.mode).toBe('follow')
@@ -495,8 +493,7 @@ describe('tab switch mode', () => {
   })
 
   it('clears a pin when the mode becomes follow', () => {
-    // A pin is an answer to one prompt; the setting is what the user wants, and
-    // the setting wins.
+    // pin 只是对某一次询问的回答；设置才是用户想要的，设置说了算。
     const affinity = switchedTo(2)
     expect(affinity.decide('keep-always', affinity.snapshot().revision)).toBe(true)
     expect(affinity.snapshot()).toMatchObject({ status: 'background', pinned: true })
@@ -513,7 +510,7 @@ describe('tab switch mode', () => {
   })
 
   it('models the switch mode the same way a decision does', () => {
-    // `keep` and a `keep-always` decision must be indistinguishable to dispatch.
+    // 对派发来说，`keep` 和 `keep-always` 的决定必须看不出区别。
     const byMode = switchedToIn('keep', 2)
     const byDecision = switchedTo(2)
     byDecision.decide('keep-always', byDecision.snapshot().revision)

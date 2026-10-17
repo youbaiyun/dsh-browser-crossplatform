@@ -11,8 +11,8 @@ describe('compareDescription', () => {
       near: '营收趋势',
       heading: '财务',
     })
-    // Word overlap can show the description did not repeat the page's words. It
-    // cannot show the two disagree, and a conflict here would cry wolf.
+    // 词语重叠度能说明描述没照抄页面上的词，
+    // 但说明不了两者相矛盾，在这里判冲突就是报假警。
     expect(result.verdict).toBe('uncertain')
     expect(result.basis).toBe('text')
     expect(result.conflicts).toEqual([])
@@ -21,11 +21,11 @@ describe('compareDescription', () => {
   })
 
   it('does not call a short description of a long marketing title a conflict', () => {
-    // A real pair: the page titles this image 微缩创意五口之家三孩三胎家庭过积木桥
-    // and the description reads 五个微缩人偶站在绿色积木拱桥上. They agree — five
-    // people, a block bridge — while most of the title is copy no honest
-    // 120-character description would repeat. This was reported to the user as a
-    // CONFLICT, which is exactly the false alarm that teaches people to ignore it.
+    // 一个真实例子：页面给这张图片的标题是 微缩创意五口之家三孩三胎家庭过积木桥
+    // 而描述写的是 五个微缩人偶站在绿色积木拱桥上。两者一致——五个
+    // 人、一座积木桥——而标题的大部分内容是任何一段诚实的
+    // 120 字符描述都不会照抄的文案。当时这件事被报成
+    // CONFLICT，而这恰恰就是那种教人学会无视告警的误报。
     const result = compareDescription('五个微缩人偶站在绿色积木拱桥上', {
       alt: '微缩创意五口之家三孩三胎家庭过积木桥',
     })
@@ -56,8 +56,8 @@ describe('compareDescription', () => {
   })
 
   it('reports that nothing was checked when the page says nothing about the image', () => {
-    // The honest case: no author text, no caption, no heading. Returning
-    // "consistent" here would claim a verification that never ran.
+    // 诚实的情形：没有作者文本、没有图注、没有标题。这时候返回
+    // “consistent” 就等于宣称做了一次根本没跑过的核验。
     const result = compareDescription('一台笔记本电脑', EMPTY)
     expect(result).toEqual({ verdict: 'uncertain', conflicts: [], basis: 'none', overlap: 0 })
   })
@@ -91,8 +91,8 @@ describe('compareDescription', () => {
   it('falls back to page numbers only when the image has none of its own', () => {
     const contested = compareDescription('完成度 80%', EMPTY, '页面其他位置写着完成度 20%')
     expect(contested.conflicts[0]?.rule).toBe('percentage')
-    // With a number tied to the image, the page at large is not consulted: a page
-    // full of percentages would otherwise contradict almost any answer.
+    // 数字和图片绑定时，就不会再去参考整个页面：
+    // 否则一个满是百分比的页面几乎会和任何答案相矛盾。
     const scoped = compareDescription('完成度 80%', { ...EMPTY, alt: '完成度 78%' }, '别处写着 20%')
     expect(scoped.conflicts).toEqual([])
   })

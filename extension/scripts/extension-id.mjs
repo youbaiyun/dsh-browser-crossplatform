@@ -1,18 +1,18 @@
 /**
- * Print the Chrome extension id that the built manifest produces.
+ * 打印构建出的 manifest 所对应的 Chrome 扩展 id。
  *
- * Chrome derives an unpacked/store id from the manifest's `key` (the first 16
- * bytes of the SHA-256 of the DER public key, mapped 0-9a-f → a-p). The bridge
- * binds its token-free loopback path to the ids named in `extensionId`, and the
- * first entry of `DEFAULT_EXTENSION_IDS` in `packages/bridge/src/index.ts` must
- * equal what this prints: this is the check that keeps it honest instead of a
- * remembered string.
+ * Chrome 由 manifest 的 `key` 推导出未打包/商店版的 id（DER 公钥
+ * SHA-256 的前 16 字节，按 0-9a-f → a-p 映射）。bridge
+ * 把它的免 token loopback 路径绑定到 `extensionId` 里列出的 id，而
+ * `packages/bridge/src/index.ts` 中 `DEFAULT_EXTENSION_IDS` 的第一项
+ * 必须等于这里打印的值：正因如此它是一处校验，而不是一个
+ * 靠人记住的字符串。
  *
- * A `--store` build has no `key` — the Chrome Web Store refuses it — so it prints
- * the id the store assigned instead: `agipnijjkpomaannkjkjliggoffdiaf`, the second
- * entry of that list.
+ * `--store` 构建不带 `key`（Chrome 应用商店不接受它），所以它改成打印
+ * 商店分配的 id：`agipnijjkpomaannkjkjliggoffdiaf`，也就是
+ * 那个列表的第二项。
  *
- * Usage: node extension/scripts/extension-id.mjs [dist|dist-firefox]
+ * 用法：node extension/scripts/extension-id.mjs [dist|dist-firefox]
  */
 
 import { createHash } from 'node:crypto'

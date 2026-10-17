@@ -1,24 +1,21 @@
 /**
- * Pure state machine for binding browser tools to one user-visible tab.
+ * 纯状态机：把浏览器工具绑到某一个用户看得见的标签页上。
  *
- * The controller deliberately separates Chrome event handling from the
- * affinity rules so transitions can be tested without a browser runtime.
- * A manual tab switch never silently changes the tool target: it creates a
- * handoff decision, and tool dispatch remains blocked until the user chooses.
- * `keep-always` is the one way out of that per-switch prompt: it pins the
- * controlled tab so later switches resolve straight to `background` instead of
- * asking again, and `ask-again` reverses it without disturbing the binding.
- * Pinning never widens what the tools may touch — the target is still exactly
- * the tab the user already approved — and any change of binding clears it.
+ * 控制器刻意把 Chrome 事件处理和亲和性规则分开，这样不用浏览器运行时也能测状态转换。
+ * 手动切标签页绝不会悄悄换掉工具目标：它会生成一个 handoff 决策，
+ * 在用户做出选择之前，工具派发一直阻塞着。
+ * `keep-always` 是摆脱"每次切换都弹提示"的唯一出路：它把受控标签页钉住，
+ * 之后的切换直接解析成 `background`，不用再问；`ask-again` 则在不碰绑定的前提下
+ * 把这个钉撤销。钉住永远不会扩大工具够得着的范围 —— 目标仍然恰恰是用户批准过的
+ * 那个标签页 —— 而且任何绑定变更都会把它清掉。
  *
- * One extension connection owns exactly one controlled tab. The dsh side may
- * drive several conversations through that single binding; per-conversation
- * tabs were removed so the device can never hold a hidden second target.
+ * 一条扩展连接正好拥有一个受控标签页。dsh 那边可以靠这一条绑定驱动多个会话；
+ * 按会话分标签页的做法已经删掉，所以设备永远不可能藏着第二个目标。
  *
  * @module
  */
 
-/** Minimal, control-strip-safe metadata for one Chrome tab. */
+/** 某个 Chrome 标签页的精简元数据，控制条可以安全地看。 */
 export interface AffinityTab {
   tabId: number
   windowId: number
@@ -30,39 +27,37 @@ export type TabAffinityStatus = 'unbound' | 'following' | 'handoff' | 'backgroun
 export type TabAffinityDecision = 'keep' | 'follow' | 'keep-always' | 'ask-again'
 
 /**
- * How a manual tab switch is resolved.
+ * 手动切标签页怎么解析。
  *
- * `ask` raises the handoff prompt and blocks tool dispatch until it is answered;
- * `follow` moves the binding to whatever the user is now looking at; `keep`
- * holds the binding on the tab the tools already had. The last two exist because
- * a prompt on every switch is exhausting once the user knows what they want —
- * and answering the prompt with "don't ask again" writes that choice here, so
- * the preference outlives the browser session.
+ * `ask` 会弹出 handoff 提示，在它被回答之前一直卡着工具派发；
+ * `follow` 把绑定挪到用户此刻正在看的那个标签页；`keep` 则让绑定留在工具原本
+ * 持有的标签页上。后两个之所以存在，是因为用户一旦清楚自己要什么，
+ * 每切一次就弹一次提示实在太烦 —— 而用「不要再问」回答提示，会把这个选择写到这里，
+ * 于是这份偏好能活得比浏览器会话还久。
  *
- * `ask` stays the default: following the active tab can move the target off a
- * tab the model opened on purpose (`active: false`), so it is opt-in rather than
- * assumed.
+ * `ask` 仍然是默认值：跟随活动标签页可能把目标从模型有意打开的那个标签页
+ * （`active: false`）上挪走，所以它得主动选，不是默认行为。
  */
 export type TabSwitchMode = 'ask' | 'follow' | 'keep'
 
-/** Narrow an untrusted settings field to a switch mode. */
+/** 把不可信的设置字段收窄成一种切换模式。 */
 export function isTabSwitchMode(value: unknown): value is TabSwitchMode {
   return value === 'ask' || value === 'follow' || value === 'keep'
 }
 
-/** Narrow an untrusted control-strip message field to a decision. */
+/** 把不可信的控制条消息字段收窄成一个决策。 */
 export function isTabAffinityDecision(value: unknown): value is TabAffinityDecision {
   return value === 'keep' || value === 'follow'
     || value === 'keep-always' || value === 'ask-again'
 }
 
-/** Serializable state sent from the service worker to every control strip. */
+/** service worker 发给每个控制条的可序列化状态。 */
 export interface TabAffinityState {
   revision: number
   status: TabAffinityStatus
   controlled: AffinityTab | null
   active: AffinityTab | null
-  /** True once the user chose `keep-always`; tab switches stop prompting. */
+  /** 用户选过 `keep-always` 就为 true；之后切标签页不再弹提示。 */
   pinned: boolean
 }
 
@@ -79,7 +74,7 @@ function sameTab(left: AffinityTab | null, right: AffinityTab | null): boolean {
     && left?.url === right?.url
 }
 
-/** Owns the controlled-tab lifecycle for one extension/bridge connection. */
+/** 一条扩展/桥接连接里的受控标签页生命周期。 */
 export class TabAffinityController {
   private controlled: AffinityTab | null = null
   private active: AffinityTab | null = null
@@ -91,12 +86,11 @@ export class TabAffinityController {
   private revision = 0
 
   /**
-   * Apply the persisted tab-switch preference.
+   * 应用已经持久化的标签页切换偏好。
    *
-   * Switching to `follow` clears any pin and lets the existing active tab stand
-   * as the target — {@link status} reports `following` from here on, so a tool
-   * call resolves to what the user is looking at. The stored `controlled` record
-   * is refreshed when the user next switches tabs, through `observeActive`.
+   * 切到 `follow` 会清掉任何钉住，并让当前的活动标签页直接当目标 ——
+   * 此后 {@link status} 会报 `following`，工具调用就解析到用户正在看的页面上。
+   * 存下来的 `controlled` 记录会等用户下次切标签页时，经 `observeActive` 刷新。
    */
   setSwitchMode(mode: TabSwitchMode): boolean {
     if (mode === this.switchMode) return false
@@ -109,7 +103,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** The mode in force, for tests and for echoing back to a panel. */
+  /** 当前生效的模式，测试用得上，也要回显给面板。 */
   get mode(): TabSwitchMode {
     return this.switchMode
   }
@@ -124,7 +118,7 @@ export class TabAffinityController {
     }
   }
 
-  /** Observe the active tab after a user tab/window focus change. */
+  /** 用户切了标签页/窗口焦点之后，观察活动标签页。 */
   observeActive(tab: AffinityTab): boolean {
     const previousActive = this.active
     const previousControlled = this.controlled
@@ -139,7 +133,7 @@ export class TabAffinityController {
     return this.bumpIfChanged(previousActive, previousControlled, previousKept)
   }
 
-  /** Refresh title/URL metadata without interpreting it as a tab switch. */
+  /** 刷新标题/URL 元数据，但不把它当成一次标签页切换。 */
   observeTab(tab: AffinityTab): boolean {
     const previousActive = this.active
     const previousControlled = this.controlled
@@ -149,7 +143,7 @@ export class TabAffinityController {
     return this.bumpIfChanged(previousActive, previousControlled, previousKept)
   }
 
-  /** Bind the first browser tool call to the then-active tab. */
+  /** 把第一次浏览器工具调用绑到当时的活动标签页上。 */
   bindInitial(tab: AffinityTab): boolean {
     if (this.controlled !== null || this.hasBound || this.lost) return false
     this.active = { ...tab }
@@ -161,7 +155,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** Explicitly rebind to the active tab. */
+  /** 显式重绑到活动标签页。 */
   rebindActive(tab: AffinityTab): boolean {
     this.active = { ...tab }
     this.controlled = { ...tab }
@@ -173,7 +167,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** Explicitly control an existing tab without changing the browser's active tab. */
+  /** 显式接管一个已经存在的标签页，不动浏览器当前的活动标签页。 */
   rebindControlled(tab: AffinityTab): boolean {
     this.controlled = { ...tab }
     this.keptActiveTabId = this.active !== null && this.active.tabId !== tab.tabId
@@ -186,7 +180,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** Rehydrate a still-live controlled tab after an MV3 worker restart. */
+  /** MV3 worker 重启后，把还活着的受控标签页装回来。 */
   restoreControlled(tab: AffinityTab): boolean {
     if (this.controlled !== null || this.hasBound || this.lost) return false
     this.controlled = { ...tab }
@@ -196,10 +190,10 @@ export class TabAffinityController {
   }
 
   /**
-   * Rehydrate a `keep-always` choice after an MV3 worker restart.
+   * MV3 worker 重启后，把 `keep-always` 这个选择装回来。
    *
-   * Only valid once a controlled tab exists, so a stale pin can never suppress
-   * the handoff prompt for a binding the user has not approved.
+   * 只有受控标签页已经在的时候才管用，这样过期的钉住永远不会压掉一个
+   * 用户还没批准过的绑定本该弹出的 handoff 提示。
    */
   restorePinned(): boolean {
     if (this.controlled === null || this.pinned) return false
@@ -208,7 +202,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** Rehydrate the fail-closed state when the prior controlled tab was lost. */
+  /** 先前的受控标签页丢了，把 fail-closed 状态装回来。 */
   restoreLost(): boolean {
     if (this.controlled !== null || this.hasBound || this.lost) return false
     this.hasBound = true
@@ -217,7 +211,7 @@ export class TabAffinityController {
     return true
   }
 
-  /** Remove stale state when Chrome closes a tracked tab. */
+  /** Chrome 关掉一个被跟踪的标签页时，把过期状态摘掉。 */
   removeTab(tabId: number): boolean {
     if (this.controlled?.tabId !== tabId && this.active?.tabId !== tabId) return false
     const previousActive = this.active
@@ -234,7 +228,7 @@ export class TabAffinityController {
     return this.bumpIfChanged(previousActive, previousControlled, previousKept)
   }
 
-  /** Transfer tracked identity when Chrome replaces a tab without a user switch. */
+  /** Chrome 在没有用户切换的情况下换掉标签页时，把被跟踪的身份搬过去。 */
   replaceTab(removedTabId: number, addedTabId: number): boolean {
     if (removedTabId === addedTabId) return false
     if (this.controlled?.tabId !== removedTabId
@@ -255,13 +249,13 @@ export class TabAffinityController {
     return this.bumpIfChanged(previousActive, previousControlled, previousKept)
   }
 
-  /** Apply a control-strip choice only if it still describes the visible revision. */
+  /** 只有控制条的选择对得上当前这个 revision 时才用它。 */
   decide(decision: TabAffinityDecision, revision: number): boolean {
     if (revision !== this.revision) return false
     const currentStatus = this.status()
     if (decision === 'ask-again') {
-      // Undo a pin in place. Dropping keptActiveTabId re-raises the prompt for
-      // the switch the pin was suppressing, so control stays user-confirmed.
+      // 就地撤销钉住。丢掉 keptActiveTabId，会把被这个钉住压下去的那次切换提示
+      // 重新弹出来，控制权始终是用户说了算。
       if (!this.pinned) return false
       this.pinned = false
       this.keptActiveTabId = null
@@ -287,16 +281,15 @@ export class TabAffinityController {
     return true
   }
 
-  /** Resolve whether a tool may run and, if so, which tab owns it. */
+  /** 解析工具能不能跑；能跑的话，由哪个标签页承载它。 */
   resolveTarget(): TabTargetResolution {
     switch (this.status()) {
       case 'unbound': return { kind: 'initial' }
       case 'lost': return { kind: 'lost' }
       case 'handoff': return { kind: 'handoff' }
       case 'following':
-        // In follow mode the target is the tab the user is looking at, which may
-        // be newer than the `controlled` record — that record is refreshed when
-        // the switch is observed, and this path must not wait for it.
+        // follow 模式下，目标是用户正在看的那个标签页，它可能比 `controlled`
+        // 记录还新 —— 那条记录要等观察到切换才刷新，而这条路等不起。
         if (this.switchMode === 'follow' && this.active !== null) {
           return { kind: 'target', tab: { ...this.active } }
         }
@@ -310,7 +303,7 @@ export class TabAffinityController {
     return this.controlled?.tabId === tabId || this.active?.tabId === tabId
   }
 
-  /** Final dispatch guard for async calls that began before a tab switch. */
+  /** 最后一道派发守卫，盯的是在标签页切换之前就已经开始的异步调用。 */
   allowsTarget(tabId: number): boolean {
     const resolution = this.resolveTarget()
     return resolution.kind === 'target' && resolution.tab.tabId === tabId
@@ -319,8 +312,7 @@ export class TabAffinityController {
   private status(): TabAffinityStatus {
     if (this.controlled === null) return this.lost ? 'lost' : 'unbound'
     if (this.active?.tabId === this.controlled.tabId) return 'following'
-    // The switch mode decides what a manual tab switch means, so the prompt is
-    // only ever reached in `ask` mode.
+  // 切换模式决定了手动切 tab 是什么意思，所以这个提示只在 `ask` 模式下会走到。
     if (this.switchMode === 'follow') return 'following'
     if (this.switchMode === 'keep') return 'background'
     if (this.active !== null && !this.pinned && this.keptActiveTabId !== this.active.tabId) return 'handoff'

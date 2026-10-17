@@ -1,7 +1,7 @@
 {
     "name":  "dsh-browser-extension",
     "description":  "Chrome and Firefox MV3 extension: the dsh desktop app\u0027s browser executor, with a side-panel conversation and text-only read/operate of a user-controlled tab through the dsh browser bridge",
-    "version":  "0.38.5",
+    "version":  "0.38.6",
     "author":  "youbaiyun",
     "contributors":  [
                          "Page-reading pipeline, action executors and security model from Lum1104/dsh-browser (MIT); the side panel is this build\u0027s own. See COPYRIGHT.md"

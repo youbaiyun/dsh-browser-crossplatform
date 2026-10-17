@@ -1,17 +1,17 @@
 // @vitest-environment jsdom
 
 /**
- * Session, assistant-stream, and typed-command tests for the worker.
+ * worker 的会话、助手流和手动输入命令测试。
  *
- * The full-page control UI added two powers that must not regress silently:
- * an instruction typed there is forwarded to the desktop dsh model over the
- * bridge and its streamed reply, turn boundaries, and tool progress are relayed
- * back — one session, active session only, nothing replayed — while a
- * `browser_*` command typed there runs locally through the very same dispatch
- * path a model call uses, and never opens an approval prompt.
+ * 整页控制 UI 新加的两项能力绝不能悄悄退化：
+ * 在那里敲的指令经 bridge 转发给桌面 dsh 模型，
+ * 流式回复、回合边界和工具进度再回传——
+ * 只一个会话、只针对活跃会话、不复现任何历史——而在那里敲的
+ * `browser_*` 命令就在本地走模型调用用的同一条
+ * 派发路径，而且永远不弹审批提示。
  *
- * These tests boot the real worker against a faked `chrome.*` and a fake
- * WebSocket, exactly like `background-bridge-lifecycle.spec.ts`.
+ * 这些测试用一个伪造的 `chrome.*` 和一个伪造的
+ * WebSocket 启动真实 worker，与 `background-bridge-lifecycle.spec.ts` 完全一样。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -49,9 +49,9 @@ class FakeWebSocket extends EventTarget {
   }
 
   receive(frame: unknown): void {
-    // The real bridge always answers `hello` with a policy, so the fake one
-    // does too; a fixture that omits it is rejected by the frame parser and the
-    // connection silently never authenticates.
+    // 真 bridge 总是用一份 policy 回答 `hello`，所以这个假的
+    // 也照做；省略它的 fixture 会被帧解析器拒掉，连接
+    // 就永远静默地认证不完。
     const delivered = isRecord(frame) && frame.t === 'hello.ok' && frame.policy === undefined
       ? { ...frame, policy: { openPagesForUser: true } }
       : frame
@@ -102,7 +102,7 @@ function controlPort() {
 
 type MessageSpy = ReturnType<typeof vi.fn>
 
-/** One message the worker pushed to a control page, with the fields under test. */
+/** worker 推给控制页的一条消息，带上待测字段。 */
 interface ControlMessageLike {
   type?: string
   state?: ControlState
@@ -116,7 +116,7 @@ interface ControlMessageLike {
   result?: unknown
 }
 
-/** One frame the worker wrote to the bridge socket. */
+/** worker 写入 bridge socket 的一个帧。 */
 interface SentFrame {
   t?: string
   id?: string
@@ -170,31 +170,31 @@ function rpcFrame(socket: FakeWebSocket, method: string): SentFrame | undefined 
 }
 
 /**
- * Every frame sent for one method.
+ * 某个方法发出的所有帧。
  *
- * Needed where a feature legitimately sends the same call several times — 「工作区内」
- * opens one follower per conversation — and a helper returning "the first match" would
- * report the same frame twice.
+ * 某个功能会合法地把同一次调用发好几遍时就需要它——「工作区内」
+ * 会给每个对话各开一个 follower——而一个返回「第一个匹配」的辅助函数会把
+ * 同一个帧报告两次。
  *
- * @param socket - the fake connection.
- * @param method - the gateway method to collect.
- * @returns the frames, in send order.
+ * @param socket - 伪造的连接。
+ * @param method - 要收集的 gateway 方法。
+ * @returns 帧，按发送顺序排列。
  */
 function rpcFrames(socket: FakeWebSocket, method: string): SentFrame[] {
   return sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === method)
 }
 
 /**
- * `vi.waitFor` with a budget for a busy machine.
+ * 带预算的 `vi.waitFor`，为繁忙的机器准备的。
  *
- * Its default is one second, and a full-suite run has 42 spec files in flight at once:
- * a case that takes ~370ms alone was seen failing at 1008ms — the default to the
- * millisecond. The waits below ask whether the worker has got somewhere yet, so a
- * longer budget costs nothing when it is already there.
+ * 默认是一秒，而整套测试跑起来时有 42 个 spec 文件同时在飞：
+ * 一个单独跑约 370ms 的用例曾在 1008ms 时失败——恰好卡在
+ * 默认值那一毫秒上。下面的等待只是问 worker 有没有走到某处，所以
+ * 它已经到了的话，更长的预算不用付任何代价。
  */
 const waitFor = <T>(check: () => T): Promise<T> => vi.waitFor(check, { timeout: 3_000 })
 
-/** Wait until the worker has asked the gateway for `method`. */
+/** 等到 worker 已经向 gateway 请求过 `method`。 */
 async function waitForRpc(socket: FakeWebSocket, method: string): Promise<SentFrame> {
   return waitFor(() => {
     const frame = rpcFrame(socket, method)
@@ -203,7 +203,7 @@ async function waitForRpc(socket: FakeWebSocket, method: string): Promise<SentFr
   })
 }
 
-/** Answer one gateway call the way the bridge does: a ServerResponse envelope. */
+/** 像 bridge 那样回应一次 gateway 调用：一个 ServerResponse 信封。 */
 function answerRpc(socket: FakeWebSocket, request: SentFrame, business: Record<string, unknown>): void {
   socket.receive({
     t: 'rpc.result',
@@ -213,7 +213,7 @@ function answerRpc(socket: FakeWebSocket, request: SentFrame, business: Record<s
   })
 }
 
-/** A control page that requested a session; every later push is observable. */
+/** 已经请求过会话的控制页；之后每次推送都能看到。 */
 function mockChrome(options: {
   localGet?: () => Promise<Record<string, unknown>>
   localSet?: (items: Record<string, unknown>) => Promise<void>
@@ -222,12 +222,12 @@ function mockChrome(options: {
   frames?: Array<{ frameId: number; parentFrameId: number; documentId?: string; url: string }>
 } = {}) {
   const onConnect = chromeEvent<[chrome.runtime.Port]>()
-  // The worker subscribes here for the content script's "document ready"
-  // handshake, so the test needs a handle to fire it.
+  // worker 在这里订阅内容脚本的「文档就绪」
+  // 握手，所以测试需要一个句柄来触发它。
   const onMessage = chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>()
   const onAlarm = chromeEvent<[chrome.alarms.Alarm]>()
-  // Exposed so a test can assert what the worker persisted. The panel remembers
-  // which conversation "start a new one" is using, and that write is the feature.
+  // 暴露出来是为了让测试断言 worker 存下了什么。面板记住
+  // 「开一个新会话」正在用哪个对话，而这次写入就是该功能本身。
   const storage = {
     local: {
       get: vi.fn(options.localGet ?? (async () => ({}))),
@@ -263,7 +263,7 @@ function mockChrome(options: {
     action: {
       setBadgeText: vi.fn(async () => {}),
       setBadgeBackgroundColor: vi.fn(async () => {}),
-      // The toolbar icon has no popup: clicking it opens the control page.
+      // 工具栏图标没有 popup：点击它会打开控制页。
       onClicked: chromeEvent<[chrome.tabs.Tab]>(),
     },
     alarms: { create: vi.fn(), clear: vi.fn(async () => true), onAlarm },
@@ -292,7 +292,7 @@ function mockChrome(options: {
   return { onAlarm, onConnect, onMessage, storage, tabs, windows }
 }
 
-/** Boot the worker, connect its bridge, and open one control page. */
+/** 启动 worker、连上它的 bridge，并打开一个控制页。 */
 async function boot(
   settings: Record<string, unknown> = {},
   policy: { openPagesForUser: boolean } = { openPagesForUser: true },
@@ -303,19 +303,19 @@ async function boot(
   })
   vi.stubGlobal('WebSocket', FakeWebSocket)
   loadedWorker = await import('../src/background/index.ts')
-  // At least one, not exactly one: when a discovery attempt is slow, the retry the
-  // worker scheduled fires after the first socket was created, so a test that counts
-  // dials fails for a legitimate retry. The socket used below stays the first one — it
-  // is the one this test opens and the one its handshake travels on.
+  // 至少一次，不是恰好一次：发现尝试一慢，worker 排定的
+  // 重试就会在第一个 socket 建好之后触发，于是统计拨号次数的
+  // 测试会因为一次合法重试而挂。下面用的 socket 始终是第一个——
+  // 它是这个测试打开的那个，也是它的握手所走的那个。
   await waitFor(() => { expect(FakeWebSocket.instances.length).toBeGreaterThan(0) })
   const socket = FakeWebSocket.instances[0]!
   socket.open()
   await waitFor(() => {
     expect(sent(socket)).toContainEqual(expect.objectContaining({ t: 'hello' }))
   })
-  // The policy rides the handshake, so it must be chosen here: a second
-  // `hello.ok` is ignored once the connection is authenticated, which is correct
-  // — the desktop app does not change its mind mid-connection.
+  // policy 跟着握手一起来，所以必须在这里选定：连接一认证完，
+  // 第二个 `hello.ok` 就会被忽略，这是对的
+  // ——桌面应用不会在连接中途改变主意。
   socket.receive({ t: 'hello.ok', caps: HELLO_CAPS, policy })
   const control = controlPort()
   chromeMock.onConnect.emit(control.port)
@@ -324,21 +324,21 @@ async function boot(
   return { chromeMock, control, socket }
 }
 
-/** One bridge push event, as the dsh Host adapter projects it. */
+/** 一个 bridge 推送事件，按 dsh Host 适配器的投影形式。 */
 function pushEvent(socket: FakeWebSocket, method: string, payload: unknown): void {
   socket.receive({ t: 'event', frame: { rpcId: crypto.randomUUID(), method, payload } })
 }
 
 /**
- * The worker module this suite last loaded.
+ * 这个测试套件最后加载的 worker 模块。
  *
- * A bridge that never answers leaves a discovery retry queued in the module, and
- * that timer outlives the test that caused it: without cancelling it, the timer
- * fires inside the *next* test and dials a socket nobody asked for, so
- * `FakeWebSocket.instances` has two entries and a later test fails for a reason
- * that has nothing to do with what it checks. This is the same teardown
- * `background-bridge-lifecycle.spec.ts` uses, and it is needed here for the same
- * reason — one test binding a session starts the probe chain.
+ * 一个从不回答的 bridge 会在模块里留下排队中的发现重试，那个
+ * 定时器会比引发它的测试活得久：不取消它，它就会
+ * 在*下一个*测试里触发，拨一个没人要的 socket，于是
+ * `FakeWebSocket.instances` 里就有两个条目，后面某个测试就会因为一个
+ * 跟它检查的东西毫无关系的原因挂掉。这和
+ * `background-bridge-lifecycle.spec.ts` 使用的拆除方式相同，这里需要它也是出于同样的
+ * 原因一样——这里有个测试绑了会话，就起动了这条探测链。
  */
 let loadedWorker: { cancelPendingWork?: () => void } | undefined
 
@@ -365,10 +365,10 @@ describe('session lifecycle', () => {
     const payload = prompted.payload!
     expect(payload.sessionId).toBe(SESSION_ID)
     expect(payload.mode).toBe('queue')
-    // The exact marker, spelled out: this is the anti-impersonation contract, so
-    // the test pins the literal rather than comparing the constant to itself.
+    // 把那个标记原样写出来：这是防冒充的契约，所以
+    // 测试里固定字面量，而不是拿常量和它自己比。
     expect(JSON.stringify(payload.content)).toBe(JSON.stringify([{ type: 'text', text: '[用户·浏览器面板] open the docs' }]))
-    // The zone is optional by contract, but never anything else.
+    // 按契约 zone 是可选的，但除此之外什么都不能有。
     expect(payload.clientTimeZone === undefined || typeof payload.clientTimeZone === 'string').toBe(true)
     answerRpc(socket, prompted, { ok: true, value: {} })
 
@@ -380,7 +380,7 @@ describe('session lifecycle', () => {
         sessionId: SESSION_ID,
       })
     })
-    // The worker reports the session and the queued prompt in its state.
+    // worker 会在自己的状态里报告会话和排队中的 prompt。
     control.onMessage.emit({ type: 'state.request' })
     await waitFor(() => {
       expect(latestState(control.postMessage)?.session).toEqual({
@@ -392,20 +392,20 @@ describe('session lifecycle', () => {
         .toEqual([expect.objectContaining({ kind: 'request', text: 'open the docs', state: 'done' })])
     })
 
-    // A second prompt reuses the session: exactly one session per worker.
+    // 第二次 prompt 复用同一个会话：一个 worker 恰好一个会话。
     control.onMessage.emit({ type: 'session.prompt', id: 'p2', text: 'and the next page' })
     await waitFor(() => {
       expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.prompt')).toHaveLength(2)
     })
     const prompts = sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.prompt')
-    // Every panel prompt carries the marker, not just the first.
+    // 每个面板 prompt 都带上标记，不只是第一个。
     expect(prompts[1]!.payload!.content).toEqual([{ type: 'text', text: '[用户·浏览器面板] and the next page' }])
     expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.create')).toHaveLength(1)
   })
 
   it('rejects a prompt with a clear message while the bridge is not connected', async () => {
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: {} }) })
-    // The extension always dials; nothing answering is what leaves it stopped.
+    // 扩展总是会拨号；没人应答才是它停下来的原因。
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
     vi.stubGlobal('WebSocket', FakeWebSocket)
     await import('../src/background/index.ts')
@@ -430,8 +430,8 @@ describe('session lifecycle', () => {
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
     await waitForRpc(socket, 'session.create')
 
-    // The bridge hands its single slot to another browser: the call can never
-    // be answered, so the page must be told now instead of in 30 seconds.
+    // bridge 把唯一的槽位给了另一个浏览器：这次调用永远
+    // 等不到回答，所以必须现在告诉页面，而不是 30 秒后。
     socket.close(4000, 'replaced')
     await waitFor(() => {
       expect(control.postMessage).toHaveBeenCalledWith({
@@ -452,7 +452,7 @@ describe('session lifecycle', () => {
     const { control, socket } = await boot()
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
     const created = await waitForRpc(socket, 'session.create')
-    // A reply the transport accepted but the gateway refused.
+    // 一个传输层收下了、但 gateway 拒了的回复。
     answerRpc(socket, created, { ok: false, error: { code: 'bad-request', message: 'the session limit is reached' } })
 
     await waitFor(() => {
@@ -542,7 +542,7 @@ describe('assistant stream and turn progress', () => {
 
     const streams = streamMessages(control.postMessage)
     expect(streams).toHaveLength(2)
-    // A delta IS its frame; a snapshot keeps its id beside the frame.
+    // delta 自己就是帧；快照则把 id 留在帧旁边。
     expect(streams[0]).toEqual({ sessionId: SESSION_ID, kind: 'delta', payload: delta })
     expect(streams[1]).toEqual({
       sessionId: SESSION_ID,
@@ -608,7 +608,7 @@ describe('assistant stream and turn progress', () => {
       return rows[0]!
     })
 
-    // A second delta must replace that row's text, never add a row of its own.
+    // 第二个 delta 必须替换那一行的文本，绝不能新增一行。
     pushEvent(socket, 'session/assistant-stream', {
       sessionId: SESSION_ID,
       frame: { ...first, index: 1, revision: 2, chunk: { type: 'text-delta', index: 0, text: ', world' } },
@@ -620,7 +620,7 @@ describe('assistant stream and turn progress', () => {
       expect(rows[0]).toMatchObject({ id: row.id, kind: 'assistant', text: 'Hello, world' })
     })
 
-    // The durable message is authoritative for the step and does not double it.
+    // 这一步以持久化的消息为准，不会把它重复算一次。
     pushEvent(socket, 'session/event', {
       sessionId: SESSION_ID,
       event: {
@@ -648,9 +648,9 @@ describe('assistant stream and turn progress', () => {
       expect(control.postMessage).toHaveBeenCalledWith({ type: 'session.result', id: 's1', ok: true, sessionId: SESSION_ID })
     })
 
-    // 205 model-driven reads is more than the 200-row cap; the oldest five fall
-    // off. They are pushed at once: the row order is the frame order, because a
-    // step is appended before the dispatch awaits anything.
+    // 205 次模型驱动的读取超过了 200 行的上限，最旧的五条
+    // 被挤了出去。它们一次性推完：行序就是帧序，因为
+    // 一步在派发等待任何东西之前就已经追加了。
     for (let index = 0; index < 205; index += 1) {
       socket.receive({ t: 'tool.call', id: `call-${index}`, name: 'browser_list_tabs', args: {}, expiresAt: Date.now() + 60_000 })
     }
@@ -669,13 +669,13 @@ describe('assistant stream and turn progress', () => {
 
 describe('@open directive', () => {
   /**
-   * Make the next navigation of `tabId` announce a ready document.
+   * 让 `tabId` 的下一次导航宣告一个就绪文档。
    *
-   * The worker registers its "document ready" listener immediately before it
-   * calls `tabs.update`, so the announcement has to happen *because of* that
-   * call. Firing it from the test body instead is a race the worker wins or
-   * loses depending on timing — which is how the first version of this test was
-   * flaky rather than wrong.
+   * worker 会在调用 `tabs.update` 之前就注册好它的「文档就绪」
+   * 监听器，所以那个宣告必须*因为*这次调用才发生。
+   * 改从测试体里触发它，就是一场看时序的赌局：worker
+   * 可能赢也可能输——这个测试的第一版
+   * 会不稳定而不是写错，原因就在这里。
    */
   const arrangeNavigation = (
     chromeMock: ReturnType<typeof mockChrome>,
@@ -693,8 +693,8 @@ describe('@open directive', () => {
   }
 
   it('refuses @open when the desktop app has turned the permission off', async () => {
-    // The desktop app owns this switch, so the extension must not keep its own
-    // mind about it: a permission the app withdrew has to stop the command.
+    // 这个开关归桌面应用，所以扩展绝不能对它有自己的
+    // 主意：应用一收回权限，命令就必须停下来。
     const { chromeMock, control } = await boot({}, { openPagesForUser: false })
     chromeMock.tabs.create.mockResolvedValue(htmlTab(42))
 
@@ -707,28 +707,28 @@ describe('@open directive', () => {
         error: expect.stringMatching(/openPagesForUser|turned off|关闭/),
       })
     })
-    // Nothing was opened, and the tab binding was left alone.
+    // 什么都没打开，标签页绑定也没被动过。
     expect(chromeMock.tabs.create).not.toHaveBeenCalled()
   })
 
   it('refuses @open before any handshake has granted the permission', async () => {
-    // The fail-closed direction. A dropped or unreadable policy must read as
-    // "not allowed": if absence meant permission, a broken handshake would hand
-    // out a grant the user never gave.
+    // 按失败关闭的方向来。一份丢了或读不出来的 policy 必须读作
+    // 「不允许」：要是缺失就等于许可，一次坏掉的握手就能
+    // 发出一项用户从没授予过的授权。
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL } }) })
     vi.stubGlobal('WebSocket', FakeWebSocket)
     await import('../src/background/index.ts')
-    // At least one, not exactly one: when a discovery attempt is slow, the retry the
-  // worker scheduled fires after the first socket was created, so a test that counts
-  // dials fails for a legitimate retry. The socket used below stays the first one — it
-  // is the one this test opens and the one its handshake travels on.
+    // 至少一次，不是恰好一次：发现尝试一慢，worker 排定的
+  // 重试就会在第一个 socket 建好之后触发，于是统计拨号次数的
+  // 测试会因为一次合法重试而挂。下面用的 socket 始终是第一个——
+  // 它是这个测试打开的那个，也是它的握手所走的那个。
   await waitFor(() => { expect(FakeWebSocket.instances.length).toBeGreaterThan(0) })
     const socket = FakeWebSocket.instances[0]!
     socket.open()
     await waitFor(() => {
       expect(sent(socket)).toContainEqual(expect.objectContaining({ t: 'hello' }))
     })
-    // Connected, but `hello.ok` has not arrived: no policy is in force yet.
+    // 已连接，但 `hello.ok` 还没到：还没有任何 policy 生效。
     const control = controlPort()
     chromeMock.onConnect.emit(control.port)
     chromeMock.tabs.create.mockResolvedValue(htmlTab(42))
@@ -746,8 +746,8 @@ describe('@open directive', () => {
   })
 
   it('does not raise the panel on its own when pages may not be opened', async () => {
-    // Automatic opening is part of "the model is about to show you something",
-    // so it must not outlive the app turning that off.
+    // 自动打开是「模型马上要给你看某样东西」的一部分，
+    // 所以它绝不能比应用关掉它的那一下活得更久。
     const { chromeMock, socket } = await boot({ autoOpenPanel: true }, { openPagesForUser: false })
 
     socket.receive({
@@ -760,9 +760,9 @@ describe('@open directive', () => {
     await waitFor(() => {
       expect(socket.sent.some((frame) => (frame as { t?: string }).t === 'tool.result')).toBe(true)
     })
-    // `windows.getLastFocused` belongs to the auto-open path alone — a tool call
-    // resolving its target tab uses `tabs.query`, so this is the signal that
-    // distinguishes "the panel was raised" from ordinary dispatch.
+    // `windows.getLastFocused` 只出现在自动打开这条路上——一次工具调用
+    // 解析自己的目标标签页靠 `tabs.query`，所以这个信号
+    // 才能把「面板被抬到前台」和普通派发分开。
     expect(chromeMock.windows.getLastFocused).not.toHaveBeenCalled()
   })
 
@@ -773,7 +773,7 @@ describe('@open directive', () => {
 
     control.onMessage.emit({ type: 'open.run', id: 'o1', url: 'https://store.steampowered.com/', pace: 'fast', pin: true })
     await waitFor(() => {
-      // Foreground on purpose: the whole point is that the user sees it.
+      // 刻意放前台：意义全在于让用户看得见它。
       expect(chromeMock.tabs.create).toHaveBeenCalledWith({ active: true, windowId: 1 })
     })
     await waitFor(() => {
@@ -788,12 +788,12 @@ describe('@open directive', () => {
       })
     })
 
-    // The tools now act on the tab the user asked to see.
+    // 这些工具现在作用于用户要求查看的那个标签页。
     control.onMessage.emit({ type: 'state.request' })
     await waitFor(() => {
       expect(latestState(control.postMessage)?.affinity.controlled?.tabId).toBe(42)
     })
-    // And nothing was sent to the model: this directive is not a request.
+    // 而且什么都没发给模型：这条指令不算一次请求。
     expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.prompt')).toHaveLength(0)
   })
 
@@ -836,7 +836,7 @@ describe('conversation routing', () => {
   it('gives the panel its own session by default', async () => {
     const { control, socket } = await boot()
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
-    // `fresh` creates one rather than writing into whatever the desktop has open.
+    // `fresh` 会新建一个，而不是写进桌面已经开着的那个里。
     const created = await waitForRpc(socket, 'session.create')
     expect(created.payload).toEqual({})
     answerRpc(socket, created, { ok: true, value: { sessionId: SESSION_ID } })
@@ -845,16 +845,35 @@ describe('conversation routing', () => {
     })
   })
 
-  it('continues the chosen conversation without creating a session', async () => {
-    // This is the whole point of the feature: ask about a page inside context
-    // that already exists, instead of starting from nothing.
-    const { control, socket } = await boot({ sessionScope: 'pinned', pinnedSessionId: 'session-chosen' })
+  it('continues the remembered conversation without creating a new one', async () => {
+    // 原来的这一条传的是 `sessionScope: 'pinned'` + `pinnedSessionId`，也就是那个
+    // 手选 id 的机制。它已经并入「上次浏览器对话」，而"上次那段"记在扩展存储里
+    //（`FRESH_SESSION_KEY`），所以这里改成从存储里给。要证的东西没变：就在已经存在的
+    // 上下文里问某个页面，而不是从零开始。
+    const { control, socket } = await boot({ sessionScope: 'last' }, { openPagesForUser: true }, {
+      dshFreshSessionId: 'session-chosen',
+    })
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'look at this' })
+
+    // 存的 id 在发出去之前会先向桌面核对一次。
+    const list = await waitForRpc(socket, 'session.list')
+    answerRpc(socket, list, {
+      ok: true,
+      value: { items: [{ sessionId: 'session-chosen', title: '', updatedAt: 5_000, running: false }] },
+    })
 
     const prompted = await waitForRpc(socket, 'session.prompt')
     expect(prompted.payload!.sessionId).toBe('session-chosen')
-    // No session was created: the target was declared, not invented.
+    // 没有创建新会话：目标是记住的那段，不是凭空冒出来的。
     expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.create')).toHaveLength(0)
+    // 结算这次 prompt。留在途中的提交会比这个测试活得久，下一个测试会继承它半完成的
+    // 状态，表现为两个测试之后一个看起来毫不相关的失败。
+    answerRpc(socket, prompted, { ok: true, value: {} })
+    await waitFor(() => {
+      expect(control.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'session.result', id: 'p1', ok: true }),
+      )
+    })
   })
 
   it('lists the desktop conversations that are worth choosing, running first', async () => {
@@ -864,9 +883,9 @@ describe('conversation routing', () => {
     answerRpc(socket, call, {
       ok: true,
       value: {
-        // The shape the desktop really sends: the title lives in
-        // `projections.values.title`, not at the top level, and a sub-agent is tagged
-        // with `origin` plus a parent.
+        // 桌面真正发出来的形态：标题在
+        // `projections.values.title`，不在顶层，而子代理会带上
+        // `origin` 和 parent 作标记。
         items: [
           {
             sessionId: 'old',
@@ -880,9 +899,9 @@ describe('conversation routing', () => {
             running: true,
             projections: { values: { title: 'newer', turnOutline: [{ prompt: '', seq: 1 }, { prompt: 'do the new thing', seq: 2 }] } },
           },
-          // A delegated sub-agent is a Session of its own, but not a conversation the
-          // user can pick up from the panel: it would appear once per delegation,
-          // titled with its own instructions.
+          // 被委派的子代理本身是一个 Session，但不是用户能在面板里
+          // 接着用的对话：它每委派一次就出现一次，
+          // 标题就是它自己的指令。
           {
             sessionId: 'sub',
             updatedAt: 8_000,
@@ -891,7 +910,7 @@ describe('conversation routing', () => {
             parentSessionId: 'new',
             projections: { values: { title: 'You are a senior code reviewer' } },
           },
-          // Junk must be dropped, not rendered or routed to.
+          // 垃圾必须丢掉，既不渲染也不路由到。
           { sessionId: '', title: 'nameless', updatedAt: 5_000 },
           { title: 'no id at all', updatedAt: 5_000 },
           'not an object',
@@ -903,8 +922,8 @@ describe('conversation routing', () => {
         type: 'session.list',
         id: 'l1',
         ok: true,
-        // Running first, then newest first; `preview` is the first *non-empty* prompt,
-        // and the title comes from the projection.
+        // 先按运行中、再按最新排；`preview` 是第一个*非空* prompt，
+        // 而标题来自 projection。
         sessions: [
           { sessionId: 'new', title: 'newer', preview: 'do the new thing', updatedAt: 9_000, running: true },
           { sessionId: 'old', title: 'older', preview: 'do the old thing', updatedAt: 1_000, running: false },
@@ -914,14 +933,14 @@ describe('conversation routing', () => {
   })
 
   it('follows only the workspace conversations that are actually producing something', async () => {
-    // 「工作区内」 settles to the live conversations instead of subscribing to every member
-    // of a workspace: twenty members would cost twenty server-side streams to watch the
-    // one or two that are working, and a group grows as conversations accumulate.
-    // `updatedAt` moves only when a conversation produces an event, so activity is
-    // answerable from metadata without asking any Session anything.
+    // 「工作区内」收敛到活跃的那个对话，而不是订阅工作区里的
+    // 每个成员：二十个成员就意味着二十条服务端流，只为盯住
+    // 那一两个真在工作的，而且群组会随着对话越攒越大。
+    // `updatedAt` 只在某个对话有事件时才变，所以活跃度
+    // 能从元数据直接答出来，不用去问任何 Session。
     //
-    // Booted first: the worker touches `chrome` as it loads, and this file's stub is
-    // installed by `boot`, which a hoisted static import would outrun.
+    // 先启动它：worker 一加载就会碰 `chrome`，而本文件的桩是
+    // `boot` 装的，被提升的静态 import 会跑到它前面。
     const { RECENT_ACTIVITY_MS, sessionsWorthFollowing } = await boot().then(() => (
       loadedWorker as unknown as {
         RECENT_ACTIVITY_MS: number
@@ -932,26 +951,26 @@ describe('conversation routing', () => {
         ) => string[]
       }
     ))
-    // `elsewhere` is deliberately NOT a member: `session.list` covers every conversation
-    // on the desktop, and only the group's own members are this mode's business.
+    // `elsewhere` 刻意不是成员：`session.list` 覆盖桌面上的每个对话，
+    // 而这个模式只管群组自己的成员。
     const members = new Set(['live', 'recent', 'quiet'])
     const now = 1_000_000_000
     const at = (ageMs: number) => now - ageMs
     expect(sessionsWorthFollowing(
       members,
       [
-        // A turn in flight is kept however long ago it last emitted: a slow turn must not
-        // be dropped halfway through.
+        // 在途的一轮不管上次发事件是多久以前都保留：一轮很慢的回合不能
+        // 半路被丢掉。
         { sessionId: 'live', updatedAt: at(RECENT_ACTIVITY_MS * 3), running: true },
         { sessionId: 'recent', updatedAt: at(RECENT_ACTIVITY_MS / 2), running: false },
         { sessionId: 'quiet', updatedAt: at(RECENT_ACTIVITY_MS * 2), running: false },
-        // `session.list` covers every conversation on the desktop; only the group's
-        // members are this mode's business.
+        // `session.list` 覆盖桌面上的每个对话；只有群组的
+        // 成员才是这个模式的事。
         { sessionId: 'elsewhere', updatedAt: at(0), running: true },
       ],
       now,
     )).toEqual(['live', 'recent'])
-    // The window edge counts as still-active, so nothing is dropped at the boundary.
+    // 窗口边界算作仍活跃，所以边界上的东西不会被丢掉。
     expect(sessionsWorthFollowing(members, [{ sessionId: 'recent', updatedAt: at(RECENT_ACTIVITY_MS), running: false }], now))
       .toEqual(['recent'])
     expect(sessionsWorthFollowing(new Set(), [{ sessionId: 'live', updatedAt: at(0), running: true }], now)).toEqual([])
@@ -972,12 +991,11 @@ describe('conversation routing', () => {
     })
   })
 
-  it('mirrors every conversation in the browser workspace under 「工作区内」', async () => {
-    // The mode exists so an instruction issued on the desktop shows up here without
-    // being picked in advance. Two things have to happen for that: the group is read
-    // from the path the bridge names (not guessed from a title, which the user can
-    // rename), and a follower is opened per conversation — the bridge streams nothing
-    // until someone asks, and the panel never prompts most of them.
+  it('mirrors every conversation in every workspace under 「全部工作区」', async () => {
+    // 这个模式是为了让桌面上发出的指令不用事先挑选就能在这里出现。最早它只镜像 bridge
+    // 给出的那个路径下的一个分组；现在按用户的要求放宽到**每一个**分组——"不管在 DSH 哪个
+    // 工作区发对话，都同步到插件里"——所以下面那个 `w-other` 也必须出现。为此每个对话各开
+    // 一个 follower：bridge 在没人请求之前不流任何东西。
     const { control, socket } = await boot({}, { openPagesForUser: true, sessionWorkspacePath: 'C:\\Users\\u\\.dsh\\browser-sessions' } as never)
     control.onMessage.emit({ type: 'session.select', id: 's1', scope: 'workspace', sessionId: null })
     const listed = await waitForRpc(socket, 'workspace.list')
@@ -985,113 +1003,104 @@ describe('conversation routing', () => {
       ok: true,
       value: {
         items: [
-          // Another group must not be mirrored, even though it has conversations.
           { workspaceId: 'w-other', path: 'C:\\elsewhere', title: 'other', sessionIds: ['session-other'] },
           { workspaceId: 'w-browser', path: 'C:\\Users\\u\\.dsh\\browser-sessions', title: '浏览器对话', sessionIds: ['session-a', 'session-b'] },
         ],
       },
     })
-    // One follower per conversation, and only for the named group. Read from the
-    // frames the worker actually sent rather than from one `waitForRpc`: the two
-    // requests race, and a helper that returns "the first matching frame" would
-    // report the same one twice.
+    // 每个对话一个 follower，跨所有分组。读的是 worker 实际发出的帧，不靠一次
+    // `waitForRpc`：这几个请求会抢，而一个返回「第一个匹配帧」的辅助函数会把同一个帧报两遍。
     await waitFor(() => {
-      expect(rpcFrames(socket, 'session.follow')).toHaveLength(2)
+      expect(rpcFrames(socket, 'session.follow')).toHaveLength(3)
     })
     expect(rpcFrames(socket, 'session.follow').map((frame) => frame.payload?.sessionId).sort())
-      .toEqual(['session-a', 'session-b'])
-    // The mode is remembered, so a reconnect resumes it rather than silently showing
-    // the setting while mirroring nothing.
+      .toEqual(['session-a', 'session-b', 'session-other'])
+    // 这个模式会被记住，所以重连能恢复它，而不是默默地显示着
+    // 这个设置却什么都没镜像。
     await waitFor(() => {
       expect(latestState(control.postMessage)?.settings.sessionScope).toBe('workspace')
     })
   })
 
-  it('switches the target and clears the transcript that belonged to the old one', async () => {
+  it('clears the transcript that belonged to the old conversation when the user switches to a new one', async () => {
     const { control, socket } = await boot()
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
     const created = await waitForRpc(socket, 'session.create')
     answerRpc(socket, created, { ok: true, value: { sessionId: SESSION_ID } })
-    // Wait for the binding itself, not just for a row: detaching only clears
-    // anything once a session is actually bound, so asserting too early would
-    // pass whether or not the clearing happens.
+    // 等绑定本身，不只是等某一行：只有真绑上会话之后，
+    // 解绑才会清东西，所以断言早了
+    // 不管清没清都会通过。
     await waitFor(() => {
       expect(latestState(control.postMessage)?.session.id).toBe(SESSION_ID)
     })
-    // A tool call, so the transcript has a row that is unambiguously not the
-    // panel's own request: clearing it is what the assertion below measures.
+    // 一次工具调用，这样记录里就有一行明确不是面板
+    // 自己的请求：清掉它才是下面断言要测的。
     socket.receive({ t: 'tool.call', id: 'call-1', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
     await waitFor(() => {
       expect(timelineOf(control.postMessage).some((row) => row.kind === 'step')).toBe(true)
     })
-    // Settle it before switching. A call still in flight is deliberately kept
-    // across a switch, so leaving it running would make this test assert the
-    // opposite of the rule it is about.
+    // 在切换之前先结算它。仍在途的调用会被刻意留着
+    // 跨过一次切换，所以让它一直跑，这个测试就会断言出
+    // 和它要讲的规则相反的结果。
     socket.receive({ t: 'tool.cancel', id: 'call-1' })
     await waitFor(() => {
       expect(timelineOf(control.postMessage).some((row) => row.kind === 'step' && row.state === 'cancelled')).toBe(true)
     })
 
-    control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'pinned', sessionId: 'session-other' })
-    // Ask for the state explicitly rather than reading the mock's history: the
-    // write is queued, so an earlier push can land before the settings change.
+    // 这一条原先切的是 `pinned` + `session-other`：切过去就立刻换绑定。那个手选机制
+    // 已经删掉了，而 `last` 刻意**不立刻绑**——绑定是下一条消息的事（用户可能只是想改
+    // 设置）。所以"解绑并清记录"现在要由 `fresh` 来证：切换必须丢掉旧对话的行。
+    control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'fresh', sessionId: null })
+    // 显式请求状态，不去读 mock 的历史：这次
+    // 写入是排队的，所以更早的推送可能先于设置变更落盘。
     control.onMessage.emit({ type: 'state.request' })
     await waitFor(() => {
       const latest = latestState(control.postMessage)
-      expect(latest?.session.id).toBe('session-other')
-      expect(latest?.settings.sessionScope).toBe('pinned')
+      expect(latest?.settings.sessionScope).toBe('fresh')
     })
     const state = latestState(control.postMessage)!
+    expect(state.session.id).toBeNull()
     expect(state.timeline.filter((row) => row.kind === 'step')).toEqual([])
-    expect(state.settings).toMatchObject({ sessionScope: 'pinned', pinnedSessionId: 'session-other' })
   })
 
   it('ignores a session create that lands after the user switched away', async () => {
-    // The race: a prompt asks for a session, and while `session.create` is in
-    // flight the user picks a different conversation. The create's reply then
-    // arrives. Adopting it would silently drag the panel back to the session the
-    // user just left, and the next prompt would land in the wrong conversation.
-    const { control, socket } = await boot()
+    // 竞争就在这儿：一次 prompt 正在 `session.create`，而用户在回复到达前换了目标。
+    // 采纳那个回复，面板就会被悄悄拖回用户刚离开的那段对话。
+    //
+    // 这一条原先用 `scope: 'pinned'` + `sessionId` 表达"切到别处"。那个手选机制已经
+    // 删掉，所以换目标改由 `last` 表达。
+    const { control, socket } = await boot({ sessionScope: 'last' }, { openPagesForUser: true }, {
+      dshFreshSessionId: 'session-chosen',
+    })
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
+    // 第一次 prompt 会先核对记住的那段（`session.list`），核对不通过才新建；这里要的
+    // 就是那次 create 还在路上。注意这份测试替身的 `storage.local.get` 是固定返回值，
+    // `remove()` 不会真的让它少给一个键，所以这一步必须显式答复。
+    const probe = await waitForRpc(socket, 'session.list')
+    answerRpc(socket, probe, { ok: true, value: { items: [] } })
     const created = await waitForRpc(socket, 'session.create')
 
-    control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'pinned', sessionId: 'session-chosen' })
+    // 用户换到"上次浏览器对话"，这会作废那次还在路上的 create。
+    control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'last', sessionId: null })
     await waitFor(() => {
       expect(control.postMessage).toHaveBeenCalledWith({ type: 'session.result', id: 'sel1', ok: true })
     })
 
-    // Now the stale create answers.
+    // 现在那个过期的 create 才回话。
     answerRpc(socket, created, { ok: true, value: { sessionId: 'session-late' } })
     await new Promise((resolve) => { setTimeout(resolve, 20) })
 
     control.onMessage.emit({ type: 'state.request' })
     await waitFor(() => {
-      expect(latestState(control.postMessage)?.session.id).toBe('session-chosen')
-    })
-    // And the next prompt still goes where the user pointed it. Waiting is the
-    // point: reading the socket immediately would inspect the previous prompt,
-    // which was the one whose create lost the race.
-    control.onMessage.emit({ type: 'session.prompt', id: 'p2', text: 'and this' })
-    await waitFor(() => {
-      const prompts = sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.prompt')
-      expect(prompts.at(-1)!.payload!.sessionId).toBe('session-chosen')
-    })
-  })
-
-  it('refuses to continue a conversation that was never named', async () => {
-    const { control } = await boot()
-    control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'pinned', sessionId: null })
-    await waitFor(() => {
-      expect(control.postMessage).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'session.result',
-        id: 'sel1',
-        ok: false,
-      }))
+      // 过期的 create 没能把面板绑到 `session-late` 上。
+      expect(latestState(control.postMessage)?.session.id).not.toBe('session-late')
     })
   })
 
   it('goes back to creating its own session when the user switches to fresh', async () => {
-    const { control, socket } = await boot({ sessionScope: 'pinned', pinnedSessionId: 'session-chosen' })
+    const { control, socket } = await boot({ sessionScope: 'last' }, { openPagesForUser: true }, {
+      dshFreshSessionId: 'session-chosen',
+    })
     control.onMessage.emit({ type: 'session.select', id: 'sel1', scope: 'fresh', sessionId: null })
     await waitFor(() => {
       expect(control.postMessage).toHaveBeenCalledWith({ type: 'session.result', id: 'sel1', ok: true })
@@ -1099,24 +1108,33 @@ describe('conversation routing', () => {
     expect(latestState(control.postMessage)?.session.id).toBeNull()
 
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello' })
-    // It must create rather than keep writing to the conversation it just left.
+    // `fresh` 清掉了记住的那段，但这份测试替身里 `storage.local.remove` 不会真的让
+    // `get` 少给一个键（`localGet` 是固定返回值），所以恢复那条路还会读到它。让流程
+    // 走完：核对用的 `session.list` 必须回空，`fresh` 这才是真的从头开始。
+    const list = await waitForRpc(socket, 'session.list')
+    answerRpc(socket, list, { ok: true, value: { items: [] } })
+
+    // 它必须新建，而不是继续写进它刚离开的那个对话。
+    const created = await waitForRpc(socket, 'session.create')
+    expect(created.payload).toEqual({})
+    answerRpc(socket, created, { ok: true, value: { sessionId: SESSION_ID } })
     await waitFor(() => {
-      expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.create')).toHaveLength(1)
+      expect(latestState(control.postMessage)?.session.id).toBe(SESSION_ID)
     })
   })
 
   it('continues the remembered conversation after the worker has been recycled', async () => {
-    // The worker died with the side panel closed, so its in-memory binding is
-    // gone. Without the remembered id the next message would open a different
-    // conversation, and the user's browser history would fragment into one
-    // session per idle timeout — each of which they had to find themselves.
+    // worker 会随侧边面板关闭而死，所以它在内存里的绑定已经
+    // 没了。没有记住的 id，下一条消息就会开另一个
+    // 对话，用户的浏览器历史就碎成每个空闲超时一段
+    // 会话——每一段都得他们自己去找。
     const { control, socket } = await boot({}, { openPagesForUser: true }, {
       dshFreshSessionId: 'session-earlier',
     })
 
     control.onMessage.emit({ type: 'session.prompt', id: 'p1', text: 'hello again' })
 
-    // The stored id is checked against the desktop before being trusted.
+    // 存的 id 在信之前会先向桌面核对。
     const list = await waitForRpc(socket, 'session.list')
     answerRpc(socket, list, {
       ok: true,
@@ -1126,9 +1144,9 @@ describe('conversation routing', () => {
     const prompt = await waitForRpc(socket, 'session.prompt')
     expect(prompt.payload?.sessionId).toBe('session-earlier')
     expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.create')).toHaveLength(0)
-    // Settle the prompt. A submission left in flight outlives this test and the
-    // next one inherits its half-finished state, which surfaced as an
-    // unrelated-looking failure two tests later.
+    // 结算这次 prompt。留在途中的提交会比这个测试活得久，
+    // 下一个测试会继承它半完成的状态，表现为两个测试之后
+    // 一个看起来毫不相关的失败。
     answerRpc(socket, prompt, { ok: true, value: {} })
     await waitFor(() => {
       expect(control.postMessage).toHaveBeenCalledWith(
@@ -1138,9 +1156,9 @@ describe('conversation routing', () => {
   })
 
   it('starts a new conversation when the remembered one is gone from the desktop', async () => {
-    // A stored id can outlive its session: the user may have deleted that
-    // conversation. Adopting a dead id would send the prompt into nowhere and
-    // report a gateway error the user cannot act on.
+    // 存的 id 可能比它的会话活得久：用户可能已经把那个
+    // 对话删了。采纳一个已死的 id，prompt 就发进虚空，
+    // 还报一个用户没法处理的 gateway 错误。
     const { chromeMock, control, socket } = await boot({}, { openPagesForUser: true }, {
       dshFreshSessionId: 'session-deleted',
     })
@@ -1158,11 +1176,11 @@ describe('conversation routing', () => {
     })
     const create = sent(socket).find((frame) => frame.t === 'rpc' && frame.method === 'session.create')!
     answerRpc(socket, create, { ok: true, value: { sessionId: 'session-new' } })
-    // The dead id must be forgotten, or every future prompt repeats this probe.
+    // 那个已死的 id 必须忘掉，否则之后每次 prompt 都要重做这次探测。
     await waitFor(() => {
       expect(chromeMock.storage.local.remove).toHaveBeenCalledWith('dshFreshSessionId')
     })
-    // Settle the prompt so nothing is left in flight for the next test.
+    // 结算这次 prompt，这样就不会有东西留在途中留给下一个测试。
     const prompt = await waitForRpc(socket, 'session.prompt')
     expect(prompt.payload?.sessionId).toBe('session-new')
     answerRpc(socket, prompt, { ok: true, value: {} })
@@ -1173,11 +1191,11 @@ describe('conversation routing', () => {
     })
   })
 
-  // Storage is shared with older versions of this extension and with anything
-  // else that writes to it, so the remembered value cannot be assumed to be the
-  // string this code wrote. Each of these must fall through to a new
-  // conversation rather than throwing inside the prompt path, where the user
-  // would see a failure instead of a reply.
+  // 存储是和这个扩展的旧版本、以及任何往里面写的东西
+  // 共用的，所以不能假定记住的值就是这段代码写下的
+  // 那个字符串。这些情况都必须落到一个新
+  // 对话，而不是在 prompt 路径里抛错，否则用户
+  // 看到的会是失败，而不是回复。
   for (const [label, stored] of [
     ['an empty string', ''],
     ['a number', 42],
@@ -1195,7 +1213,7 @@ describe('conversation routing', () => {
       await waitFor(() => {
         expect(sent(socket).filter((frame) => frame.t === 'rpc' && frame.method === 'session.create')).toHaveLength(1)
       })
-      // A junk value must not even be looked up against the desktop.
+      // 垃圾值根本不该拿去问桌面。
       expect(rpcFrame(socket, 'session.list')).toBeUndefined()
 
       const create = sent(socket).find((frame) => frame.t === 'rpc' && frame.method === 'session.create')!
@@ -1218,7 +1236,7 @@ describe('typed browser commands', () => {
   }
 
   it('executes a typed command without an approval prompt and records it as a command', async () => {
-    // Restricted, page sharing on "ask": a model snapshot would prompt here.
+    // 受限、页面共享为「ask」：模型快照在这里会弹提示。
     const { chromeMock, control } = await boot({ unrestrictedBrowserAccess: false, sharePageContent: 'ask' })
     runCommand(control, 'snap-1', 'browser_snapshot', {})
     await waitFor(() => {
@@ -1247,7 +1265,7 @@ describe('typed browser commands', () => {
       })
     })
 
-    // No approval was ever offered, and the bridge was not involved at all.
+    // 从没提供过审批，bridge 也完全没参与。
     expect(sentMessages(control.postMessage)).not.toContainEqual(expect.objectContaining({ type: 'approval.request' }))
     expect(rpcFrame(FakeWebSocket.instances[0]!, 'session.prompt')).toBeUndefined()
 
@@ -1260,7 +1278,7 @@ describe('typed browser commands', () => {
       expect(steps[1]).toMatchObject({ kind: 'step', tool: 'browser_click', state: 'done' })
       expect(steps[1]!.callId).toBe(state.activity[0]!.id)
     })
-    // The typed command rows are marked as the user's own, not the model's.
+    // 手动敲的命令行被标成用户自己的，不是模型的。
     expect(activityRows(control.postMessage).some((row) => row.kind === 'command' && row.state === 'pending')).toBe(true)
   })
 
@@ -1313,8 +1331,8 @@ describe('typed browser commands', () => {
   })
 
   it('records a model-driven call as a tool step that ends in done', async () => {
-    // Page sharing on "ask": this read needs the user's decision, which is what
-    // separates a model step from a typed command.
+    // 页面共享为「ask」：这次读取要用户做决定，而这正是
+    // 模型步骤和手动命令的分界。
     const { control, socket } = await boot({ unrestrictedBrowserAccess: false, sharePageContent: 'ask' })
     socket.receive({ t: 'tool.call', id: 'call-9', name: 'browser_snapshot', args: {}, expiresAt: Date.now() + 60_000 })
 
@@ -1346,7 +1364,7 @@ describe('typed browser commands', () => {
 
   it('runs a typed command with no bridge at all', async () => {
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: {} }) })
-    // The extension always dials; nothing answering is what leaves it stopped.
+    // 扩展总是会拨号；没人应答才是它停下来的原因。
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
     vi.stubGlobal('WebSocket', FakeWebSocket)
     await import('../src/background/index.ts')
@@ -1381,7 +1399,7 @@ describe('typed browser commands', () => {
     control.onMessage.emit({ type: 'state.request' })
     await waitFor(() => {
       const state = latestState(control.postMessage)!
-      // The timeline step and the activity row agree, and both say "you asked".
+      // 时间线步骤和活动行一致，两处都说「是你问的」。
       const step = state.timeline.find((entry) => entry.kind === 'step')
       expect(step).toMatchObject({ tool: 'browser_snapshot', state: 'done' })
       expect(state.activity.find((entry) => entry.id === step?.callId)).toMatchObject({ kind: 'command', state: 'done' })

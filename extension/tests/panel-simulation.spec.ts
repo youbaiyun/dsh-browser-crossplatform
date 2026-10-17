@@ -1,32 +1,27 @@
 // @vitest-environment jsdom
 
 /**
- * Simulation: does the panel survive being used while a reply streams?
+ * 模拟：一边流式输出回答一边被人使用，面板还撑得住吗？
  *
- * The unit specs answer "does this render" one assertion at a time. This one drives the
- * panel the way the desktop app does — a reply arriving in deltas, full state pushes every
- * 50 ms, tool steps, an approval, and a person typing throughout — and checks the three
- * things that quietly break under that load:
+ * 那些单元 spec 只回答一句「这样渲染对不对」。这一个像桌面应用那样驱动面板
+ * ——回答按增量到达、每 50 ms 一次完整状态推送、工具步骤、一个审批请求，还有一个人
+ * 全程不停打字——并检查这种负载下会悄悄坏掉的三件事：
  *
- *   1. both sides of the conversation stay on screen (your prompt and the reply);
- *   2. controls stay interactive: a real click still produces its message, every round;
- *   3. the composer keeps working: focus survives a repaint, typed characters land, and the
- *      draft is not eaten.
+ *   1. 对话的两侧都留在屏幕上（你的提示和那条回答）；
+ *   2. 控件保持可交互：每一次真实点击仍然产生它该产生的消息；
+ *   3. 输入框一直可用：焦点挺过一次重绘、键入的字符真的落到位，草稿也没被吃掉。
  *
- * Two things make this stricter than it first looks, because both were mistakes in an
- * earlier draft of this same file:
+ * 有两点让它比乍一看更严格，因为这两点都曾是同一个文件早期草稿里的错误：
  *
- *   - **Focus is never re-applied.** A real browser moves focus to `document.body` when the
- *     focused element is removed, and the rebuild path removes the textarea. An earlier
- *     draft re-focused after every push, which is exactly the symptom it was meant to
- *     detect: focus loss is what "typing suddenly stopped working" is. Here, whatever the
- *     panel does to focus is left alone and then observed.
- *   - **Typing goes to whatever is focused.** Characters are dispatched at the element that
- *     actually holds focus, not at a stale reference, so text is lost the way it would be
- *     for a person.
+ *   - **绝不重新施加焦点。** 真实浏览器在被聚焦的元素被移除时会把焦点移到
+ *     `document.body`，而重建路径会移除那个 textarea。早期草稿在每次推送后重新
+ *     聚焦，而那恰恰是它本该检测的症状：焦点丢了，就是「打字突然不工作了」。
+ *     在这里，面板对焦点做了什么就任它怎样，然后再去观察。
+ *   - **键入要打到当前真正持有焦点的元素上。** 字符派发到实际持有焦点的元素，
+ *     而不是某个过期的引用，所以文本会像真人遇到的那样丢掉。
  *
- * It runs 100 rounds and prints per-round outcomes, because an intermittent fault that
- * happens once in five rounds is the kind a single pass reports as success.
+ * 它跑 100 轮并打印每一轮的结果，因为五轮才出现一次的间歇性故障，正是单跑
+ * 一遍会报成成功的那类问题。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -78,13 +73,13 @@ function state(overrides: Partial<ControlState> = {}): ControlState {
 }
 
 /**
- * Make focus behave like a real browser across a rebuild.
+ * 让焦点在一次重建前后的表现像真实浏览器。
  *
- * A browser moves focus off an element that is removed from the document; jsdom leaves
- * `document.activeElement` pointing at the detached node, which hides the fault. The test
- * checks `document.contains`, not containment in `body`: the mount element is a detached
- * node in this harness, so a `body` check would call every healthy element "removed" and
- * manufacture the very failure being measured.
+ * 浏览器会把焦点从已从文档中移除的元素上移走；jsdom 却让
+ * `document.activeElement` 继续指向那个已脱离的节点，把故障藏了起来。这个测试检查
+ * `document.contains`，而不是查它在不在 `body` 里：这套测试装置里，挂载元素本身
+ * 就是个已脱离的节点，所以用 `body` 查会把每个健康的元素都判成「已移除」，
+ * 凭空造出正在被测量的那个故障。
  */
 function settleFocusLikeABrowser(): void {
   const active = document.activeElement
@@ -93,7 +88,7 @@ function settleFocusLikeABrowser(): void {
   }
 }
 
-/** Type into whatever currently holds focus, the way a keypress would. */
+/** 像按键一样，输入到当前持有焦点的元素里。 */
 function typeWhereFocusIs(text: string): boolean {
   const active = document.activeElement
   if (!(active instanceof HTMLTextAreaElement) && !(active instanceof HTMLInputElement)) return false
@@ -132,7 +127,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
 
       const prompt = `第${round + 1}轮提问`
 
-      // --- the human types the prompt into the real composer -----------------------
+      // --- 人把提示输入到真实的输入框里 -----------------------
       const first = root.querySelector<HTMLTextAreaElement>('.composer__input')
       expect(first, 'composer input').not.toBeNull()
       first!.focus()
@@ -154,7 +149,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
       for (let tick = 0; tick < TICKS_PER_ROUND; tick++) {
         replySoFar += `段落${tick} `
 
-        // A durable running row plus a delta, exactly as the worker publishes them.
+        // 一行长期存在的 running 行，外加一个 delta，完全按 worker 发布它们的样子。
         app.handleMessage({
           type: 'state',
           state: state({
@@ -172,17 +167,17 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
         })
         flushAnimationFrames()
 
-        // Whatever the repaint did to focus, it stands.
+        // 重绘对焦点做了什么，就让它保持那样。
         settleFocusLikeABrowser()
 
-        // The person keeps typing. If focus was lost, these characters are lost with it.
+        // 人继续打字。焦点一丢，这些字符也跟着丢。
         if (!typeWhereFocusIs('字')) {
           focusLost += 1
           typedLost += 1
         }
       }
 
-      // --- interactions while the reply is still on screen -------------------------
+      // --- 回答仍在屏幕上时的各种交互 -------------------------
       const toolButton = root.querySelector<HTMLButtonElement>('.tool-line')
       const before = toolButton?.getAttribute('aria-expanded')
       toolButton?.click()
@@ -190,7 +185,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
       const after = root.querySelector<HTMLButtonElement>('.tool-line')?.getAttribute('aria-expanded')
       const expandWorked = before !== undefined && after !== undefined && before !== after
 
-      // An approval arriving mid-reply, answered with a real click on the real label.
+      // 一个在回答中途到达的审批，用对真实标签的一次真实点击来回答。
       app.handleMessage({
         type: 'state',
         state: state({
@@ -216,7 +211,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
         (message) => message.type === 'approval.respond' && message.id === `ap-${round}`,
       )
 
-      // --- what is on screen -------------------------------------------------------
+      // --- 屏幕上有什么 -------------------------------------------------------
       const text = root.textContent ?? ''
       const liveInput = root.querySelector<HTMLTextAreaElement>('.composer__input')
 
@@ -232,7 +227,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
       })
     }
 
-    // --- report ---------------------------------------------------------------------
+    // --- 报告 ---------------------------------------------------------------------
     const rows = results.map((r) => [
       `#${String(r.round + 1).padStart(2)}`,
       r.userVisible ? ' ok ' : 'FAIL',
@@ -261,20 +256,19 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
     expect(results.filter((r) => !r.expandWorked), '工具行不可交互').toHaveLength(0)
     expect(results.filter((r) => !r.approvalWorked), '审批按钮无效').toHaveLength(0)
     expect(results.filter((r) => !r.draftKept), '草稿被吃掉').toHaveLength(0)
-    // Focus and keystrokes were only ever *reported* by this simulation, never asserted — so the
-    // file whose docstring calls focus "what 'typing suddenly stopped working' is" would have
-    // passed 100 rounds with every round losing focus. These two are the regression it exists
-    // for; the printed counts above stay for a readable failure message.
+    // 焦点和按键以前只被这个模拟*报告*，从没被断言——于是这个在文档注释里把焦点称作
+    // 「『打字突然不工作了』的含义」的文件，本来会在每轮都丢焦点的情况下通过
+    // 100 轮。下面这两条正是它存在的理由所针对的回归；上面打印的计数留着，是为了
+    // 失败时有一份可读的信息。
     expect(results.filter((r) => r.focusLost > 0), '焦点丢失').toHaveLength(0)
     expect(results.filter((r) => r.typedLost > 0), '输入丢失').toHaveLength(0)
   }, 180_000)
 
   it('keeps the composer usable while a prompt is sent and while a run is stopped', async () => {
-    // The 100-round loop above only overlays `state` pushes, so it could not see the other
-    // half of the same bug: `runPrompt`, `runCommand`, `runOpen` and `stopRun` also called the
-    // full `render()`, which replaces the textarea. Sending therefore removed the box the
-    // reader was typing in, and the reader's *next* sentence was discarded when the worker
-    // answered. This walks those paths instead of the push path.
+    // 上面那个 100 轮循环只叠加 `state` 推送，所以看不到同一个 bug 的另一半：
+    // `runPrompt`、`runCommand`、`runOpen` 和 `stopRun` 也会调完整的 `render()`，而它
+    // 会换掉那个 textarea。于是「发送」拿走了读者正在打字的输入框，读者的
+    // *下一句*话在 worker 作答时被丢掉。
     const root = document.createElement('div')
     document.body.append(root)
     const port = new StubPort()
@@ -288,7 +282,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
     input!.value = '第一条消息'
     input!.dispatchEvent(new Event('input', { bubbles: true }))
 
-    // Send it, the way Enter does.
+    // 像按 Enter 那样把它发出去。
     input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     for (let tick = 0; tick < 4; tick++) await Promise.resolve()
     settleFocusLikeABrowser()
@@ -297,7 +291,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
     expect(afterSend, 'composer still present after send').not.toBeNull()
     expect(document.activeElement, 'focus kept through send').toBe(afterSend)
 
-    // Type the next message while the prompt round-trip is still settling.
+    // 在提示的往返还没落定时就敲下一条消息。
     expect(typeWhereFocusIs('第二条'), 'keystrokes land after send').toBe(true)
     for (let tick = 0; tick < 4; tick++) await Promise.resolve()
     settleFocusLikeABrowser()
@@ -307,7 +301,7 @@ describe(`panel simulation (${ROUNDS} rounds)`, () => {
     expect(document.activeElement, 'focus kept through the answer').toBe(afterResolve)
     expect(afterResolve?.value, 'the second message is still there').toContain('第二条')
 
-    // Stopping a run must not take the composer away either.
+    // 停止一次运行同样不得把输入框拿走。
     app.handleMessage({
       type: 'state',
       state: state({ session: { id: 'session-1', turn: 'running', pendingPrompt: false } }),

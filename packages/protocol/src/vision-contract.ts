@@ -1,68 +1,56 @@
 /**
- * The vision request and response contract, shared by both recognizer paths.
+ * 视觉请求和响应的契约，两条识别路径共用。
  *
- * The desktop relay and the extension's own outbound call must ask the same
- * question and read the same answer, or "which path" would silently change what
- * the model is told and what counts as a valid reply. Keeping the prompt, the
- * body shape, and the parser here is what makes the two paths one seam rather
- * than two implementations that drift.
+ * 桌面的中继和扩展自己的出站调用必须问同一个问题、读同一个答案，否则“走了哪条路径”就
+ * 会悄悄改变告诉模型的内容，以及什么算合法回复。把提示词、请求体形态和解析器都放在这里，
+ * 两条路径才是同一个接缝，而不是两套慢慢漂开的实现。
  *
- * Zero-dependency and platform-free: the Node build inlines this into the plugin,
- * and the extension bundler inlines it into the service worker.
+ * 零依赖、与平台无关：Node 构建把它内联进插件，扩展的打包器把它内联进这个 service
+ * worker。
  *
  * @module
  */
 
 /**
- * How long a description may be.
+ * 一段描述能有多长。
  *
- * A summary, not a report. It was 120 characters, then 600 on a request for more
- * detail — which produced the opposite problem: a wall of text about an image the
- * reader only wanted identified. The settle point is a couple of short clauses:
- * long enough to say what this is and what is notable about it, short enough that
- * the answer to "what is this picture?" is one glance.
+ * 它是摘要，不是报告。曾经是 120 个字符，后来有人嫌细节不够，改成了 600——结果引出了
+ * 相反的问题：为一张读者只想认出是什么的图片写了满满一堵文字。最后落到几个短句：长到
+ * 足以说清这是什么、有什么值得注意的，短到“这张图是什么？”一眼就能看完。
  *
- * Length is not where quality comes from; the prompts are, which is why they ask
- * for the specifics that fit rather than for more prose.
+ * 质量不来自长度，来自提示词，所以提示词要的是切题的细节，而不是更多篇幅。
  */
 export const MAX_DESC_CHARS = 200
 
 /**
- * How much of a description rides in a snapshot's inline marker.
+ * 快照的内联标记里带多少描述。
  *
- * A snapshot lists every image on the page, so a full description per image would
- * spend the whole character budget on images nobody asked about — and would put a
- * paragraph in front of a reader who wanted a glance. The marker identifies the
- * image; the tool call returns the summary.
+ * 一份快照会列出页面上所有图片，每张都给完整描述，等于把整个字符预算花在没人问过的图片
+ * 上——还会在一心只想扫一眼的读者面前摆上一整段。标记只负责认出图片，摘要由工具调用
+ * 返回。
  */
 export const VISION_MARKER_CHARS = 80
 
-/** The model is told to answer exactly this when it cannot tell what it sees. */
+/** 模型看不清自己看到的是什么时，要求它正好回答这个词。 */
 export const VISION_DECLINE = 'UNCLEAR'
 
 /**
- * The default model both recognizer paths call.
+ * 两条识别路径都会调的默认模型。
  *
- * The relay reads it through the plugin's `visionModel` config, so a deployment can name
- * another — it must be able to, because `visionBaseUrl` can point at another provider
- * and a different provider has never heard of this id. What is fixed is only the
- * *default*, and that both paths read it from here rather than each carrying its own
- * copy: a model id is part of the question being asked, so if the relay named one model
- * and the extension's own path named another, "which transport was free" would silently
- * change the answer.
+ * 中继通过插件的 `visionModel` 配置读它，所以某个部署可以指定另一个——它必须能这么做，
+ * 因为 `visionBaseUrl` 可以指向别的提供方，而那个提供方从没听说过这个 id。定下来的只是
+ * *默认值*，以及两条路径都从这里读它、不各自留一份副本：模型 id 是所提问题的一部分，
+ * 要是中继指定一个模型而扩展自己的路径指定另一个，“哪条传输通道空闲”就会悄悄改变答案。
  *
- * It is the only id worth defaulting to on the DeepSeek endpoint:
- * `deepseek-v4.1-flash` is the display name and is *not* accepted by the API, which
- * answers 400 and lists `deepseek-flash` and `deepseek-v4-pro`; of those, only
- * `deepseek-flash` reports an image input modality.
+ * 在 DeepSeek 端点上，它是唯一值得当默认值的 id：`deepseek-v4.1-flash` 是展示名，API
+ * *不接受*它，会回 400 并列出 `deepseek-flash` 和 `deepseek-v4-pro`；其中只有
+ * `deepseek-flash` 声明了图片输入模态。
  */
 export const VISION_MODEL = 'deepseek-flash'
 
 /**
- * Thinking blocks cost more than the image does on a pure perception task, so off
- * is the default. Both fields are sent because providers disagree about which one
- * they honour — and a provider may honour neither, which is why the caller reads
- * `usage` back.
+ * 纯感知任务上 thinking 块比图片本身还贵，所以默认关掉。两个字段都发，因为各提供方认
+ * 哪个字段并不一致——也可能一个都不认，这正是调用方要回读 `usage` 的原因。
  */
 export const THINKING_OFF: Record<string, unknown> = { thinking: { type: 'disabled' }, reasoning_effort: 'none' }
 export const THINKING_LOW: Record<string, unknown> = {
@@ -72,29 +60,28 @@ export const THINKING_LOW: Record<string, unknown> = {
 
 export interface VisionCallConfig {
   model: string
-  /** Extra top-level request fields; carries the thinking switch. */
+  /** 额外的顶层请求字段；thinking 开关就放在这里。 */
   extraBody: Record<string, unknown>
 }
 
 export interface VisionCallImage {
-  /** Base64 bytes, without the `data:` prefix. */
+  /** Base64 字节，不带 `data:` 前缀。 */
   base64: string
   mediaType: string
 }
 
-/** What the page already knows about the image, so the answer is about that one. */
+/** 页面已知的这张图的信息，好让答案针对的就是这一张。 */
 export interface VisionCallContext {
   alt: string
   near: string
   heading: string
   kind: string
   /**
-   * How much the caller wants from the answer.
+   * 调用方希望答案有多详细。
    *
-   * Carried in the request rather than chosen by the caller of
-   * {@link buildVisionRequestBody}, because both transports build the same body:
-   * a tier that only changed the extension's own outbound call would silently
-   * mean something different when the desktop relays it.
+   * 它随请求一起传，而不是让 {@link buildVisionRequestBody} 的调用方去选，因为两条传输
+   * 通道构造的是同一个请求体：只把扩展自己出站调用的档位改掉，到桌面端中继时就会悄悄
+   * 变成另一个意思。
    */
   tier?: string
 }
@@ -114,11 +101,10 @@ export const VISION_SYSTEM_PROMPT = [
 ].join(' ')
 
 /**
- * The enhanced tier's instruction.
+ * 增强档位的指令。
  *
- * The base prompt deliberately stops at what the image shows. Asking for its role
- * as well is a different question, so it is a second prompt rather than a
- * sentence appended to the first, which would contradict it.
+ * 基础提示刻意只停在图片展示了什么。再要求说出它的角色就是另一个问题了，所以这里是
+ * 单独一份提示，而不是往第一份后面接一句——那样会跟它自相矛盾。
  */
 export const VISION_RELATION_PROMPT = [
   'You describe a single image taken from a web page, for a browsing agent that cannot see it.',
@@ -130,12 +116,12 @@ export const VISION_RELATION_PROMPT = [
   `If you cannot tell what the image shows, answer exactly ${VISION_DECLINE}.`,
 ].join(' ')
 
-/** The system prompt one request should use, given its tier. */
+/** 给定档位时，一次请求该用的 system prompt。 */
 export function systemPromptFor(tier: string | undefined): string {
   return tier === 'enhanced' ? VISION_RELATION_PROMPT : VISION_SYSTEM_PROMPT
 }
 
-/** The context line that tells the model which image it is looking at. */
+/** 告诉模型它看的是哪张图片的那行上下文。 */
 export function visionContextLine(context: VisionCallContext): string {
   const parts = [`kind=${context.kind === '' ? 'unknown' : context.kind}`]
   if (context.heading !== '') parts.push(`section=${JSON.stringify(context.heading)}`)
@@ -145,12 +131,12 @@ export function visionContextLine(context: VisionCallContext): string {
 }
 
 /**
- * Build the chat-completions body both paths send.
+ * 构建两条路径都会发送的 chat-completions 请求体。
  *
- * @param config - model id and the provider-specific extras.
- * @param image - the bytes, already normalized by the side that fetched them.
- * @param context - page context around the image.
- * @returns a request body ready to serialize.
+ * @param config - 模型 id 和提供方特有的额外字段。
+ * @param image - 字节，已由抓取它们的那一侧规整过。
+ * @param context - 图片周围的页面上下文。
+ * @returns 一份可以直接序列化的请求体。
  */
 export function buildVisionRequestBody(
   config: VisionCallConfig,
@@ -176,10 +162,10 @@ export function buildVisionRequestBody(
 }
 
 /**
- * Read a chat-completions response into the manifest's vocabulary.
+ * 把一份 chat-completions 响应读进 manifest 的词汇表。
  *
- * @param payload - the parsed JSON response.
- * @returns the description, or a classified failure.
+ * @param payload - 解析后的 JSON 响应。
+ * @returns 描述，或一个已分类的失败。
  */
 export function parseVisionResponse(payload: unknown): VisionCallResult {
   const text = completionContent(payload)
@@ -192,36 +178,34 @@ export function parseVisionResponse(payload: unknown): VisionCallResult {
   return usage === undefined ? { ok: true, desc } : { ok: true, desc, usage }
 }
 
-/** Collapse to one bounded line, stripping anything that could forge structure. */
+/** 收拢成一行有长度上限的文本，剥掉任何能伪造结构的东西。 */
 export function collapseToOneLine(text: string): string {
   const single = text.replace(/\s+/g, ' ').replace(/["\\]/g, '').trim()
   return single.length <= MAX_DESC_CHARS ? single : `${single.slice(0, MAX_DESC_CHARS)}…`
 }
 
 /**
- * The short form of a description, for an inline marker.
+ * 描述的短形式，给内联标记用。
  *
- * Markers ride in the page text, which every snapshot repeats, so they carry a
- * summary: enough to recognise the answer, while the description itself stays in
- * the cache and comes back from the call that asked for it.
+ * 标记是搭在页面文本里的，而每次快照都会把页面文本重复一遍，所以它们只带一份摘要：足够
+ * 认出那个答案，描述本身留在缓存里，由当初索取它的那次调用取回。
  *
- * @param desc - a stored description.
- * @returns a one-line summary within {@link VISION_MARKER_CHARS}.
+ * @param desc - 一份已存储的描述。
+ * @returns 一行摘要，长度在 {@link VISION_MARKER_CHARS} 之内。
  */
 export function visionSummaryOf(desc: string): string {
   return desc.length <= VISION_MARKER_CHARS ? desc : `${desc.slice(0, VISION_MARKER_CHARS)}…`
 }
 
 /**
- * Reasoning tokens a provider reported, if it reports them at all.
+ * 提供方报告的 reasoning token 数——如果它报的话。
  *
- * Providers disagree about where this lives — OpenAI nests it under
- * `completion_tokens_details`, others put `reasoning_tokens` at the top level —
- * and some report nothing. Zero is therefore "none billed as far as this response
- * says", not proof that thinking was off.
+ * 各家提供方把它放在哪儿意见不一——OpenAI 嵌在 `completion_tokens_details` 下，别的把
+ * `reasoning_tokens` 放顶层——还有的什么都不报。所以 0 的意思是“就这份响应而言没有计
+ * 费”，而不是证明 thinking 关掉了。
  *
- * @param usage - the `usage` object from a completion response.
- * @returns the count found, or 0.
+ * @param usage - 补全响应里的 `usage` 对象。
+ * @returns 找到的数量，或 0。
  */
 export function reasoningTokensOf(usage: Record<string, unknown> | undefined): number {
   if (usage === undefined) return 0
@@ -235,7 +219,7 @@ export function reasoningTokensOf(usage: Record<string, unknown> | undefined): n
   return 0
 }
 
-/** OpenAI-compatible content: a string, or a list of typed parts. */
+/** OpenAI 兼容的 content：一个字符串，或者一列带类型的 part。 */
 function completionContent(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined
   const choices = payload.choices

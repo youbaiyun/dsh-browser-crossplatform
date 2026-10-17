@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 /**
- * The task list the panel shows for a turn.
+ * 面板为某一轮（turn）展示的任务列表。
  *
- * Two behaviours matter and both are easy to get wrong: which version of the
- * checklist wins while the model is still streaming it, and that the list the
- * user reads matches the checklist the model wrote.
+ * 有两个行为很重要，也都容易做错：模型还在流式输出清单时，
+ * 哪个版本该胜出，以及用户读到的列表
+ * 要和模型写下的清单一致。
  */
 
 import { describe, expect, it } from 'vitest'
@@ -17,9 +17,9 @@ const plan = (text: string) => parsePlan(text)
 
 describe('preferPlan', () => {
   it('keeps the longer list while a shorter re-emission streams in', () => {
-    // The model rewrites the whole checklist; the first frames of that rewrite
-    // carry only its opening lines. "Newest wins" would visibly truncate the list
-    // on every progress update.
+    // 模型会重写整份清单；而重写的最初几帧只带开头几行。
+    // 若采用「最新者胜出」，每次进度更新都会让列表
+    // 肉眼可见地被截断。
     const complete = plan('- [ ] one\n- [ ] two\n- [ ] three')
     const partial = plan('- [ ] one')
     expect(preferPlan(complete, partial)?.tasks).toHaveLength(3)
@@ -31,7 +31,7 @@ describe('preferPlan', () => {
     const after = plan('- [x] one\n- [>] two')
     const chosen = preferPlan(before, after)
     expect(chosen?.tasks.map((task) => task.status)).toEqual(['done', 'active'])
-    // …and never regresses a finished task back to pending.
+    // ……并且绝不把已完成的任务回退成 pending。
     expect(preferPlan(after, before)?.tasks.map((task) => task.status)).toEqual(['done', 'active'])
   })
 

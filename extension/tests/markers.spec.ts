@@ -10,14 +10,14 @@ describe('image markers', () => {
   })
 
   it('writes a state that is already true', () => {
-    // The render happens before anything is requested; saying so beats leaving a
-    // placeholder the model would have to interpret.
+    // 渲染发生在任何请求之前；把这点写出来，好过留下一个
+    // 要模型自己去猜的占位符。
     expect(imageMarker(4)).toBe('⟦i4 img:not-requested⟧')
     expect(IMAGE_STATE_UNREQUESTED).toBe('not-requested')
   })
 
   it('never leaves a placeholder behind', () => {
-    // An unfilled marker means the fill pass did not know about this image.
+    // 没填的标记意味着 fill 阶段不知道这张图片。
     expect(fillMarkers(imageMarker(3), () => undefined)).toBe('⟦i3 img:not-requested⟧')
   })
 
@@ -33,9 +33,9 @@ describe('image markers', () => {
   })
 
   it('removes a whole marker, state included, before text is treated as page text', () => {
-    // A filled marker holds a description. Leaving it in page text would let the
-    // cross-modal check compare a description against itself, which always agrees
-    // and therefore verifies nothing.
+    // 已填充的标记里带着描述。把它留在页面文本里，会让
+    // 跨模态检查拿一段描述和它自己比，那永远一致，
+    // 因而什么都没验证。
     const rendered = '营收 30% ⟦i4 img:季度营收达到 50%⟧ 同比'
     expect(stripMarkers(rendered)).toBe('营收 30%  同比')
     expect(stripMarkers(rendered)).not.toContain('50%')

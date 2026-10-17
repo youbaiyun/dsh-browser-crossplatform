@@ -1,28 +1,25 @@
 /**
- * End-to-end proof for the built extension against the real BridgeServer.
+ * 针对构建出来的扩展、对真实 BridgeServer 做的端到端证明。
  *
- * Two things are checked, in the order they depend on each other:
+ * 检查两件事，按它们相互依赖的顺序：
  *
- * 1. The extension authenticates and a tool call is dispatched. The distinguishing
- *    signal is the failure *code*: `bridge-closed` means no authenticated
- *    connection exists and the call never left the server, while any other code
- *    means it was dispatched.
- * 2. Recognition runs the whole way round. Only the model is stubbed — a stubbed
- *    `fetch` inside a real `VisionClient` behind a real `ImageRelay` — so the
- *    request body, the parser, the `image.call`/`image.result` frames and the
- *    marker fill in the page text are all production code. The snapshot is taken
- *    before and after, so the assertion is that a description the model produced
- *    ends up at the image's position in the text, and that asking again costs a
- *    second request only when the answer is not already known.
+ * 1. 扩展完成认证，并且一次工具调用被派发出去。起区分作用的信号是失败*代码*：
+ *    `bridge-closed` 表示不存在已认证的连接、这次调用从未离开 server，而任何
+ *    其他代码都意味着它被派发过了。
+ * 2. 图像识别走完整整一圈。只有模型是打桩的——在一个真实 `ImageRelay` 后面的
+ *    真实 `VisionClient` 里打桩 `fetch`——所以请求体、解析器、
+ *    `image.call`/`image.result` 帧，以及页面文本里的 marker 填充，全都是生产
+ *    代码。快照在前后各取一次，于是断言就是：模型产出的描述最终落在文本中那张
+ *    图的位置上，并且只有在答案还未知时再问一次才会多花一次请求。
  *
- * The browser must be one that still honours `--load-extension`: Playwright's
- * bundled Chromium does, while current system Chrome/Edge (137+) ignore it unless
- * developer mode is on. Set `PLAYWRIGHT_CHROMIUM_PATH` to pin a browser. Without a
- * usable browser or a built `extension/dist`, it self-skips.
+ * 浏览器必须是仍然遵守 `--load-extension` 的那种：Playwright 自带的 Chromium
+ * 遵守，而当前系统上的 Chrome/Edge（137+）除非开着开发者模式，否则会忽略它。
+ * 设置 `PLAYWRIGHT_CHROMIUM_PATH` 可以钉住某个浏览器。没有可用的浏览器或构建
+ * 好的 `extension/dist` 时，它会自行跳过。
  *
- * These tests run the built extension, so `pnpm --filter dsh-browser-extension run
- * build` has to happen *before* them: the workspace test script does not rebuild,
- * and a stale `dist` fails here as if the source were wrong.
+ * 这些测试跑的是构建出来的扩展，所以 `pnpm --filter dsh-browser-extension run
+ * build` 必须发生在它们*之前*：workspace 的测试脚本不会重新构建，而一份过期的
+ * `dist` 会在这里失败，看起来就像源码写错了一样。
  */
 
 import { existsSync } from 'node:fs'
@@ -40,18 +37,18 @@ import { launchBrowser } from '../../src/browser-launch.ts'
 import { VisionClient } from '../../src/vision.ts'
 import type { BrowserHostApi, HostRpcCall, HostRpcResult } from '../../src/host-api.ts'
 
-/** The ports the extension probes, in order; the suite binds the first free one. */
+/** 扩展会依次探测的端口；本套件绑定第一个空着的。 */
 const DISCOVERY_PORTS = [3080, 3081, 3090, 14389, 43189, 19387] as const
-/** Used only by the page under test, so the two servers never contend. */
+/** 只有被测页面会用，所以两个 server 永远不会争端口。 */
 const PAGE_PORT = 3081
 const TOKEN = 'e2e0e2e0e2e0e2e0e2e0e2e0e2e0e2e0'
 const EXTENSION_DIR = resolve(import.meta.dirname, '../../../../extension/dist')
 
-/** Whether this checkout has a built extension for the suite to drive. */
+/** 这个 checkout 里有没有可供本套件驱动的已构建扩展。 */
 const hasExtensionBuild = existsSync(join(EXTENSION_DIR, 'manifest.json'))
-/** What the stubbed model answers, and what the test looks for in the text. */
+/** 打桩的模型回答什么，以及测试在文本里找什么。 */
 const DESCRIPTION = '完成度达到 50%'
-/** One transparent pixel: enough for `<img>` to have bytes and dimensions. */
+/** 一个透明像素：足够让 `<img>` 拥有字节和尺寸。 */
 const PIXEL = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 function abortWait(signal: AbortSignal): Promise<void> {
@@ -68,19 +65,19 @@ let pageServer: Server | undefined
 let bridge: BridgeServer | undefined
 let serving = false
 const calls: HostRpcCall[] = []
-/** Every request the vision client sent, so the body can be inspected. */
+/** vision 客户端发出的每一个请求，好让请求体可以被检查。 */
 const visionRequests: { url: string; body: Record<string, unknown> }[] = []
 
-/** Launch options that let a browser load an unpacked extension. */
+/** 能让浏览器加载一个 unpacked 扩展的启动选项。 */
 function launchOptions(): LaunchPersistentContextOptions {
   const options: LaunchPersistentContextOptions = { headless: true }
   const override = process.env.PLAYWRIGHT_CHROMIUM_PATH
   if (override !== undefined && existsSync(override)) {
     options.executablePath = override
-    // System Chrome/Edge 137+ gate the switch behind this feature flag.
+    // 系统上的 Chrome/Edge 137+ 把这个开关藏在这个 feature flag 后面。
     options.args = ['--disable-features=DisableLoadExtensionCommandLineSwitch']
   } else {
-    // The bundled Chromium build still honours --load-extension as-is.
+    // 自带的 Chromium 构建仍然原样遵守 --load-extension。
     options.channel = 'chromium'
   }
   options.args = [
@@ -92,12 +89,11 @@ function launchOptions(): LaunchPersistentContextOptions {
 }
 
 /**
- * Save the settings this suite needs, then close.
+ * 保存本套件需要的设置，然后关闭。
  *
- * A fresh profile has none, and recognition is off by default — which is the
- * right default and also the reason this has to be seeded. Seeding during the
- * same launch cannot work: the worker reads its settings once at startup, and a
- * reload leaves it with no worker at all.
+ * 全新的 profile 里什么都没有，而图像识别默认是关的——这个默认是对的，也正是
+ * 这里必须先播种设置的原因。在同一次启动期间播种行不通：worker 在启动时只读一次
+ * 设置，而一次 reload 会让它完全没有 worker。
  */
 async function seedSettings(profileDir: string): Promise<void> {
   const context = await chromium.launchPersistentContext(profileDir, launchOptions())
@@ -113,8 +109,8 @@ async function seedSettings(profileDir: string): Promise<void> {
           ...current,
           visionTier: 'standard',
           sharePageContent: 'auto',
-          // A tool call from the bridge would otherwise wait for an approval no
-          // test can answer, and the panel would take the active tab from the page.
+          // 否则来自 bridge 的工具调用会一直等一个没有测试能答的审批，而面板
+          // 会从页面手里抢走活动标签页。
           unrestrictedBrowserAccess: true,
           autoOpenPanel: false,
         },
@@ -125,11 +121,11 @@ async function seedSettings(profileDir: string): Promise<void> {
   }
 }
 
-/** What the stubbed model does next, so a test can choose success or failure. */
+/** 打桩的模型下一步做什么，好让某个测试自选成功或失败。 */
 type StubReply = { kind: 'ok'; content: string } | { kind: 'http'; status: number }
 let nextReply: StubReply = { kind: 'ok', content: DESCRIPTION }
 
-/** A page with two images, served over http so a content script may be injected. */
+/** 一张带两张图的页面，通过 http 提供，好让 content script 能被注入。 */
 function startPageServer(): Promise<Server> {
   const server = createServer((req, res) => {
     if ((req.url ?? '') === '/missing.png') {
@@ -137,8 +133,8 @@ function startPageServer(): Promise<Server> {
       res.end('not found')
       return
     }
-    // The second image has a different address, which is what makes it a
-    // different image to the cache: identity is the address.
+    // 第二张图有另一个地址，这正是缓存眼里它是一张不同的图的原因：身份就是
+    // 地址。
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
     res.end(`<!doctype html><html><head><title>营收看板</title></head><body>
       <h1>本季度营收</h1>
@@ -154,13 +150,13 @@ function startPageServer(): Promise<Server> {
   })
 }
 
-/** The inventory index of the image whose alt text is `alt`, from a snapshot. */
+/** 从一份快照里，取 alt 文本为 `alt` 的那张图在清单中的下标。 */
 function indexOfImage(snapshot: string, alt: string): number {
   const match = new RegExp(`\\[(\\d+)\\] img [^\\n]*"${alt}"`).exec(snapshot)
   return match === null ? Number.NaN : Number(match[1])
 }
 
-/** The snapshot text a tool call produced. */
+/** 一次工具调用产出快照文本内容。 */
 function textOf(result: unknown): string {
   if (typeof result !== 'object' || result === null) return ''
   const text = (result as { text?: unknown }).text
@@ -182,8 +178,8 @@ beforeAll(async () => {
     async *events(signal) { await abortWait(signal) },
     async respond() { return { accepted: false, reason: 'not-pending' } },
   }
-  // Everything except the model is real: the relay, the request builder and the
-  // parser are production code, and the stubbed fetch records what they sent.
+  // 除了模型之外一切都是真的：relay、请求构造器和解析器都是生产代码，而打桩的
+  // fetch 会记录它们发了什么。
   const stubFetch: typeof fetch = async (input, init) => {
     const body = typeof init?.body === 'string' ? JSON.parse(init.body) as Record<string, unknown> : {}
     visionRequests.push({ url: String(input), body })
@@ -201,8 +197,8 @@ beforeAll(async () => {
   const vision = new VisionClient(
     {
       model: 'stub-vision',
-      // Production supplies the thinking switch from the plugin config; the test
-      // has to do the same or it would assert a switch nothing was asked to send.
+      // 生产代码从插件配置里取这个 thinking 开关；测试也必须照做，否则它断言的
+      // 就是一个没人被要求发送的开关。
       extraBody: THINKING_OFF,
       baseUrl: 'http://127.0.0.1:9/v1',
       apiKey: 'stub',
@@ -212,9 +208,9 @@ beforeAll(async () => {
   )
   bridge = new BridgeServer({
     token: TOKEN,
-    // Same as production: the built extension's manifest `key` derives this id,
-    // and it is what lets the zero-config path skip the token. Passing it here
-    // keeps the suite testing that path instead of the token fallback.
+    // 和生产一致：构建出来的扩展会用 manifest 的 `key` 推导出这个 id，而正是
+    // 它让零配置路径可以跳过 token。在这里传上它，本套件测的就是那条路径，而不是
+    // token 回落。
     extensionId: DEFAULT_EXTENSION_IDS[0]!,
     api,
     toolTimeoutMs: 20_000,
@@ -235,9 +231,8 @@ beforeAll(async () => {
     res.end('not found')
   })
   server.on('upgrade', (req, socket, head) => { bridge?.handleUpgrade(req, socket, head) })
-  // Bind one of the ports the extension actually probes, not 3080 specifically: a
-  // leftover socket from an interrupted run would otherwise turn into a 60-second
-  // "no-connection" failure that says nothing about the cause.
+  // 绑定扩展真正会探测的某个端口，而不是专门用 3080：否则一次被中断的运行留下的
+  // socket 会变成一个 60 秒的“连不上”失败，而那个失败对原因只字不提。
   let boundPort = 0
   for (const candidate of DISCOVERY_PORTS) {
     try {
@@ -249,7 +244,7 @@ beforeAll(async () => {
       boundPort = candidate
       break
     } catch {
-      // Taken by something else; try the next port the extension discovers.
+      // 被别的东西占了；试扩展会发现的下一个端口。
     }
   }
   if (boundPort === 0) {
@@ -324,20 +319,39 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     const context = browser
     const server = bridge
 
-    // The page becomes the active tab, which is what the affinity fallback picks
-    // up when no tab has been explicitly followed.
     const page = await context.newPage()
     await page.goto(`http://127.0.0.1:${String(PAGE_PORT)}/`, { waitUntil: 'load' })
+    // `load` 保证资源请求都结束了，但"这张图加载失败"这个状态还要由浏览器落到 DOM
+    // 上（`complete === true` 而 `naturalWidth === 0`）。快照紧跟 load 时，机器忙起来
+    // 就可能读到还没落定的状态，于是 `[load-failed]` 偶发缺失。等到每张图都 complete
+    // 再拍，这一层时序问题就不存在了。
+    await page.waitForFunction(
+      () => Array.from(document.images).every((image) => image.complete),
+      null,
+      { timeout: 10_000 },
+    )
+
+    // 显式跟随刚打开的这一页，不靠 affinity 的"回落到活动标签页"：浏览器刚起来时
+    // 那个回落可能挑中启动时的空白页，快照里于是根本没有图，`[load-failed]` 的缺失
+    // 会指向完全错误的原因（这条用例确实这样偶发失败过）。
+    const listing = textOf(await server.requestTool('browser_list_tabs', {}, AbortSignal.timeout(10_000), 10_000))
+    const listingJson = listing.slice(listing.indexOf('{'), listing.lastIndexOf('}') + 1)
+    const openTabs = (JSON.parse(listingJson) as { tabs: { tabId: number; url: string }[] }).tabs
+    const target = openTabs.find((tab) => tab.url.startsWith(`http://127.0.0.1:${String(PAGE_PORT)}/`))
+    expect(target, 'the page just opened must be listed').toBeDefined()
+    await server.requestTool('browser_follow_tab', { tabId: target!.tabId }, AbortSignal.timeout(10_000), 10_000)
 
     const before = textOf(await server.requestTool('browser_snapshot', {}, AbortSignal.timeout(30_000), 30_000))
+    // 先确认拍的是目标页：上一步若没生效，下面的图片断言会给出误导性的失败原因。
+    expect(before).toContain('本季度营收')
     expect(before).toContain('Images:')
-    // Nothing has been asked about this image yet, and the text says so rather
-    // than leaving a gap the model has to interpret.
+    // 这张图还没有被问过任何东西，而文本会把这件事说出来，而不是留下一个要模型
+    // 自己去解读的空缺。
     expect(before).toContain('img:not-requested')
-    // The notation explains itself, and names the tool that fills the gap.
+    // 这套记号自己解释了含义，并点名了填这个空缺的工具。
     expect(before).toContain('browser_describe_image')
-    // An image the page could not load is reported as such, in the line and in the
-    // marker, rather than disappearing from the snapshot.
+    // 一张页面加载失败的图会被如实报出来，行里和 marker 里都有，而不是从快照里
+    // 消失。
     expect(before).toContain('[load-failed]')
     expect(before).toContain('img:unavailable:load-failed')
     const index = indexOfImage(before, '季度营收')
@@ -351,12 +365,11 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     ))
     expect(describedText).toContain(DESCRIPTION)
     expect(describedText).toContain('Cross-check against the page text')
-    // The page says 完成度 30% beside the image and the model answered 50%: the
-    // local check has to catch that, and it is what makes the answer unusable for
-    // an action without the user.
+    // 页面在图的旁边写的是完成度 30%，而模型回答的是 50%：本地校验必须抓到这一点，
+    // 也正是它让这个答案在没有用户参与时不能用于执行动作。
     expect(describedText).toContain('CONFLICT')
 
-    // The model was asked exactly once, with thinking off, about this image.
+    // 模型被问过恰好一次，thinking 关闭，问的就是这张图。
     expect(visionRequests).toHaveLength(1)
     const request = visionRequests[0]!
     expect(request.url).toContain('/chat/completions')
@@ -364,15 +377,15 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     expect(request.body).toMatchObject({ thinking: { type: 'disabled' }, reasoning_effort: 'none' })
     expect(JSON.stringify(request.body)).toContain('data:image/png;base64,')
 
-    // The next snapshot carries the description where the image is.
+    // 下一份快照会把描述放在这张图所在的位置。
     const after = textOf(await server.requestTool('browser_snapshot', {}, AbortSignal.timeout(30_000), 30_000))
     expect(after).toContain(`img:${DESCRIPTION}`)
-    // Only the image that was asked about is described; the other still says so,
-    // which is what makes "not-requested" a statement worth making.
+    // 只有被问过的那张图有描述；另一张仍然如实说没有，这正是“not-requested”
+    // 这句陈述值得说出口的原因。
     expect(indexOfImage(after, '退款率')).toBeGreaterThan(0)
     expect(after).toContain('img:not-requested')
 
-    // Asking again costs nothing: an answer is a property of the image.
+    // 再问一次不花任何代价：答案是这张图的一个属性。
     const again = textOf(await server.requestTool(
       'browser_describe_image',
       { index },
@@ -391,13 +404,13 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     const context = browser
     const server = bridge
 
-    // The page from the previous test is still the controlled tab, so this uses
-    // the other image on it rather than opening a tab the affinity would ignore.
+    // 上一个测试留下的页面仍然是受控标签页，所以这里用页面上的另一张图，而不是
+    // 去开一个 affinity 会忽略的标签页。
     const snapshot = textOf(await server.requestTool('browser_snapshot', {}, AbortSignal.timeout(30_000), 30_000))
     const index = indexOfImage(snapshot, '退款率')
     expect(Number.isInteger(index)).toBe(true)
 
-    // A provider failure says nothing about the image, so it stays retryable.
+    // provider 失败说明不了这张图的任何事，所以它保持可重试。
     const before = visionRequests.length
     nextReply = { kind: 'http', status: 401 }
     const failed = textOf(await server.requestTool(
@@ -410,7 +423,7 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     expect(failed).toContain('Trying again later may succeed')
     expect(visionRequests.length).toBe(before + 1)
 
-    // A decline is a verdict: the model was asked and answered that it cannot tell.
+    // 拒绝是一份判决：模型被问过，并回答说自己看不出来。
     nextReply = { kind: 'ok', content: 'UNCLEAR' }
     const declined = textOf(await server.requestTool(
       'browser_describe_image',
@@ -421,11 +434,11 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
     expect(declined).toContain('vision-unclear')
     expect(declined).toContain('will not be asked about again')
 
-    // The page text says the same thing, with the reason, instead of going quiet.
+    // 页面文本说同样的事，而且带上原因，而不是沉默下来。
     const after = textOf(await server.requestTool('browser_snapshot', {}, AbortSignal.timeout(30_000), 30_000))
     expect(after).toContain('unavailable:vision-unclear')
 
-    // And asking again costs nothing: a declined image is not retried into a loop.
+    // 而且再问一次不花任何代价：被拒绝的图不会被反复重试成死循环。
     const asked = visionRequests.length
     const skipped = textOf(await server.requestTool(
       'browser_describe_image',
@@ -452,13 +465,12 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
 
     const panel = await context.newPage()
     await panel.goto(`chrome-extension://${String(extensionId)}/control/index.html`, { waitUntil: 'load' })
-    // The sheet is closed until it is asked for.
+    // 在没被要求之前，设置页是关着的。
     await panel.locator('[data-role="settings"]').first().click()
-    // Located by its option values, which do not depend on the UI language the
-    // test browser happens to report.
+    // 靠它的 option value 定位，这样就不依赖测试浏览器恰好报告的是哪种 UI 语言。
     const tier = panel.locator('select:has(option[value="enhanced"])').first()
     await tier.waitFor({ state: 'visible', timeout: 20_000 })
-    // Seeded as `standard`, so this is a change the panel has to carry.
+    // 播种的是 `standard`，所以这是一次面板必须落盘的变化。
     await tier.selectOption('enhanced')
 
     await expect.poll(async () => await worker!.evaluate(async () => {
@@ -472,16 +484,15 @@ describe.skipIf(!hasExtensionBuild)('extension ↔ bridge e2e', () => {
 })
 
 /**
- * The launch path, exercised against a real browser and a real extension.
+ * 启动这条路径，对着真实浏览器和真实扩展演练。
  *
- * **Opt-in, `DSH_E2E_COLD_START=1`.** It starts a browser the way the product
- * does, and on a developer's machine that is a window they did not ask for —
- * running the suite must never open the user's browser behind their back. CI sets
- * the variable (headless, on a throwaway profile); locally it is skipped.
+ * **需要显式开启，`DSH_E2E_COLD_START=1`。** 它会按产品的方式启动一个浏览器，
+ * 而在开发者的机器上那就是一个他们没要求过的窗口——跑测试套件绝不能背着用户打开
+ * 他们的浏览器。CI 会设置这个变量（headless、用一次性 profile）；本地则跳过。
  *
- * Kept out of the suite above for a second reason: it has to observe "no
- * extension is connected", and that suite's own context holds the connection. A
- * second bridge on a second discovery port keeps the two from interfering.
+ * 把它排除在上面那套件之外还有第二个原因：它必须观察到“没有扩展连接”，而那套件
+ * 自己的 context 正占着连接。第二个 bridge 配第二个 discovery 端口，让两者不会
+ * 互相干扰。
  */
 const coldStartEnabled = process.env.DSH_E2E_COLD_START === '1'
 describe.skipIf(!hasExtensionBuild || process.env.PLAYWRIGHT_CHROMIUM_PATH === undefined || !coldStartEnabled)('cold start', () => {
@@ -504,8 +515,8 @@ describe.skipIf(!hasExtensionBuild || process.env.PLAYWRIGHT_CHROMIUM_PATH === u
       injectBrowserSnapshot: () => {},
       purgeSession: async () => {},
     })
-    // The first harness holds 3080 and the page server 3081, so this cold-start
-    // bridge takes the next port the extension also probes.
+    // 第一套 harness 占着 3080、页面 server 占着 3081，所以这个冷启动 bridge 取
+    // 扩展同样会探测的下一个端口。
     const port = DISCOVERY_PORTS.find((candidate) => candidate !== 3080 && candidate !== 3081)
     if (port === undefined) throw new Error('the discovery port list has no spare entry')
     const server = createServer((req, res) => {
@@ -527,7 +538,7 @@ describe.skipIf(!hasExtensionBuild || process.env.PLAYWRIGHT_CHROMIUM_PATH === u
           server.listen(port, '127.0.0.1', resolveListen)
         })
       } catch {
-        // Another process holds that port; skip rather than test the wrong one.
+        // 另一个进程占着那个端口；跳过，而不是去测错误的那个。
         console.warn(`SKIP: discovery port ${String(port)} is in use`)
         return
       }
@@ -538,26 +549,26 @@ describe.skipIf(!hasExtensionBuild || process.env.PLAYWRIGHT_CHROMIUM_PATH === u
           executablePath: browserExe,
           extensionPath: EXTENSION_DIR,
           userDataDir: profile,
-          // This CI host has no display; the launcher spawns the process itself,
-          // so it has to be told, unlike a Playwright launch which defaults it.
+          // 这台 CI 主机没有显示器；启动器是自己去 spawn 进程的，所以必须告诉
+          // 它，不像 Playwright 的启动会默认这一点。
           headless: true,
           timeoutMs: 60_000,
-          // Detection would find a system Chrome, which cannot load an unpacked
-          // extension at all; the executable above is the one that can.
+          // 检测会找到一个系统上的 Chrome，而它根本加载不了 unpacked 扩展；
+          // 上面那个可执行文件才是能加载的。
         },
         () => bridge.hasConnection(),
       )
       expect(outcome.message).not.toContain('failed')
       expect(outcome.connected).toBe(true)
 
-      // And the connection is usable, not merely present.
+      // 而且这条连接是可用的，不只是存在而已。
       const tabs = textOf(await bridge.requestTool('browser_list_tabs', {}, AbortSignal.timeout(20_000), 20_000))
       expect(tabs).toContain('127.0.0.1')
     } finally {
       await bridge.close()
       await new Promise<void>((resolveClose) => { server.close(() => { resolveClose() }) })
-      // A browser that just exited can still hold a crashpad file on Windows; a
-      // failed cleanup must not turn a passing test into a failing one.
+      // 一个刚刚退出的浏览器在 Windows 上仍可能占着一个 crashpad 文件；清理失败
+      // 绝不能把一个本来通过的测试变成失败的。
       await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {})
     }
   })

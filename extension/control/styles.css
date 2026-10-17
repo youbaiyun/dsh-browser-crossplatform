@@ -1,27 +1,26 @@
 /*
- * The side panel reads as a conversation.
+ * 侧边栏读起来像一段对话。
  *
- * Deliberately close to the desktop client: a scrolling transcript, one
- * paragraph style for the model, a quiet bubble for your own message, a single
- * line for anything the model runs, and a composer pinned to the bottom. No
- * cards, no progress counters, no artwork, no images.
+ * 刻意贴近桌面客户端：一条可滚动的往来记录，模型的话走一套段落样式，你的话
+ * 放在一个安静的气泡里，模型执行的任何东西只占一行，输入框钉在底部。没有卡片、
+ * 没有进度计数器，没有插图，也没有图片。
  *
- * Typography is the client's own stack, which leads with Segoe UI on Windows:
- * that is both the requested Microsoft look and what the client renders with.
+ * 字体用客户端自己的字体栈，在 Windows 上以 Segoe UI 打头：这既是对方
+ * 要的 Microsoft 观感，也正是客户端渲染时用的字体。
  */
 
 :root {
   color-scheme: light dark;
 
-  /* Type */
+  /* 字体 */
   --font-ui: var(--dsw-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI",
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif);
   --font-mono: "Cascadia Mono", "SF Mono", "JetBrains Mono", "Fira Code", Consolas,
     "Liberation Mono", Menlo, "PingFang SC", "Microsoft YaHei", monospace;
   /*
-   * The desktop client's own type metrics, measured from its stylesheet: body 14px
-   * on a 22px line, secondary 13px on 20px, section titles 16px on 26px at weight
-   * 600. Matching these is most of what makes a panel read as the same software.
+   * 这几个字号是从桌面客户端的样式表里量出来的：正文 14px、行高 22px，
+   * 次要文字 13px、行高 20px，小节标题 16px、行高 26px、字重 600。
+   * 对上这些，面板读起来才像同一款软件——很大一部分原因就在这里。
    */
   --fs-chat: 14px;
   --fs-meta: 13px;
@@ -29,23 +28,23 @@
   --lh-meta: 20px;
 
   /*
-   * Rhythm. Two steps exist because something uses them, not to complete a
-   * scale: `--space-5` and `--space-6` were declared and referenced nowhere, so
-   * they were removed. Adding a step back is cheap when a rule needs it.
+   * 节奏。只留两档是因为真有东西在用它们，不是为了凑齐一套刻度：
+   * `--space-5` 和 `--space-6` 声明了却没人用，所以删了。等有规则需要
+   * 时再加一档回来，代价很低。
    */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
 
-  /* Corners */
+  /* 圆角 */
   --r-xs: 4px;
   --r-sm: 8px;
   --r-md: 12px;
   --r-lg: 16px;
   --r-pill: 999px;
 
-  /* Light */
+  /* 浅色 */
   --bg: #ffffff;
   --bg-subtle: #f6f8fa;
   --bg-raised: #ffffff;
@@ -59,12 +58,12 @@
   --text: #0f1115;
   --text-secondary: #61666b;
   /*
-   * Quiéter than --text-secondary but still readable: the previous #81858c measured
-   * 3.71:1 on white and 3.48:1 on --bg-subtle, while this token is used as *text* at
-   * 11-13px in a dozen places (tab labels, tool lines, plan counts, hints, help lines).
-   * AA wants 4.5:1 at those sizes; #6c7176 measures 4.93:1 and still reads as the
-   * quietest of the three. The same token is also a focus ring, where 4.93:1 is
-   * comfortably above the 3:1 non-text threshold.
+   * 比 --text-secondary 更安静，但仍然可读：之前的 #81858c 在白底上测得
+   * 3.71:1，在 --bg-subtle 上测得 3.48:1，而这一 token 被当作*文字*用在
+   * 11-13px 的十几处地方（标签页标签、工具行、任务表计数、提示、帮助行）。
+   * AA 在这些字号上要求 4.5:1；#6c7176 测得 4.93:1，读起来仍是三者中最安静
+   * 的。同一个 token 还用作 focus ring，在那里 4.93:1 远高于非文字元素 3:1
+   * 的阈值。
    */
   --text-tertiary: #6c7176;
 
@@ -87,12 +86,11 @@
   --header-h: 44px;
 
   /*
-   * A comfort cap only.
+   * 只是个舒适度上限。
    *
-   * The transcript and the composer stop growing past this width so a very wide
-   * panel does not produce mile-long lines, and it is raised by the settings
-   * sheet when the user wants more. It never makes the content narrower than
-   * the panel: below the cap, the full width is used.
+   * 往来记录和输入框超过这个宽度就不再变宽，免得特别宽的面板拉出长得离谱的
+   * 一行；用户想要更宽，由设置页把它调高。它绝不会让内容比面板更窄：在上限
+   * 以下，整幅宽度都会被用上。
    */
   --panel-max: 640px;
 }
@@ -135,12 +133,11 @@
 html, body { height: 100%; margin: 0; }
 
 /*
- * The mount point must carry a height, or nothing below it can resolve one.
+ * 挂载点必须带一个高度，否则它下面的东西都解析不出高度。
  *
- * The chain is html → body → this → .app → .sheet. A percentage height needs a
- * parent with a definite height, so leaving this element unstyled broke the
- * whole chain: `.app` and `.sheet` both fell back to content height, which put
- * the settings sheet in a short box with dead space under it.
+ * 这条链是 html → body → 这个元素 → .app → .sheet。百分比高度需要一个有确定
+ * 高度的父元素，所以不给这个元素写样式就断了整条链：`.app` 和 `.sheet` 都
+ * 回落到内容高度，于是设置页被塞进一个矮盒子里，下面还有一片死空间。
  */
 #control-root { height: 100%; }
 
@@ -156,25 +153,24 @@ body {
 button { font: inherit; color: inherit; }
 
 /*
- * A side panel's width belongs to the browser, not to this document.
+ * 侧边栏的宽度归浏览器，不归这个文档。
  *
- * The user drags the panel edge and Chrome remembers that width; there is no
- * extension API to read, set, or lock it. So the layout must simply be correct
- * at any width instead of being pinned to one: every row fills the panel, and
- * `--panel-max` is only a comfort cap for a very wide panel, never a column the
- * content is boxed into. Anything narrower than the cap is used in full.
+ * 用户拖动面板边缘，Chrome 会记住那个宽度；没有任何扩展 API 能读、能设、
+ * 能锁它。所以布局必须做到在任意宽度下都正确，而不是钉死在某个宽度上：每一行
+ * 都铺满面板，`--panel-max` 只是给特别宽的面板设的舒适度上限，绝不是把内容
+ * 框进去的一栏。比上限窄的任何宽度都会被完整使用。
  */
 body { overflow-x: hidden; }
 
 :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-radius: var(--r-xs); }
 
 /* ------------------------------------------------------------------ *
- * Shell: header, transcript, composer
+ * 外壳：header、transcript、composer
  * ------------------------------------------------------------------ */
 
-/* The turn's task list. It sits above the run so "how far along is this?" is
-   always answerable without scrolling: one row per task, states carried by the
-   mark and the row colour rather than by wording the reader has to decode. */
+/* 这一回合的任务表。它摆在整段运行之上，这样“做到哪一步了？”不用滚动
+   就能回答：每个任务一行，状态由标记和行颜色承担，不用让读者去解码
+   文字。 */
 .plan {
   margin: var(--space-2) 0 var(--space-3);
   padding: var(--space-3);
@@ -221,7 +217,7 @@ body { overflow-x: hidden; }
   color: var(--text);
 }
 
-/* Reserved space, so text does not shift sideways as a task gains its mark. */
+/* 先把这块空间留出来，任务拿到标记时文字就不会左右移位。 */
 .plan__mark {
   flex: 0 0 1.1em;
   text-align: center;
@@ -239,17 +235,17 @@ body { overflow-x: hidden; }
 .app {
   position: relative;
   display: grid;
-  /* `minmax(0, 1fr)` on the transcript row, or the row grows to its content and
-     pushes the composer off the bottom of a short panel. */
+  /* transcript 那一行得写 `minmax(0, 1fr)`，否则它会涨到内容那么大，把
+     输入框顶出矮面板的底部。 */
   grid-template-rows: var(--header-h) minmax(0, 1fr) auto;
   /*
-   * And the same guard on the other axis, which was missing. Without a column definition the
-   * grid creates an implicit `auto` column, which is sized to its items' *max-content* — so one
-   * long unbreakable tool summary (a URL, or a run of text with no spaces) made the column
-   * thousands of pixels wide. `.app` stayed 360px, the transcript inside it did not, and
-   * `body { overflow-x: hidden }` clipped the content off the right edge: the panel drew its
-   * header and composer and looked blank in between. This is the real cause of that report;
-   * the `--panel-max` clamp was only ever a contributing one.
+   * 另一根轴上也要同样的防护，而这处以前漏了。没有列定义时，grid 会建
+   * 一个隐式的 `auto` 列，尺寸按条目的 *max-content* 算——于是又长
+   * 又不能断行的工具摘要（一个 URL，或者一长串没空格的文字）就把这列撑到
+   * 几千像素宽。`.app` 还是 360px，里面的 transcript 却不是，
+   * `body { overflow-x: hidden }` 就把内容从右边缘裁掉了：面板画出了自己的
+   * header 和输入框，中间看起来一片空白。那次报告真正的成因就是它；
+   * `--panel-max` 那个上限一直只是个次要因素。
    */
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
@@ -260,8 +256,7 @@ body { overflow-x: hidden; }
 .header {
   display: flex;
   align-items: center;
-  /* The client's own title-row metrics: 14px of horizontal padding, 12px between
-     what sits in the row. */
+  /* 客户端自己的标题行度量：左右各 14px 水平内边距，行内元素之间 12px。 */
   gap: 12px;
   padding: 0 var(--space-1) 0 14px;
   border-bottom: 1px solid var(--divider);
@@ -282,11 +277,10 @@ body { overflow-x: hidden; }
 
 .header__tab-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /*
- * The action row has to be able to shrink. With `flex: none` here and
- * `.btn { white-space: nowrap }`, the row could not get narrower than its contents, and
- * `body { overflow-x: hidden }` clipped whatever fell off the right edge — which is the
- * settings button, the panel's only route to its own settings, on a narrow panel whose
- * controlled tab had been lost.
+ * 动作行必须能压缩。这里写 `flex: none`，再加上
+ * `.btn { white-space: nowrap }`，这一行就没法比它的内容更窄，而
+ * `body { overflow-x: hidden }` 会把掉出右边缘的东西裁掉——裁掉的正是设置
+ * 按钮，也就是面板通往设置的唯一入口，而这发生在受控标签页已经丢失的窄面板上。
  */
 .header__actions { display: flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
 .header__actions .btn:not(.btn--icon) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -297,7 +291,7 @@ body { overflow-x: hidden; }
 .dot--stopped { background: var(--danger); }
 
 /* ------------------------------------------------------------------ *
- * Transcript
+ * 往来记录
  * ------------------------------------------------------------------ */
 
 .transcript {
@@ -305,8 +299,8 @@ body { overflow-x: hidden; }
   overflow-x: hidden;
   padding: var(--space-4) var(--space-3) var(--space-2);
   min-height: 0;
-  /* Never let a wide child stretch the scroller. Without this the row can grow past the
-  panel and its own `overflow-x: hidden` then clips the content out of view. */
+  /* 绝不让宽子元素把滚动容器撑开。没有这一条，这一行会涨到超出面板，而它
+  自己的 `overflow-x: hidden` 接着把内容裁出视野之外。 */
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -328,7 +322,7 @@ body { overflow-x: hidden; }
 
 .msg__text, .msg__bubble, .tool-line, .tool-detail { min-width: 0; max-width: 100%; }
 
-/* Your own turn, right-aligned in a quiet bubble. */
+/* 你自己的一轮：右对齐，装在安静的气泡里。 */
 .msg--user { align-items: flex-end; }
 
 .msg__bubble {
@@ -340,7 +334,7 @@ body { overflow-x: hidden; }
   overflow-wrap: anywhere;
 }
 
-/* The model's turn: plain text, full width, like the client. */
+/* 模型的一轮：纯文本、整幅宽度，和客户端一样。 */
 .msg--assistant { align-items: stretch; }
 .msg__text { overflow-wrap: anywhere; color: var(--text); }
 
@@ -357,7 +351,7 @@ body { overflow-x: hidden; }
 
 @keyframes caret { 50% { opacity: 0; } }
 
-/* One line per tool the model ran: visible, but never the subject. */
+/* 模型执行的每个工具占一行：看得见，但绝不是主角。 */
 .tool-line {
   display: flex;
   align-items: center;
@@ -438,7 +432,7 @@ body { overflow-x: hidden; }
 .msg__text th { background: var(--bg-subtle); font-weight: 600; }
 
 /* ------------------------------------------------------------------ *
- * Approvals and notices
+ * 审批与提示条
  * ------------------------------------------------------------------ */
 
 .notice {
@@ -468,12 +462,10 @@ body { overflow-x: hidden; }
 
 
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 40vh; text-align: center; color: var(--text-tertiary); }
-/* The client's section-title scale, so the empty state reads as a hero rather than
-   as a stray word in a void. */
-.empty__title { font-size: 16px; line-height: 26px; font-weight: 600; color: var(--text-secondary); }
+/* 空状态里已经没有文字了，所以 `.empty__title` 那条刻度也一并删掉。 */
 
 /* ------------------------------------------------------------------ *
- * Composer
+ * 输入框
  * ------------------------------------------------------------------ */
 
 .composer-wrap { padding: var(--space-1) var(--space-3) var(--space-3); }
@@ -482,11 +474,10 @@ body { overflow-x: hidden; }
 .composer__box {
   display: flex;
   /*
-   * The button stays on the last line of text.
+   * 按钮留在文字最后一行上。
    *
-   * With the textarea carrying no padding of its own, its box now ends exactly
-   * where its text ends, so bottom alignment puts the button next to the final
-   * line rather than below a block of empty space.
+   * textarea 自己不带内边距之后，盒子正好在文字结束的地方结束，所以
+   * 底部对齐会把按钮放在最后一行旁边，而不是放在一整块空白下面。
    */
   align-items: flex-end;
   gap: var(--space-1);
@@ -505,23 +496,21 @@ body { overflow-x: hidden; }
   width: 100%;
   min-height: 0;
   /*
-   * A fixed cap, not a fraction of the window.
+   * 一个固定上限，不是窗口的几分之几。
    *
-   * `40vh` meant the input claimed 40% of a tall panel and, worse, resized
-   * itself when the user dragged the browser window — the same draft occupied a
-   * different amount of screen depending on the monitor. 160px is about eight
-   * lines: enough for a paragraph, small enough that the conversation keeps the
-   * rest. Past it the field scrolls, and `autoGrow` stops at the same number.
+   * 用 `40vh` 的话，输入框会占掉高面板的 40%，更糟的是用户拖动浏览器窗口
+   * 时它还会自己变——同一份草稿在不同显示器上占掉的屏幕不一样。
+   * 160px 差不多八行：够放一段话，又小到能让对话留住剩下的空间。超过它
+   * 就滚动，`autoGrow` 也停在这个数字上。
    */
   max-height: 160px;
   /*
-   * No padding on the textarea itself.
+   * textarea 本身不要内边距。
    *
-   * `autoGrow` sizes it from `scrollHeight`, which *includes* padding, so any
-   * padding here inflates the box by that amount on every keystroke — a one-line
-   * draft rendered 1.8 lines tall and grew by an extra 0.8 lines each time, and
-   * the send button looked like it floated in the middle because the field was
-   * much taller than its text. The box already supplies the padding.
+   * `autoGrow` 按 `scrollHeight` 定高度，而 `scrollHeight` *包含*
+   * 内边距，所以这里有多少内边距，每次按键就把盒子撑大多少——一行高的
+   * 草稿被渲染成 1.8 行高，每敲一次还多长 0.8 行，发送按钮看起来像浮在
+   * 中间，因为输入框比文字高得多。内边距由外面的盒子给。
    */
   padding: 0;
   margin: 0;
@@ -536,12 +525,11 @@ body { overflow-x: hidden; }
 }
 
 /*
- * The placeholder must not make the field taller than its text.
+ * placeholder 不能让输入框比它的文字还高。
  *
- * A textarea sizes itself from its own content, but a placeholder that wraps to
- * more lines than the value does is still measured by the browser on some
- * platforms. Keeping it on one line is what makes the empty state exactly one
- * line tall.
+ * textarea 按自己的内容定大小，但在有些平台上，一个折成多行的
+ * placeholder 仍会被浏览器量进去。让它保持一行，正是空状态刚好只有一行高
+ * 的原因。
  */
 .composer__input::placeholder {
   color: var(--text-tertiary);
@@ -562,14 +550,13 @@ body { overflow-x: hidden; }
 
 .composer__error { color: var(--danger); }
 /*
- * The quiet other half of the meta line: a half-written `@` directive is a reminder of the
- * shape, not a complaint. It had no rule at all, so it inherited the body text colour and read
- * as a statement instead of a hint.
+ * meta 行安静的另一半：写了一半的 `@` 指令是格式提醒，不是抱怨。它以前
+ * 完全没有规则，于是继承了正文颜色，读起来像断言而不是提示。
  */
 .composer__hint { color: var(--text-tertiary); }
 
 /* ------------------------------------------------------------------ *
- * Buttons
+ * 按钮
  * ------------------------------------------------------------------ */
 
 .btn {
@@ -593,32 +580,29 @@ body { overflow-x: hidden; }
 .btn:active { background: var(--bg-active); }
 .btn:disabled { color: var(--text-tertiary); cursor: default; background: transparent; }
 /*
- * The client draws an explicit focus ring rather than trusting the user agent's,
- * and a panel that is keyboard-reachable should announce that the same way.
+ * 客户端自己画一个显式的 focus ring，不信任用户代理的；一个能用键盘到达的
+ * 面板也应该用同样的方式宣告这件事。
  */
 /*
- * Focus is shown with a neutral emphasis, not the brand colour.
+ * 焦点用中性的强调色显示，不用品牌色。
  *
- * The client draws its own ring rather than trusting the user agent's, but a blue
- * one turns the whole composer into an accent block the moment the field is
- * touched, which reads as a state the user did not ask for. A darker neutral is
- * visible in both themes and stays quiet.
+ * 客户端自己画 ring，不信任用户代理的，但蓝色的那个会在输入框被点到的瞬间
+ * 把整个输入区变成一块强调色，读起来像用户没要求过的状态。更深的灰色在两种
+ * 主题下都看得见，而且保持安静。
  */
 .btn:focus-visible { outline: 2px solid var(--text-tertiary); outline-offset: 1px; }
 .select:focus-visible, .field:focus-visible { outline: 2px solid var(--text-tertiary); outline-offset: 1px; }
 
 /*
- * Monochrome, like the client's own primary action: the strongest neutral instead
- * of the brand colour, so sending a message is not the loudest thing on screen. Both
- * ends are theme tokens, so it inverts correctly on its own.
+ * 单色，和客户端自己的主操作一样：用最强中性色而不用品牌色，这样发一条消息
+ * 就不是屏幕上最响的东西。两端都是主题 token，所以它能自己正确反转。
  */
 /*
- * An outlined send button: white fill, a hairline in the text colour, and the icon
- * in that same colour (`icon()` paints with `currentColor`).
+ * 描边式发送按钮：白色填充、一道文字色的细线、图标也是同一个颜色
+ * （`icon()` 用 `currentColor` 上色）。
  *
- * Filled and brand-coloured made the smallest control on screen the loudest thing
- * on it. An outline reads as a control without becoming the subject, and both ends
- * are theme tokens, so it inverts on its own in dark mode.
+ * 填充加品牌色会让屏幕上最小的控件变成最响的东西。描边读起来像控件，又不会
+ * 抢主角，而且两端都是主题 token，深色模式下它能自己反转。
  */
 .btn--primary { background: var(--bg); color: var(--text); border: 1px solid var(--text); }
 .btn--primary:hover { background: var(--bg-hover); }
@@ -627,26 +611,25 @@ body { overflow-x: hidden; }
 .btn--icon { width: 30px; min-height: 30px; padding: 0; border-radius: var(--r-sm); color: var(--text-secondary); }
 
 /*
- * The composer's own icon button is one line tall.
+ * 输入框自己的图标按钮只有一行高。
  *
- * A 30px control beside a 21px line is taller than the text it sits next to, so
- * bottom alignment left it visibly below the last line, and the gap grew with
- * every added line. Scoped here rather than on `.btn--icon` because the header
- * buttons share that class and a 21px tap target would be a worse trade.
+ * 一个 30px 的控件挨着 21px 的一行，比旁边的文字还高，底部对齐会让它
+ * 明显低于最后一行，而且每加一行差距还会变大。把作用域限在这里，而不是写在
+ * `.btn--icon` 上，是因为 header 的按钮共用那个类，而 21px 的点击区是笔
+ * 更糟的买卖。
  */
 .composer__box .btn--icon { width: 26px; min-height: 0; height: 26px; }
 
 /* ------------------------------------------------------------------ *
- * Settings sheet
+ * 设置页
  * ------------------------------------------------------------------ */
 
 /*
- * The settings overlay is anchored to the viewport, not to an ancestor.
+ * 设置遮罩锚在视口上，不锚在某个祖先上。
  *
- * `absolute` would resolve against `.app`, which makes it depend on the whole
- * height chain being correct. `fixed` cannot be caught by a broken link in that
- * chain, and the overlay covers the same box either way, so it is the safer of
- * the two for something that must never appear half-sized.
+ * `absolute` 会相对 `.app` 解析，这就让它依赖整条高度链都正确。`fixed` 不会
+ * 被这条链里断掉的一环牵连，而且两种写法覆盖的是同一个盒子，对一个绝不能
+ * 以半截尺寸出现的东西来说，它是更安全的那个。
  */
 .scrim {
   position: fixed;
@@ -663,14 +646,13 @@ body { overflow-x: hidden; }
   inset: 0;
   z-index: 4;
   display: grid;
-  /* The head is exactly one header row; the body takes the rest and is the only
-     thing that scrolls. `minmax(0, 1fr)` is load-bearing: with a bare `1fr` the
-     row can grow to its content, which is what cut the sheet off halfway down
-     and left the rest of the panel blank. */
+  /* 头部正好是一行 header；剩下的归 body，它也是唯一滚动的东西。
+     `minmax(0, 1fr)` 在这里是承重的：写成光秃秃的 `1fr`，这一行会涨到内容那么大，
+     这正是把设置页从中间截断、下面留一片空白的原因。 */
   grid-template-rows: var(--header-h) minmax(0, 1fr);
-  /* The same guard on the column axis as `.app` needs: without it the implicit `auto` column
-     is sized to its items' max-content, and a long conversation title in the picker is enough
-     to push the sheet's contents past the panel edge. */
+  /* 列轴上和 `.app` 需要的是同一道防护：没有它，隐式的 `auto` 列就按条目的
+     max-content 定尺寸，而选择器里一个长长的对话标题就足以把设置页内容挤出
+     面板边缘。 */
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
   min-height: 0;
@@ -695,8 +677,8 @@ body { overflow-x: hidden; }
   min-width: 0;
   padding: var(--space-1) var(--space-3) var(--space-3);
   overscroll-behavior: contain;
-  /* Rows keep their natural height instead of being stretched down the page, so
-     the sheet reads as a filled list rather than a form floating in whitespace. */
+  /* 各行保持自然高度，不被拉伸铺满整页，这样设置页读起来是一份填满的
+     列表，而不是浮在空白里的表单。 */
   align-content: start;
 }
 
@@ -704,7 +686,7 @@ body { overflow-x: hidden; }
 .setting:last-child { border-bottom: none; }
 .setting__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .setting__label { font-size: var(--fs-chat); }
-/* A read-only state chip: the desktop app owns this value, so the panel states it rather than offering a control. */
+/* 只读的状态小标：这个值归桌面端，所以面板只把它说出来，不给控件。 */
 .badge {
   flex: none;
   padding: 1px 8px;
@@ -717,9 +699,12 @@ body { overflow-x: hidden; }
 
 .badge--on { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
 
-.setting__help { margin-top: 2px; font-size: var(--fs-meta); color: var(--text-tertiary); line-height: 1.45; }
+/* `pre-wrap` 是给多行说明用的：「AI 读取权限」那条说明里的两个换行靠它才成行 ——
+   没有它浏览器会把 \n 折成一个空格，两档解释挤成一句、读起来像一整句。单行说明的
+   渲染结果不变，所以这里不需要分叉。 */
+.setting__help { margin-top: 2px; font-size: var(--fs-meta); color: var(--text-tertiary); line-height: 1.45; white-space: pre-wrap; }
 
-/* The save action sits with its fields rather than at the end of the page. */
+/* 保存按钮跟着它自己的字段走，不摆在页面末尾。 */
 .setting__actions { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
 
 
@@ -733,11 +718,10 @@ body { overflow-x: hidden; }
 
 .select {
   /*
-   * Must be allowed to shrink. Its width comes from the widest `<option>`, and the
-   * conversation picker is filled with real desktop conversation titles, so `flex: none`
-   * let a long title push the control past the panel edge — where `overflow-x: hidden` on
-   * the sheet and on `body` clipped it. The result was a dropdown whose arrow was cut off
-   * and could not be reached.
+   * 必须让它能收缩。它的宽度来自最宽的 `<option>`，而对话选择器里装的是真实的
+   * 桌面端对话标题，所以 `flex: none` 会让长标题把这个控件挤出面板边缘——
+   * 然后设置页和 `body` 上的 `overflow-x: hidden` 把它裁掉。结果是下拉框的
+   * 箭头被切掉，而且够不着。
    */
   flex: 0 1 auto;
   min-width: 0;
@@ -753,9 +737,9 @@ body { overflow-x: hidden; }
 
 @media (prefers-reduced-motion: reduce) {
   /*
-   * `animation-duration: 0.001ms` alone does not remove a repeating animation: the caret
-   * blinked as `infinite` with a near-zero period, which is motion the reader asked not to
-   * have. Zeroing the iteration count actually stops it.
+   * 只写 `animation-duration: 0.001ms` 去不掉循环动画：光标仍然以
+   * `infinite` 和一个接近零的周期在闪，而那正是读者明确要求不要的动效。把迭代
+   * 次数归零才真正让它停下来。
    */
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

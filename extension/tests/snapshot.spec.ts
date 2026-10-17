@@ -113,8 +113,8 @@ describe('buildSnapshot', () => {
 
     expect(view.forms).toHaveLength(2)
     expect(view.truncated.formsDropped).toBe(3)
-    // One visibility and one viewport measurement per interactive element;
-    // form extraction performs no second layout pass.
+    // 每个可交互元素只做一次可见性测量和一次视口测量；
+    // 表单提取不会再跑第二遍布局。
     expect(rect).toHaveBeenCalledTimes(10)
   })
 

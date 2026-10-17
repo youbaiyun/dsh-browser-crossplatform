@@ -16,7 +16,7 @@ const EXT_ORIGIN = `chrome-extension://${EXT_ID}`
 const OTHER_EXT_ORIGIN = 'chrome-extension://some-other-installed-extension'
 const FIREFOX_EXT_ORIGIN = 'moz-extension://per-install-uuid'
 
-/** Extension caps used by every hello in this suite. */
+/** 本套件里每次 hello 都会用的扩展能力声明。 */
 const CAPS = { textOnly: true as const, snapshotMaxChars: 12_000, maxInteractiveItems: 60 }
 
 interface Harness {
@@ -133,15 +133,15 @@ describe('BridgeServer', () => {
     expect(frames.find((f) => f.t === 'hello.ok')).toEqual({
       t: 'hello.ok',
       caps: { textOnly: true, snapshotMaxChars: 12000, maxInteractiveItems: 60 },
-      // No relay was wired into this server, so the desktop advertises no vision.
+      // 这个 server 没有接任何 relay，所以桌面端对外宣称不支持看图。
       policy: { openPagesForUser: false, imageRecognition: false },
     })
     ws.close()
   })
 
   it('says why recognition is unavailable, so the reader has a next step', async () => {
-    // The desktop is the only side that knows the reason; without carrying it, the
-    // extension can only report a dead end at the moment a user needs a next step.
+    // 只有桌面端知道原因；不把它带过来的话，扩展在用户正需要下一步的时候
+    // 只能报一个死胡同。
     const h = await startBridge({ visionUnavailableReason: 'add DEEPSEEK_API_KEY to its credential store' })
     harnesses.push(h)
     const { ws, frames } = await connect(h.url)
@@ -167,8 +167,8 @@ describe('BridgeServer', () => {
   })
 
   it('rejects another installed extension presenting a chrome-extension:// Origin without a token', async () => {
-    // The scheme is not an identity: every Chrome extension presents one, so a
-    // prefix match would hand this bridge to any of them.
+    // scheme 不是身份：每个 Chrome 扩展都会给出一个这样的 Origin，所以只匹配
+    // 前缀就等于把这个 bridge 交给它们中的任何一个。
     const h = await startBridge()
     harnesses.push(h)
     const { ws, done } = await connect(h.url, OTHER_EXT_ORIGIN)
@@ -574,7 +574,7 @@ describe('BridgeServer', () => {
     send(first.ws, { t: 'hello', token: TOKEN, caps: { textOnly: true, snapshotMaxChars: 12000, maxInteractiveItems: 60 } })
     await waitFor(() => first.frames.some((f) => f.t === 'hello.ok'))
     const pending = h.bridge.requestTool('browser_click', {}, new AbortController().signal)
-    // Attach the assertion eagerly: the replacement below settles it before the final await.
+    // 提前挂上这条断言：下面的替换连接会在最后一个 await 之前就把它敲定。
     const pendingAssertion = expect(pending).rejects.toMatchObject({ code: 'bridge-closed' })
     await waitFor(() => first.frames.some((f) => f.t === 'tool.call'))
 
@@ -598,10 +598,9 @@ describe('BridgeServer', () => {
     await waitFor(() => frames.some((f) => f.t === 'tool.call'))
     const call = frames.find((frame) => frame.t === 'tool.call') as Extract<BridgeFrame, { t: 'tool.call' }>
     abort.abort()
-    // A caller that stops waiting is a timeout, not a missing connection: the
-    // extension was connected and the call was dispatched (asserted above), so
-    // `bridge-closed` here would hide the difference between an idle browser and
-    // an absent one.
+    // 调用方自己不再等待属于超时，而不是连接缺失：扩展是连着的，调用也已经
+    // 派发出去了（上面断言过），所以这里报 `bridge-closed` 会掩盖一个空闲浏览器
+    // 和一个根本不存在的浏览器之间的区别。
     await expect(pending).rejects.toMatchObject({ code: 'timeout' })
     await waitFor(() => frames.some((frame) => frame.t === 'tool.cancel'))
     expect(frames).toContainEqual({ t: 'tool.cancel', id: call.id })
@@ -647,27 +646,45 @@ describe('BridgeServer', () => {
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
     const pending = h.bridge.requestTool('browser_click', {}, new AbortController().signal)
-    // Tear the socket down immediately: the in-flight send reports a write
-    // failure (or the close path wins — either settles as bridge-closed).
+    // 立刻把 socket 拆掉：正在途中的这次发送会报写入失败（也可能 close 那条路
+    // 先赢——两种都落定成 bridge-closed）。
     const assertion = expect(pending).rejects.toMatchObject({ code: 'bridge-closed' })
     ws.terminate()
     await assertion
   })
 
-  it('closes cleanly twice (second close is a no-op on the acceptor)', async () => {
+  it('closes cleanly twice, and the first close is the one that drops the live client', async () => {
     const h = await startBridge()
     harnesses.push(h)
+    // 先接一个已认证的客户端：这样"关闭"才有可观测的后果，而不只是"不抛异常"。
+    const { ws, done } = await connect(h.url)
+    send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
+    await waitFor(() => h.bridge.hasConnection())
+
     await h.bridge.close()
-    await h.bridge.close()
+    // 客户端那一侧必须真的被断开——这是 close() 存在的理由。
+    await done
+    expect(ws.readyState).toBe(WebSocket.CLOSED)
+
+    // 第二次关闭必须是 no-op：再碰一个已经关掉的 acceptor，ws 会抛
+    // "The server is not running"。这条用例原先只连调两次 close()，等于什么都没断言。
+    await expect(h.bridge.close()).resolves.toBeUndefined()
+    expect(h.bridge.hasConnection()).toBe(false)
   })
 
-  it('sends protocol pings on the configured cadence and the client answers pong', async () => {
+  it('sends protocol pings on the configured cadence, and a pong does not disturb it', async () => {
     const h = await startBridge({ pingIntervalMs: 50 })
     harnesses.push(h)
     const { ws, frames } = await connect(h.url)
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'ping'))
+
+    // `pong` 在服务端是显式忽略的（见 server.ts 的 case 分支），所以"客户端回应了 pong"
+    // 本身不可观测。可观测的是它的**效果**：回应之后连接仍然活着，心跳照常继续。
+    const seen = frames.filter((f) => f.t === 'ping').length
     send(ws, { t: 'pong' })
+    await waitFor(() => frames.filter((f) => f.t === 'ping').length > seen)
+    expect(ws.readyState).toBe(WebSocket.OPEN)
     ws.close()
   })
 
@@ -686,7 +703,7 @@ describe('BridgeServer', () => {
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
     ws.close()
     await done
-    // The pump fails after the close: the abort flag suppresses the error frame.
+    // pump 是在 close 之后才失败的：abort 标志把错误帧压下去了。
     await new Promise((resolve) => { setTimeout(resolve, 200) })
     expect(frames.some((f) => f.t === 'error')).toBe(false)
   })
@@ -697,7 +714,7 @@ describe('BridgeServer', () => {
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
     const pending = h.bridge.requestTool('browser_click', {}, new AbortController().signal)
-    // Attach the assertion eagerly: close() settles it before the final await.
+    // 提前挂上这条断言：close() 会在最后一个 await 之前就把它敲定。
     const pendingAssertion = expect(pending).rejects.toMatchObject({ code: 'bridge-closed' })
     await h.bridge.close()
     await pendingAssertion
@@ -716,7 +733,7 @@ describe('BridgeServer', () => {
     expect(h.bridge.hasConnection()).toBe(true)
     ws.close()
     await done
-    // The server processes the close asynchronously; poll for the outcome.
+    // server 是异步处理 close 的；轮询结果。
     await expect.poll(() => h.bridge.hasConnection()).toBe(false)
   })
 
@@ -726,12 +743,12 @@ describe('BridgeServer', () => {
     const { ws, frames, done } = await connect(h.url)
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
-    // Client-only shapes after ready are ignored (no error frame, no close).
+    // ready 之后只属于客户端的帧会被忽略（不报错误帧，也不关连接）。
     send(ws, { t: 'pong' })
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await new Promise((resolve) => { setTimeout(resolve, 50) })
     expect(ws.readyState).toBe(WebSocket.OPEN)
-    // Garbage is a protocol violation and closes the socket.
+    // 垃圾数据是协议违规，会关掉 socket。
     ws.send('not-json')
     await done
     expect(ws.readyState).toBe(WebSocket.CLOSED)
@@ -777,7 +794,7 @@ describe('BridgeServer', () => {
     const { ws, frames } = await connect(h.url)
     send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
     await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
-    // Unknown id: ignored, connection stays healthy.
+    // 未知 id：忽略，连接保持健康。
     send(ws, { t: 'tool.result', id: 'nope', ok: true, result: {} })
     await new Promise((resolve) => { setTimeout(resolve, 50) })
     expect(ws.readyState).toBe(WebSocket.OPEN)
@@ -785,8 +802,8 @@ describe('BridgeServer', () => {
   })
 
   it('rejects privileged methods from non-loopback remotes over a real socket', async () => {
-    // The sandbox cannot bind arbitrary loopback literals, so the remote
-    // address is forced through the test seam; the socket itself is real.
+    // 沙箱绑不了任意 loopback 字面地址，所以远端地址是通过测试接缝强塞进去的；
+    // socket 本身是真的。
     const h = await startBridge({ remoteAddressOverride: '192.168.1.5' })
     harnesses.push(h)
     const { ws, frames } = await connect(h.url)
@@ -796,7 +813,7 @@ describe('BridgeServer', () => {
     await waitFor(() => frames.some((f) => f.t === 'rpc.result' && f.id === 'priv-1'))
     expect(frames.find((f) => f.t === 'rpc.result' && f.id === 'priv-1'))
       .toMatchObject({ t: 'rpc.result', id: 'priv-1', ok: false, error: { code: 'forbidden' } })
-    // Non-privileged methods still pass for the same remote.
+    // 对同一个远端，非特权方法仍然放行。
     send(ws, { t: 'rpc', id: 'priv-2', method: 'session.list', payload: {} })
     await waitFor(() => frames.some((f) => f.t === 'rpc.result' && f.id === 'priv-2'))
     const allowed = frames.find((f): f is Extract<BridgeFrame, { t: 'rpc.result' }> => f.t === 'rpc.result' && f.id === 'priv-2')!
@@ -837,7 +854,7 @@ describe('BridgeServer', () => {
     await waitFor(() => frames.filter((f) => f.t === 'event').length >= 2)
     ws.close()
     await done
-    // The pump must stop sending after close instead of writing to a dead socket.
+    // close 之后 pump 必须停止发送，而不是往一个死掉的 socket 上写。
     const countBefore = frames.filter((f) => f.t === 'event').length
     await new Promise((resolve) => { setTimeout(resolve, 80) })
     expect(frames.filter((f) => f.t === 'event').length).toBe(countBefore)

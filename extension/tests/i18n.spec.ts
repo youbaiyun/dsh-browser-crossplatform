@@ -34,12 +34,12 @@ describe('browser locale selection', () => {
 
 describe('open-directive errors are translated', () => {
   /**
-   * One of every reason the parser can report.
+   * 解析器可能报的每个 reason 各取一个。
    *
-   * The parser returns a reason rather than a sentence, so a reason with no
-   * wording is a message the user would never see. The panel had nine messages
-   * hard-coded in Chinese, which meant an English user read Chinese; this is the
-   * test that keeps the two lists in step as reasons are added.
+   * 解析器返回的是 reason，不是句子，所以一个没有对应文案的
+   * reason 就是用户永远看不到的消息。面板里曾有九条消息
+   * 硬编码成中文，英文用户就读到中文；这个测试
+   * 就是用来在新增 reason 时让两份列表保持同步的。
    */
   const EVERY_REASON: OpenError[] = [
     { kind: 'directiveFormat', known: '@open', soft: true },
@@ -59,23 +59,23 @@ describe('open-directive errors are translated', () => {
       const en = describeOpenError('en', error)
       expect(zh, `${error.kind} (zh)`).toBeTruthy()
       expect(en, `${error.kind} (en)`).toBeTruthy()
-      // Identical output would mean one language was never written.
+      // 输出一样，就意味着有一种语言根本没写。
       expect(zh, `${error.kind} must differ by language`).not.toBe(en)
-      // An English user must not be handed Chinese.
+      // 绝不能把中文交给英文用户。
       expect(en, `${error.kind} (en) must not contain Chinese characters`).not.toMatch(/[\u4e00-\u9fff]/)
     }
   })
 
   it('carries the values the user typed back into the message', () => {
-    // A complaint that does not repeat the offending value makes the user guess.
+    // 报错不重复给出错的值，用户就得去猜。
     expect(describeOpenError('en', { kind: 'unknownKey', key: 'verify' })).toContain('verify')
     expect(describeOpenError('en', { kind: 'paceInvalid', allowed: 'a / b', received: 'quick' })).toContain('quick')
     expect(describeOpenError('zh', { kind: 'unknownKey', key: 'verify' })).toContain('verify')
   })
 
   it('says nothing in Chinese to an English reader anywhere in the copy table', () => {
-    // A blanket check on the English table, so a string pasted from the Chinese
-    // one is caught wherever it lands rather than only in the group being edited.
+    // 把英文表通扫一遍，这样从中文表里粘过来的字符串
+    // 无论落在哪里都会被抓住，不只是在正在编辑的那一组里。
     const english = controlCopy('en')
     const walk = (value: unknown, path: string): void => {
       if (typeof value === 'string') {

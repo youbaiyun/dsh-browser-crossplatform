@@ -4,9 +4,9 @@ import { ElementIds } from '../src/content/ids.ts'
 import { buildSnapshot, type SnapshotBudget } from '../src/content/snapshot.ts'
 
 /**
- * An open modal owns interaction, but it is appended late in the DOM. On an
- * element-heavy page that pushed its controls past the inventory cap, so the
- * caller could see the page behind the dialog but not the dialog itself.
+ * 打开的 modal 拥有交互权，但它在 DOM 里追加得很晚。在元素
+ * 很多的页面上，这会把它的控件挤出清单上限，于是
+ * 调用方能看到对话框后面的页面，却看不到对话框本身。
  */
 
 const TIGHT: SnapshotBudget = { maxItems: 3, maxForms: 5, maxChars: 4_000 }
@@ -89,8 +89,8 @@ describe('open dialog prioritization', () => {
     `
     const view = buildSnapshot(new ElementIds(), { budget: TIGHT }, null)
 
-    // Without the ancestor walk the faded control would be promoted and take
-    // one of the three slots, displacing a real one.
+    // 如果不向上遍历祖先，那个淡化状态的控件就会被提升，
+    // 占掉三个名额之一，挤掉一个真正的候选。
     expect(view.items.map((item) => item.name)).toEqual(['page-0', 'page-1', 'page-2'])
   })
 

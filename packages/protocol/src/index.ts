@@ -1,10 +1,9 @@
 /**
- * Wire contract between the bridge plugin and the browser extension.
+ * bridge 插件和浏览器扩展之间的 wire 契约。
  *
- * Zero-dependency module: the Node bridge and the browser bundle both import
- * this file, so frame shapes cannot drift between the two halves. One JSON
- * object per WebSocket message, discriminated by `t`. Correlation ids are
- * opaque strings minted by the requestor and echoed back.
+ * 零依赖模块：Node 端的 bridge 和浏览器端的 bundle 都 import 这个文件，两半之间的帧形态
+ * 就不可能各自漂移。每条 WebSocket 消息是一个 JSON 对象，用 `t` 做区分判别。关联 id 由
+ * 请求方生成，是不透明字符串，原样回传。
  */
 
 export const BRIDGE_PATH = '/ext/bridge'
@@ -12,13 +11,13 @@ export const BRIDGE_CONFIG_PATH = '/ext/bridge-config'
 export const BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD = 'bridge.injectBrowserSnapshot'
 export const BRIDGE_SESSION_PURGE_METHOD = 'bridge.session.purge'
 
-// The prompt, body shape, and parser both recognizer paths share. Re-exported so
-// the bridge and the extension import one module rather than two copies.
+// 两条识别路径共用的提示词、请求体形态和解析器。在这里再导出一次，
+// 这样 bridge 和扩展 import 的是同一个模块，而不是两份副本。
 export * from './vision-contract.ts'
 
-// The task-checklist contract the model is asked to emit, parsed by the panel.
-// Shared so the wording the model is told and the shape the panel reads cannot
-// drift apart.
+// 要求模型输出的任务清单契约，由面板解析。
+// 之所以共用：讲给模型的说法和面板读到的形态
+// 不能各自漂移。
 export * from './plan.ts'
 
 export const HELLO_TIMEOUT_MS = 5_000
@@ -27,7 +26,7 @@ export const DEFAULT_TOKEN_BYTES = 32
 export const DEFAULT_SNAPSHOT_MAX_CHARS = 32_000
 export const MIN_SNAPSHOT_MAX_CHARS = 500
 
-/** Error codes a tool call may settle with. Open set: consumers tolerate unknown codes. */
+/** 工具调用可能以之收场的错误码。开放集合：消费方要能容忍没见过的错误码。 */
 export type ToolErrorCode =
   | 'no-active-tab'
   | 'content-unavailable'
@@ -46,7 +45,7 @@ export type RespondResult =
   | { ok: true; value?: unknown }
   | { ok: false; error: { code: string; message: string; details: Record<string, unknown> } }
 
-/** Capabilities negotiated in `hello`/`hello.ok`. */
+/** 在 `hello`/`hello.ok` 中协商的能力。 */
 export interface BridgeCaps {
   textOnly: true
   snapshotMaxChars: number
@@ -54,71 +53,65 @@ export interface BridgeCaps {
 }
 
 /**
- * What the desktop app allows, as opposed to what the extension can do.
- * Capabilities come from the extension; policy comes from the plugin, where the
- * user's configuration lives. Keeping them apart stops a disabled switch from
- * being defeated by a stale local copy.
+ * 桌面包允许什么，而不是扩展能做什么。
+ * 能力来自扩展，策略来自插件（用户配置就在那里）。两者分开，某个被关掉的开关就不会
+ * 被一份过期的本地副本绕过去。
  */
 export interface BridgePolicy {
   openPagesForUser: boolean
   /**
-   * Directory the bridge groups browser conversations under.
+   * bridge 用来归置浏览器对话的目录。
    *
-   * Sent so the extension can name the right workspace instead of guessing: the
-   * 「工作区内」 mode mirrors every conversation in that group, and a wrong path would
-   * mirror an unrelated one — or none at all. Absent in a deployment that opted out of
-   * the grouping, which is exactly when the mode has nothing to mirror.
+   * 发它是为了让扩展能说出正确的工作区，而不是靠猜：「工作区内」模式会镜像这个分组里的
+   * 每一段对话，路径错了就会去镜像一个不相干的分组——或者什么都镜像不到。选择不分组的
+   * 部署里它是缺省的，而那时候这个模式确实没什么可镜像。
    */
   sessionWorkspacePath?: string
   /**
-   * The desktop will recognize images on the extension's behalf.
+   * 桌面端会替扩展识别图片。
    *
-   * Absent means "no vision model configured here", not "unsupported": the
-   * extension then keeps its own network path instead of relaying.
+   * 缺省表示“这里没配置视觉模型”，不是“不支持”：这时扩展会保留自己的网络路径，不走
+   * 中继。
    */
   imageRecognition?: boolean
   /**
-   * Why the desktop cannot recognize images, when it cannot.
+   * 桌面端识别不了图片时，说明原因。
    *
-   * The desktop is the only side that knows: it holds the config and the
-   * credentials. Without this the extension can only report that recognition is
-   * unavailable, which leaves the user with a dead end and no next step.
+   * 原因只有桌面端知道：配置和凭据都在它手里。没有这个字段，扩展只能报“识别不可用”，
+   * 把用户丢在一个没有下一步的死胡同里。
    */
   imageRecognitionHint?: string
 }
 
-/** Page context sent with a recognition request, so the answer is about this image. */
+/** 随识别请求一起发过去的页面上下文，好让答案针对的就是这张图。 */
 export interface ImageRecognitionRequest {
-  /** Manifest identity, echoed back so the extension can match request to result. */
+  /** manifest 身份标识，原样回传，好让扩展把请求和结果对上。 */
   identity: string
-  /** Author-provided text, when the page had any. */
+  /** 作者提供的文本（页面上有的话）。 */
   alt: string
-  /** Text printed beside the image. */
+  /** 图片旁边印着的文本。 */
   near: string
-  /** Nearest heading: the section the image belongs to. */
+  /** 最近的标题：这张图所在的章节。 */
   heading: string
-  /** Manifest kind: content, icon, link, button, background, or canvas. */
+  /** manifest 的 kind：content、icon、link、button、background 或 canvas。 */
   kind: string
   /**
-   * How much the caller wants from the answer.
+   * 调用方希望答案有多详细。
    *
-   * Travels with the request because the desktop builds the same body the
-   * extension does; a tier applied on one side only would change what the model is
-   * asked depending on which transport happened to be free.
+   * 它随请求一起走，因为桌面端构造的请求体和扩展构造的完全一样；只在一侧生效的档位，
+   * 会让“问了模型什么”取决于当时哪条传输通道空闲。
    *
-   * Optional so a sender that predates tiers still produces a valid request: it
-   * gets the base prompt rather than a refusal.
+   * 设成可选，是为了让早于档位机制的发送方仍能发出合法请求：它会拿到基础提示词，而不是
+   * 被拒掉。
    */
   tier?: string
 }
 
 /**
- * Where the bytes come from.
+ * 字节从哪来。
  *
- * The extension is asked for bytes first because only it carries the user's login
- * state. `url` is the fallback for when the extension's own fetch is blocked by
- * its content-security policy, its host permissions, or an enterprise rule — the
- * desktop's network stack is not subject to those.
+ * 先向扩展要字节，因为只有它带着用户的登录状态。`url` 是回退方案，用在扩展自己的 fetch
+ * 被内容安全策略、host 权限或企业策略挡住时——桌面端的网络栈不受这些约束。
  */
 export type ImageSource =
   | { kind: 'bytes'; mediaType: string; base64: string }
@@ -170,7 +163,7 @@ export function isClientFrame(frame: BridgeFrame): frame is ClientFrame {
     || frame.t === 'pong'
 }
 
-/** Parse one WebSocket message into a frame, or `undefined` when it is not valid. */
+/** 把一条 WebSocket 消息解析成帧，不合法时返回 `undefined`。 */
 export function parseBridgeFrame(text: string): BridgeFrame | undefined {
   let value: unknown
   try {
@@ -269,9 +262,9 @@ export function parseBridgeFrame(text: string): BridgeFrame | undefined {
 }
 
 export function isPolicy(value: unknown): value is BridgePolicy {
-  // A missing field is rejected rather than defaulted: `false` and "dropped in
-  // transit" must not look the same. `imageRecognition` is the exception — it is
-  // absent when the desktop has no vision model, which is a supported state.
+  // 字段缺失就拒掉，而不是取默认值：`false` 和“在半路上丢了”
+  // 不能看起来一样。`imageRecognition` 是例外——桌面端没有视觉模型时
+  // 它就是缺省的，而那是一种受支持的状态。
   return isRecord(value)
     && typeof value.openPagesForUser === 'boolean'
     && (value.imageRecognition === undefined || typeof value.imageRecognition === 'boolean')

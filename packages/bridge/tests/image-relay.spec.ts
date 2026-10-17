@@ -11,7 +11,7 @@ const REQUEST: ImageRecognitionRequest = {
   kind: 'content',
 }
 
-/** A vision client that records what it was asked and answers with a fixed line. */
+/** 一个会记录自己被问了什么、并给出固定一行的 vision 客户端。 */
 function stubVision(answer: { ok: true; desc: string } | { ok: false; code: string; message: string }): {
   seen: VisionRequest[]
   client: VisionClient

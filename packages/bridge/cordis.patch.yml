@@ -1,22 +1,23 @@
-# Browser bridge layer for the dsh `web` profile.
+# dsh `web` profile 的浏览器 bridge 层。
 #
-# `dsh plugin --profile web add` registers this package's `dsh.bundle`
-# manifest, so both the repository launcher and `npx @deepseek-ai/dsh@0.2.0-rc.2 web`
-# apply this patch without an extra command-line option.
+# `dsh plugin --profile desktop add dsh-browser-crossplatform` 会注册本包的
+# `dsh.bundle` manifest，所以仓库的启动器和 `npx @deepseek-ai/dsh@0.2.0-rc.2 web`
+# 都会套用这份补丁，不需要额外的命令行选项。
+#（这里先前写的是 `--profile web`，与文档、README 里那 12 处 `--profile desktop` 不一致；
+#  用户照这份注释装进 web profile，页面上就找不到插件。）
 #
-# On first boot the plugin generates a bearer token and persists it at
-# ~/.dsh/ext-bridge-token (chmod 0600). Local extensions discover the bridge
-# without manual token entry. To pin a fixed token for a remote deployment,
-# set DSH_EXT_TOKEN and reference it below.
-# Extension-created sessions default to the ~/.dsh/browser-sessions workspace.
-# Set DSH_BROWSER_SESSION_WORKSPACE to choose another path, or to an empty
-# string to keep those sessions Ungrouped.
-# Sessions materialize only on the first message (deferSessionCreate defaults
-# to true): opening the side panel without chatting leaves no session behind.
+# 首次启动时，插件会生成一个 bearer token 并把它持久化在
+# ~/.dsh/ext-bridge-token（chmod 0600）。本地扩展无需手工输入 token 就能发现
+# bridge。要为远程部署钉住一个固定 token，请设置 DSH_EXT_TOKEN 并在下面引用它。
+# 由扩展创建的 session 默认落在 ~/.dsh/browser-sessions 工作区。
+# 设置 DSH_BROWSER_SESSION_WORKSPACE 可以另选路径，或把它设成空字符串，
+# 让那些 session 保持 Ungrouped。
+# Session 只在第一条消息时才实体化（deferSessionCreate 默认为 true）：
+# 打开侧边面板而不发消息，不会留下任何 session。
 #
-# Security: the bridge path carries its own token auth and refuses privileged
-# gateway methods (settings/credentials/open-*) for non-loopback remotes. Do
-# not run `dsh web --host 0.0.0.0` on untrusted networks with this layer.
+# 安全：bridge 路径自带 token 认证，并对非 loopback 的远端拒绝特权 gateway
+# 方法（settings/credentials/open-*）。不要带着这一层在不可信的网络上
+# 运行 `dsh web --host 0.0.0.0`。
 
 - insert:
     - id: bridge-browser

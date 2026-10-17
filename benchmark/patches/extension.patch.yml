@@ -1,5 +1,5 @@
-# Keep the installed extension bridge active, but isolate benchmark-generated
-# sessions and workspace metadata from normal DSH data.
+# 让已安装的扩展 bridge 保持启用，但把 benchmark 生成的会话和工作区元数据
+# 与正常的 DSH 数据隔离开来。
 
 - id: session-persistence-jsonl
   config:
@@ -13,10 +13,9 @@
   disabled: true
 
 - insert:
-    # Replaced by the runner with the built local package's file:// URL. A new
-    # id is intentional: DSH patch layers reject changing an existing row's
-    # module name, and developer profiles may install this package under an
-    # alias that does not match its declared package name.
+    # 由 runner 替换成构建好的本地包的 file:// URL。用一个新 id 是有意的：
+    # DSH patch 层会拒绝修改已有行的 module name，而开发者 profile 可能以某个
+    # 与其声明包名不一致的别名来安装这个包。
     - id: benchmark-extension-bridge
       name: __BENCHMARK_BRIDGE_PLUGIN__
       config:

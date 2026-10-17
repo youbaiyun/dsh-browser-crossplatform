@@ -1,54 +1,50 @@
 /**
- * The task list a turn is working through.
+ * 一个 turn 正在推进的任务清单。
  *
- * The model is asked to open a turn by writing the checklist it is about to
- * execute, and to re-emit it with boxes ticked as it goes. That gives the person
- * watching three things a tool log cannot: what the *whole* job is, which part is
- * being done right now, and whether the job finished.
+ * 模型被要求在开启一个 turn 时先写出它接下来要执行的清单，并在推进过程中连勾选状态一起
+ * 重新输出。这样旁观者能拿到工具日志给不了的三样东西：*整个*任务是什么、此刻在做哪一部
+ * 分、任务做完没有。
  *
- * The format is a plain markdown checklist, which is the one shape a model
- * produces reliably and a reader recognises instantly:
+ * 格式就是普通的 markdown 清单——模型能稳定产出、读者也能一眼认出来的那种：
  *
  * ```text
- * - [ ] List the tabs that are open
- * - [>] Open bilibili in a new tab
- * - [x] Read the page
- * - [!] Download the video (failed: needs a login)
+ * - [ ] 列出当前打开的标签页
+ * - [>] 在新标签页里打开 bilibili
+ * - [x] 阅读页面
+ * - [!] 下载视频（失败：需要登录）
  * ```
  *
- * Parsing is deliberately forgiving: the boxes are the contract, everything
- * around them (a heading, bullets, numbering, an intro sentence) is tolerated.
- * This module is pure so the contract can be pinned by test rather than by
- * hoping the model complies.
+ * 解析刻意宽容：方框才算契约，方框周围的东西（标题、项目符号、编号、一句开场白）都
+ * 容忍。本模块是纯函数式的，契约因此可以由测试钉死，而不是指望模型守规矩。
  *
  * @module
  */
 
-/** Where one task stands. */
+/** 一个任务处于什么状态。 */
 export type PlanTaskStatus = 'pending' | 'active' | 'done' | 'failed'
 
-/** One line of the checklist. */
+/** 清单里的一行。 */
 export interface PlanTask {
-  /** Stable within a plan: assigned by position, so a re-emitted list matches up. */
+  /** 在一份 plan 内保持稳定：按位置分配，重新输出的列表才对得上。 */
   id: number
-  /** The task as the model wrote it, with the box removed. */
+  /** 模型写下的任务原文，方框已经去掉。 */
   text: string
   status: PlanTaskStatus
 }
 
-/** A whole checklist, plus what it was derived from. */
+/** 一整份清单，外加它是从什么推导出来的。 */
 export interface Plan {
   tasks: PlanTask[]
-  /** Whether every task reached a terminal state. */
+  /** 是否每个任务都已到达终态。 */
   complete: boolean
-  /** The task in progress, when exactly one is marked `active`. */
+  /** 正在进行的任务，仅当恰好有一个被标为 `active` 时。 */
   activeId: number | null
 }
 
 const BOX = /^\s*(?:[-*+]|\d+[.)])?\s*\[([ xX>!])\]\s*(.+?)\s*$/u
 const LABELLED = /^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$/u
 
-/** Status for one box character. */
+/** 从方框字符得出状态。 */
 function statusOf(box: string): PlanTaskStatus {
   switch (box) {
     case ' ':
@@ -63,19 +59,18 @@ function statusOf(box: string): PlanTaskStatus {
 }
 
 /**
- * Read the checklist out of one assistant message.
+ * 从一条 assistant 消息里读出清单。
  *
- * Two shapes count, in order of trust:
+ * 按可信度排序，有两种形态算数：
  *
- * 1. **Boxed items** — `- [ ]`, `- [x]`, `- [>]`, `- [!]`. The model states both
- *    the task and its state, so a progress update is just the list written again.
- * 2. **A bare list with no boxes at all** — numbers or bullets under a heading
- *    that mentions a plan or tasks. Every item is pending. This exists because a
- *    model that lists its plan without boxes should still produce a visible task
- *    list rather than nothing.
+ * 1. **带方框的条目**——`- [ ]`、`- [x]`、`- [>]`、`- [!]`。模型把任务和它的状态一起
+ *    给出，所以一次进度更新无非是把列表再写一遍。
+ * 2. **一个方框都没有的裸列表**——位于提到 plan 或 tasks 的标题之下的编号或项目符号。
+ *    每一项都是待办。之所以支持它，是因为一个把计划列出来却不带方框的模型，也应该
+ *    产出一份看得见的任务清单，而不是什么都没有。
  *
- * @param text - the assistant text for one message.
- * @returns the plan, or null when the text carries no checklist.
+ * @param text - 一条消息的 assistant 文本。
+ * @returns 该 plan；文本里没有清单时返回 null。
  */
 export function parsePlan(text: string): Plan | null {
   const lines = text.split('\n')
@@ -85,8 +80,8 @@ export function parsePlan(text: string): Plan | null {
     const boxed = BOX.exec(line)
     if (boxed !== null) {
       const [, box, body] = boxed
-      // A checkbox is a real task, but a nested sub-list of checkboxes is a
-      // question, not a plan — one level keeps the list readable.
+      // 复选框是真实的任务，但复选框下面嵌的子列表是个提问，不是计划
+      // ——只取一层，列表才读得下去。
       const task = (body ?? '').trim()
       if (task !== '') {
         sawBox = true
@@ -111,10 +106,9 @@ export function parsePlan(text: string): Plan | null {
 }
 
 /**
- * A plan written without boxes.
+ * 不带方框写出来的计划。
  *
- * Only accepted under a heading that announces a plan or a task list, so an
- * ordinary bulleted answer is not mistaken for one.
+ * 只在宣告了 plan 或任务清单的标题之下才认，这样一份普通的分条回答不会被误当成计划。
  */
 function looseList(lines: readonly string[]): string[] | null {
   const headingIndex = lines.findIndex((line) => /^#{1,6}\s|\*\*.+\*\*\s*$/u.test(line))
@@ -129,8 +123,8 @@ function looseList(lines: readonly string[]): string[] | null {
       if (body !== '') items.push(body)
       continue
     }
-    // The list ends at the first line that is not part of it, so prose after the
-    // plan is not swallowed into the task list.
+    // 列表到它之外的第一行就结束，这样计划后面的散文
+    // 不会被吞进任务清单里。
     if (line.trim() === '') continue
     if (items.length > 0) break
   }
@@ -138,13 +132,13 @@ function looseList(lines: readonly string[]): string[] | null {
 }
 
 /**
- * Render a plan back into the checklist text.
+ * 把 plan 渲染回清单文本。
  *
- * Used to show the list in the panel and, in tests, to prove that a plan survives
- * a round trip. Ticks are `x`, a failure `!`, and the task in progress `>`.
+ * 用来在面板里展示这份列表，也用来在测试里证明 plan 能经受一次往返。勾选是 `x`，
+ * 失败是 `!`，进行中的任务是 `>`。
  *
- * @param plan - the plan to render.
- * @returns markdown lines, one per task.
+ * @param plan - 要渲染的 plan。
+ * @returns markdown 行，每个任务一行。
  */
 export function renderPlan(plan: Plan): string {
   return plan.tasks
@@ -153,10 +147,10 @@ export function renderPlan(plan: Plan): string {
 }
 
 /**
- * How many tasks are in each state, for a one-line progress summary.
+ * 每种状态各有多少个任务，用来拼一行进度摘要。
  *
- * @param plan - the plan to count.
- * @returns per-status totals plus how many tasks exist.
+ * @param plan - 要计数的 plan。
+ * @returns 按状态分的总数，外加共有多少个任务。
  */
 export function planProgress(plan: Plan): { done: number; failed: number; active: number; pending: number; total: number } {
   const count = (status: PlanTaskStatus): number => plan.tasks.filter((task) => task.status === status).length

@@ -13,7 +13,7 @@ describe('ElementIds', () => {
     expect(ids.indexOf(b)).toBe(2)
     expect(a.getAttribute('data-dsh-el')).toBe('1')
 
-    // Same set again: ids unchanged, nothing added or removed.
+    // 同一批元素再来一次：id 不变，没新增也没移除。
     expect(ids.assign([a, b])).toEqual({ added: 0, removed: 0 })
     expect(ids.indexOf(a)).toBe(first)
   })
@@ -26,8 +26,8 @@ describe('ElementIds', () => {
     ids.assign([a, b])
     const result = ids.assign([b, c])
     expect(result).toEqual({ added: 1, removed: 1 })
-    expect(ids.indexOf(b)).toBe(2) // stable
-    expect(ids.indexOf(c)).toBe(3) // fresh id, never reuses the freed one
+    expect(ids.indexOf(b)).toBe(2) // 稳定不变
+    expect(ids.indexOf(c)).toBe(3) // 全新的 id，绝不重用刚释放的那个
     expect(ids.elementByIndex(1)).toBeUndefined()
   })
 

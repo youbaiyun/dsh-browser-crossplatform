@@ -1,14 +1,11 @@
 /**
- * Text-only page snapshot: the model's entire view of the page.
+ * 纯文本页面快照：模型看到的页面全貌。
  *
- * The browser tools use text snapshots, so the snapshot renders the page as
- * structured text under a hard character budget: URL/title, main content, a
- * numbered interactive inventory, form fields (sensitive values masked), and a
- * numbered image inventory. Images are described, never transmitted as pixels,
- * so the payload stays text and the model still learns that an image exists,
- * what its text alternatives say, and which index points at it.
- * `delta` mode returns only what changed since the last snapshot, and stable
- * element ids keep the model's addressing valid across snapshots.
+ * 浏览器工具走文本快照，所以这里把页面渲染成严格卡字符预算的结构化文本：URL/标题、正文、
+ * 带编号的交互元素清单、表单字段（敏感值已掩码）、带编号的图片清单。图片只描述、绝不传像素，
+ * 负载因此始终是文本，模型却仍能知道这儿有张图、它的替代文本说了什么、哪个索引指向它。
+ * `delta` 模式只返回上次快照之后变了的那些，稳定的元素 id 则让模型的寻址在多次快照之间
+ * 一直有效。
  *
  * @module
  */
@@ -20,7 +17,7 @@ import { ElementIds } from './ids.ts'
 import { collectImages, imageIdentity } from './images.ts'
 import { isSensitiveField, maskValue } from './privacy.ts'
 
-/** Role label per element kind (model-facing vocabulary). */
+/** 每种元素类型对应的角色标签（模型看到的词）。 */
 function roleOf(el: Element): string {
   const role = el.getAttribute('role')
   if (role !== null && role !== '') return role
@@ -39,7 +36,7 @@ function roleOf(el: Element): string {
   return el.tagName.toLowerCase()
 }
 
-/** One numbered interactive element. */
+/** 一个带编号的交互元素。 */
 interface InventoryItem {
   index: number
   role: string
@@ -51,7 +48,7 @@ interface InventoryItem {
   inViewport: boolean
 }
 
-/** One numbered form field with its (masked) value. */
+/** 一个带编号的表单字段，含它的值（已掩码）。 */
 interface FormFieldView {
   index: number
   label: string
@@ -62,39 +59,37 @@ interface FormFieldView {
   required?: boolean
 }
 
-/** One numbered image, described in text rather than transmitted. */
+/** 一张带编号的图片：只给文字描述，不传像素。 */
 interface ImageView {
   index: number
   kind: string
   width: number
   height: number
-  /** alt / aria-label / title, when the author supplied one. */
+  /** alt / aria-label / title，作者给了哪个就是哪个。 */
   label: string
-  /** Short caption or adjacent text, for context. */
+  /** 简短标题或邻近文本，用来给点上下文。 */
   near: string
-  /** Same-origin path or host+path, when the image has an address. */
+  /** 同源路径，或者 host+path——图片有地址时才有。 */
   src: string
   /**
-   * The image's identity, in the same form the describe action uses.
+   * 图片的身份，形式和 describe 操作用的一样。
    *
-   * Never rendered: it is the key the background uses to find a description for
-   * this image, and a URL repeated on every line would spend the text budget on
-   * information the path already carries.
+   * 永远不渲染：它是 background 查这张图描述用的键，而把 URL 在每一行重复一遍，等于把
+   * 文本预算花在路径本来就带着的信息上。
    */
   identity: string
-  /** True when DOM text already describes the image. */
+  /** DOM 文本已经描述过这张图时为 true。 */
   textDescribed: boolean
   /**
-   * Why this image cannot be read, when the page already knows.
+   * 页面知道的话，说明这张图为什么读不了。
    *
-   * Reported by the content script rather than looked up in the cache, because it
-   * is a property of the page: the request never happened, so no cache entry will
-   * ever exist for it.
+   * 这是 content script 上报的，不是从缓存里查的，因为它是页面自己的属性：请求压根没发生，
+   * 也就永远不会有对应的缓存条目。
    */
   unavailable?: string
 }
 
-/** One page snapshot. */
+/** 一次页面快照。 */
 export interface SnapshotView {
   version: number
   url: string
@@ -104,33 +99,33 @@ export interface SnapshotView {
   items: InventoryItem[]
   forms: FormFieldView[]
   images: ImageView[]
-  /** ids that changed since the last snapshot (delta mode). */
+  /** 上次快照以来变过的 id（delta 模式）。 */
   changed: number[]
-  /** ids that disappeared since the last snapshot (delta mode). */
+  /** 上次快照以来没了的 id（delta 模式）。 */
   removed: number[]
-  /** true when the inventory was renumbered (model should re-read ids). */
+  /** 清单被重新编号时为 true（模型得重新读一遍 id）。 */
   reindexed: boolean
-  /** Budget accounting: characters cut from main text and items/forms/images dropped by count caps. */
+  /** 预算账：正文裁掉了多少字符，以及撞上数量上限被丢掉的 items/forms/images。 */
   truncated: { mainChars: number; itemsDropped: number; formsDropped: number; imagesDropped: number }
-  /** 总预算（渲染封顶用）。 */
+  /** 总预算（渲染时封顶用）。 */
   budgetChars: number
 }
 
-/** Snapshot budgets: negotiated with the plugin via hello caps. */
+/** 快照预算：握手时和插件按上限协商出来的。 */
 export interface SnapshotBudget {
   maxItems: number
   maxForms: number
   maxChars: number
 }
 
-/** Options for one snapshot build. */
+/** 构建一次快照的选项。 */
 export interface SnapshotOptions {
   delta?: boolean
   region?: string
   budget: SnapshotBudget
 }
 
-/** Headline for a link: same-origin relative path, else host + path. */
+/** 链接的标题行：同源给相对路径，否则给 host + path。 */
 function hrefHeadline(href: string): string {
   try {
     const url = new URL(href, document.baseURI)
@@ -141,23 +136,19 @@ function hrefHeadline(href: string): string {
 }
 
 /**
- * Whether no ancestor hides the subtree by opacity.
+ * 有没有哪个祖先用 opacity 把这棵子树藏起来了。
  *
- * `opacity` does not inherit, so an element inside a faded-out subtree still
- * reports its own `opacity: 1` and keeps a non-zero rectangle. That is exactly
- * how a dismissable modal looks while it is closing or pre-rendered, so a
- * check that reads only the dialog itself would treat it as open and let its
- * invisible controls evict the ones actually on screen.
+ * `opacity` 不继承，所以淡出子树里的元素照样报自己 `opacity: 1`，矩形也还是非零。可关闭的
+ * 模态框在关闭过程中、或者预渲染的时候就是这样，因此光看对话框自己会把它当成打开，让它那些
+ * 看不见的控件把真在屏幕上的控件挤掉。
  *
- * The walk covers every `Element`, not only HTML: an HTML dialog can sit
- * inside an SVG `foreignObject`, and an SVG ancestor that fades the subtree
- * out hides it just as effectively. `display: none` and `visibility: hidden`
- * need no walk here: the first collapses the rectangle `isVisible` already
- * measures, and the second is inherited, so it is already visible in the
- * dialog's own computed style.
+ * 遍历覆盖每一个 `Element`，不限于 HTML：HTML dialog 可能待在 SVG 的 `foreignObject` 里，
+ * 而把整棵子树淡出的 SVG 祖先一样能把它藏住。这里不用管 `display: none` 和
+ * `visibility: hidden`：前者会让 `isVisible` 已经量过的矩形塌掉，后者会继承，所以早就体现在
+ * 对话框自己的计算样式里了。
  *
- * @param el - candidate element.
- * @returns true when no ancestor fades the subtree out.
+ * @param el - 候选元素。
+ * @returns 没有任何祖先让子树淡出时为 true。
  */
 function ancestorsRendered(el: Element): boolean {
   for (let node = el.parentElement; node !== null; node = node.parentElement) {
@@ -167,12 +158,11 @@ function ancestorsRendered(el: Element): boolean {
 }
 
 /**
- * Build a memoized "is this dialog open?" test.
+ * 做一个记住答案的“这个对话框开着吗？”判断。
  *
- * Openness depends only on the dialog, so the ancestor walk is evaluated once
- * per dialog rather than once per candidate element.
+ * 开没开只取决于对话框自己，所以祖先遍历对每个对话框只算一次，而不是每个候选元素都算一遍。
  *
- * @returns a predicate over dialog elements.
+ * @returns 一个作用在对话框元素上的谓词。
  */
 function openDialogTest(): (dialog: Element) => boolean {
   const seen = new Map<Element, boolean>()
@@ -187,17 +177,15 @@ function openDialogTest(): (dialog: Element) => boolean {
 }
 
 /**
- * The open modal surface an element belongs to, if any.
+ * 元素所属的那个已打开模态框，有的话。
  *
- * A modal makes everything behind it inert, so its controls are the real
- * interaction surface. It is also appended late in the DOM, which would
- * otherwise push it past the inventory cap on element-heavy pages and hide
- * the very controls the caller needs. A closed pre-rendered dialog is not
- * visible and must not be promoted.
+ * 模态框会把后面的一切都变成惰性的，所以它的控件才是真正的交互表面。它还往往在 DOM 里追加得
+ * 比较晚，不提升上来就会被挤到清单上限之外——那些控件恰恰是调用方要的。已关闭的预渲染对话框
+ * 不可见，绝不能被提升。
  *
- * @param el - candidate element.
- * @param isOpen - memoized openness test for a dialog element.
- * @returns the owning open dialog, or null.
+ * @param el - 候选元素。
+ * @param isOpen - 作用在对话框元素上、会记住答案的打开判断。
+ * @returns 所属的已打开对话框，或 null。
  */
 function openDialogOf(el: Element, isOpen: (dialog: Element) => boolean): Element | null {
   const dialog = el.closest('[role="dialog"], [aria-modal="true"]')
@@ -205,32 +193,28 @@ function openDialogOf(el: Element, isOpen: (dialog: Element) => boolean): Elemen
 }
 
 /**
- * Build a snapshot of the current page.
+ * 构建当前页面的快照。
  *
- * Reconciles the stable id registry, collects the inventory (dialog-first,
- * then viewport-first, capped), extracts main content (budgeted), and — in
- * delta mode — diffs against the previous snapshot.
+ * 这里要把稳定的 id 注册表、清单收集（对话框优先，其次视口内的优先，都受上限约束）、正文提取
+ * （受预算约束）串起来，delta 模式下还要和上一次快照做 diff。
  *
- * @param ids - the stable id registry (one per content-script lifetime).
- * @param options - delta flag, region selector, and negotiated budgets.
- * @param last - previous snapshot view, or null for the first snapshot.
- * @returns the snapshot view.
+ * @param ids - 稳定的 id 注册表（每个 content script 生命周期一份）。
+ * @param options - delta 标志、区域选择器和协商好的预算。
+ * @param last - 上一次的快照视图，首次快照时为 null。
+ * @returns 快照视图。
  */
 export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: SnapshotView | null): SnapshotView {
   const elements = collectInteractive(document)
   const images = collectImages(document)
-  // Images join the same registry as interactive elements. That is what makes an
-  // image a first-class click target: the model addresses it by index exactly as
-  // it addresses a button, and no step of positioning depends on a model's
-  // estimate of where something is on screen.
+  // 图片和交互元素进同一个注册表，图片才得以成为一等的点击目标：模型按索引寻址图片，跟寻址
+  // 按钮一样，中间不需要哪一步靠模型估摸屏幕位置。
   const { added, removed } = ids.assign([...elements, ...images.map((image) => image.element)])
-  // A renumbering is only meaningful relative to a previous snapshot: the
-  // first snapshot on a fresh document always adds everything.
+  // 重新编号只有相对上一次快照才说得上：新文档的头一次快照必然把什么都算新加。
   const tracked = elements.length + images.length
   const reindexed = last !== null && added + removed > tracked * 0.5
 
-  // Measure viewport and dialog membership once. Calling getBoundingClientRect
-  // from a sort comparator forces repeated layout reads on large pages.
+  // 视口和对话框归属只量一次。在排序比较函数里调 getBoundingClientRect，会让大页面反复
+  // 强制读取布局。
   const isOpenDialog = openDialogTest()
   const elementViews = elements.map((element) => ({
     element,
@@ -271,8 +255,7 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
     items.push(item)
   }
 
-  // Form controls are already part of the visible interactive inventory, so
-  // reuse that scan instead of querying, styling, and measuring them again.
+  // 表单控件本来就属于可见的交互清单，直接复用那次扫描，别再查一遍、算一遍样式、量一遍。
   const formElements = elements.filter((el) => el instanceof HTMLInputElement
     || el instanceof HTMLSelectElement
     || el instanceof HTMLTextAreaElement)
@@ -300,18 +283,15 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
     })
   }
 
-  // Images share the element budget rather than getting a second cap: a page
-  // with sixty thumbnails is exactly the page where an image list must not be
-  // able to crowd out the controls. A third of the item budget, floor four, so
-  // an image-only page still reports something.
+  // 图片和元素共用一份预算，不另开一个上限：一页六十张缩略图，正是图片清单绝不能把控件挤掉
+  // 的那种页面。取条目预算的三分之一、下限为四，纯图片的页面也还能报出内容。
   const imageCap = Math.max(4, Math.floor(options.budget.maxItems / 3))
   const imageViews: ImageView[] = []
   /**
-   * Images that get a marker inside the page text, by element.
+   * 会在页面文本里带标记的图片，按元素索引排。
    *
-   * Built from the same capped set the `Images:` section renders, so a marker and
-   * a section line always describe the same images; the model can look up any
-   * index it sees inline.
+   * 它由 `Images:` 区块渲染的那个受上限约束的集合构建，所以标记和区块行说的永远是同一批
+   * 图片；模型内联看到的任何索引都能查出来。
    */
   const imageIndexByElement = new Map<Element, number>()
   for (const image of images.slice(0, imageCap)) {
@@ -335,9 +315,8 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
   const regionEl = options.region !== undefined && options.region !== ''
     ? document.querySelector(options.region)
     : null
-  // The main text is rendered with a marker at each image's position. The
-  // description cannot be written here — recognition has not happened yet — so the
-  // background fills each marker once it knows the answer.
+  // 正文渲染时会在每张图的位置留一个标记。描述没法在这儿写——识别还没发生——所以标记由
+  // background 拿到答案后再填。
   const mainSource = annotatedText(regionEl ?? mainRoot(document), imageIndexByElement)
   const mainBudget = Math.floor(options.budget.maxChars * 0.5)
   const main = truncate(mainSource, mainBudget)
@@ -350,7 +329,7 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
   const removedIds: number[] = []
   if (options.delta === true && last !== null) {
     if (last.main !== main.text || last.url !== location.href || last.title !== document.title) {
-      changed.add(-1) // -1 = 正文/标题/URL 变化（渲染时说明）
+      changed.add(-1) // -1 = 正文/标题/URL 变了（渲染时再说明）
     }
     for (const item of items) {
       const before = lastItems.get(item.index)
@@ -415,17 +394,17 @@ function sameImage(a: ImageView, b: ImageView): boolean {
     && a.width === b.width && a.height === b.height && a.unavailable === b.unavailable
 }
 /**
- * Render a snapshot as the model-facing text.
+ * 把快照渲染成给模型看的文本。
  *
- * Images appear as described entries, never as pixels: the payload stays a text
- * block, and an image is addressed by the same stable index as a button.
+ * 图片以文字条目的形式出现，绝不出现像素：整个负载就是一块文本，而图片和按钮共用同一套稳定
+ * 索引来寻址。
  *
- * @param view - snapshot to render.
- * @param delta - whether this is a delta render (changes only).
- * @param maxChars - optional render cap for compact derivative responses.
- * @returns the text payload.
+ * @param view - 要渲染的快照。
+ * @param delta - 是不是 delta 渲染（只含变化）。
+ * @param maxChars - 可选渲染上限，用于紧凑的衍生响应。
+ * @returns 文本负载。
  */
-/** 渲染结果的整体预算：主文/清单之外的部分（标题、URL、包装行）也计入。 */
+/** 渲染结果的总预算：标题、URL、包装行这些主文/清单之外的部分也算在里面。 */
 function capRendered(text: string, budgetChars: number): string {
   if (text.length <= budgetChars) return text
   return `${text.slice(0, budgetChars)}…(truncated to the snapshot character budget)`
@@ -451,14 +430,11 @@ function renderForm(form: FormFieldView, includeIdentity: boolean): string {
 }
 
 /**
- * Explain the marker notation once, when a page has images.
+ * 页面有图片时，把标记的含义解释一遍。
  *
- * The main text carries markers the model has to interpret, and an unexplained
- * notation is only marginally better than no notation: the states are what say
- * whether a description exists, is coming, was never asked for, or cannot be had.
- * One line per snapshot, not per image, and it also names the tool that fills the
- * gap — which is how a model learns the notation is actionable rather than
- * decorative.
+ * 正文里带着模型必须会读的标记，而没人解释的记法比没有还强不了多少：这些状态说明描述是已有、
+ * 即将有、从没请求过，还是拿不到。一次快照只占一行，不是每张图一行；它还会点出能补上描述的
+ * 工具——模型由此知道这套记法能动，不是摆设。
  */
 function appendImageLegend(lines: string[], view: SnapshotView): void {
   if (view.images.length === 0) return
@@ -475,14 +451,13 @@ function appendTruncationNotes(lines: string[], view: SnapshotView): void {
 }
 
 /**
- * A short address for an image line.
+ * 图片行上的简短地址。
  *
- * A `data:` URL is the image itself, so rendering it whole would spend the entire
- * character budget on base64 that tells the model nothing the media type does not.
- * Everything else keeps the same path-or-host form links use.
+ * `data:` URL 本身就是图片，整段渲染出来只会把整个字符预算砸在 base64 上，而它告诉模型的东西
+ * 并不比媒体类型多。其余的地址都沿用链接那套 path-or-host 形式。
  *
- * @param src - the image's absolute address.
- * @returns the address as it should appear in the text.
+ * @param src - 图片的绝对地址。
+ * @returns 这个地址在文本里该长什么样。
  */
 function shortSource(src: string): string {
   if (src === '') return ''
@@ -492,18 +467,14 @@ function shortSource(src: string): string {
 }
 
 /**
- * One image as a text line.
+ * 把一张图片写成一行文本。
  *
- * `text-described` is the model-facing signal that DOM text already answers what
- * the image is, so it can be read without a recognition step. The address is a
- * path rather than a full URL for the same reason links render that way: the
- * origin is already in the snapshot header and repeating it on every line
- * spends the character budget without adding information.
+ * `text-described` 是给模型的信号：DOM 文本已经回答了这张图是什么，不用走识别就能读。地址
+ * 用路径而不是完整 URL，道理和链接那儿一样：源在快照头部已经给了，每行再抄一遍只烧字符预算，
+ * 不多给一点信息。
  *
- * The line ends with a marker so the same fill pass that annotates the main text
- * also reports this image's state. The two are redundant for images inside the
- * main flow and necessary for the ones outside it, which have no other position
- * in the text.
+ * 这一行以标记收尾，这样标注正文的同一趟填充也能报出这张图的状态。正文流内的图片，两边是
+ * 冗余；正文流外的图片则非它不可，因为别处没有它们的位置。
  */
 function renderImage(image: ImageView): string {
   const size = image.width > 0 && image.height > 0 ? ` ${image.width}x${image.height}` : ''

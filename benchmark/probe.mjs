@@ -32,8 +32,8 @@ try {
     startUrl: `${site.origin}/health`,
   })
   resources.push(extension)
-  // Exercise actual authenticated unary and V3 follow/history protocols
-  // without submitting a prompt or invoking any model.
+  // 演练真实的、已认证的 unary 以及 V3 的 follow/history 协议，但不提交任何
+  // prompt，也不调用任何模型。
   for (const backend of [playwright, extension]) {
     const created = await backend.client.rpc('session.create', { cwd: runtimeRoot })
     const catalog = await backend.client.rpc('session.modelCatalog')

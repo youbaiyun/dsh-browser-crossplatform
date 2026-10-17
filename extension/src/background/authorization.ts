@@ -1,4 +1,4 @@
-/** Pure authorization policy for model-requested browser tools. */
+/** 针对模型请求的浏览器工具的纯授权策略。 */
 
 import type { ToolCall } from './tools.ts'
 import type { TabFrame } from './frames.ts'
@@ -17,10 +17,10 @@ const STATE_CHANGING_ACTIONS = new Set([
   'browser_reload',
 ])
 
-/** Return an approval prompt, or undefined when this call needs no prompt. */
+/** 返回一个审批提示；当这次调用不需要提示时返回 undefined。 */
 export function approvalPromptForCall(
   call: ToolCall,
-  sharePageContent: 'ask' | 'auto' | 'off',
+  sharePageContent: 'ask' | 'auto',
   frames: TabFrame[],
   locale: UiLocale = getUiLocale(),
 ): ApprovalPrompt | undefined {
@@ -47,7 +47,7 @@ export function approvalPromptForCall(
       kind: 'action',
       action: call.name,
       summary: summarizeAction(call, locale),
-      // A new tab does not mutate the current page; only the destination matters.
+      // 新标签页不会动当前页面；有意义的只有目标地址。
       origins: destination === undefined ? [] : [destination],
       canTrust: destination !== undefined,
     }
@@ -59,8 +59,7 @@ export function approvalPromptForCall(
   if (call.name === 'browser_navigate') {
     const destination = originFromUrl(typeof call.args.url === 'string' ? call.args.url : '')
     if (destination !== undefined && !origins.includes(destination)) origins.push(destination)
-    // Do not let an invalid, opaque, or cross-origin navigation become a
-    // back door for adding the current page to the persistent allowlist.
+    // 别让一次无效、不透明或跨域的导航，变成把当前页面塞进持久允许列表的后门。
     canTrust = destination !== undefined && origins.length === 1 && origins[0] === destination
   }
   return {
@@ -68,8 +67,8 @@ export function approvalPromptForCall(
     action: call.name,
     summary: summarizeAction(call, locale),
     origins,
-    // Cross-origin/invalid navigation and unknown history destinations always
-    // require a fresh decision; they must never expand trust implicitly.
+    // 跨域/无效的导航和未知的历史目标，永远要重新做一次决定；
+    // 它们绝不能悄悄地扩大信任范围。
     canTrust,
   }
 }

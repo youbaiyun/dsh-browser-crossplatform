@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "dsh Browser Extension"
+    "message": "DSH Browser Extension (All Platforms)"
   },
   "extensionDescription": {
     "message": "Browser executor for the dsh desktop app: reads and operates your page, signed in, no screenshots. Image look-up: deepseek-flash."

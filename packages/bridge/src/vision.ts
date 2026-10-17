@@ -1,12 +1,9 @@
 /**
- * The multimodal call the desktop makes on the extension's behalf.
+ * 桌面端替扩展发出的多模态调用。
  *
- * Only the desktop can hold the model credential without putting it in a browser
- * profile, and only the desktop can reach the network through the machine's own
- * proxy, VPN, or client certificate. This module is the transport: the prompt,
- * the request body, and the response parser are shared with the extension's own
- * outbound path, so "which side calls the model" changes nothing about what is
- * asked or what counts as an answer.
+ * 只有桌面端能在不把模型凭据放进浏览器 profile 的前提下拿着它，也只有桌面端能经本机自己
+ * 的代理、VPN 或客户端证书访问网络。本模块只是传输层：提示词、请求体和响应解析都和扩展
+ * 自己的出站路径共用，所以“由哪一侧调模型”既不影响问什么，也不影响什么算作答。
  *
  * @module
  */
@@ -23,20 +20,20 @@ import {
 
 export type { VisionCallContext, VisionCallResult }
 
-/** A 1×1 transparent PNG: the smallest thing a vision endpoint will accept. */
+/** 一张 1×1 的透明 PNG：视觉端点愿意接受的最小东西。 */
 export const PROBE_IMAGE_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
-/** What a probe learned about the deployment's cost controls. */
+/** 一次探测了解到的该部署成本控制情况。 */
 export interface VisionProbe {
   ok: boolean
-  /** Reasoning tokens the response reported; 0 when none or unreported. */
+  /** 响应上报的推理 token 数；没有或未上报时为 0。 */
   reasoningTokens: number
   message: string
 }
 
 export interface VisionConfig extends VisionCallConfig {
-  /** Chat-completions base URL. */
+  /** chat-completions 的基础 URL。 */
   baseUrl: string
   apiKey: string
   timeoutMs: number
@@ -58,10 +55,10 @@ export class VisionClient {
   }
 
   /**
-   * Describe one image.
+   * 描述一张图片。
    *
-   * @param request - normalized bytes plus the page context around them.
-   * @returns one line of description, or a classified failure.
+   * @param request - 规范化后的字节，外加它们周围的页面上下文。
+   * @returns 一行描述，或分类后的失败。
    */
   async describe(request: VisionRequest): Promise<VisionResult> {
     const endpoint = `${this.config.baseUrl.replace(/\/$/, '')}/chat/completions`
@@ -95,14 +92,13 @@ export class VisionClient {
   }
 
   /**
-   * Send one minimal request and read the billing back.
+   * 发一次最小的请求，把计费读回来。
    *
-   * A thinking switch can be ignored silently — the request succeeds and the
-   * answer looks fine, while every image costs several times what it should. The
-   * only way to know is to look at `usage`, so this sends the smallest possible
-   * image once and reports what came back.
+   * thinking 开关可能被悄悄忽略——请求成功了，答案看着也没问题，而每张图片的花费是它本该
+   * 有的好几倍。唯一能知道的办法就是去看 `usage`，所以这里把尽可能小的图片发一次，并报告
+   * 拿回来的东西。
    *
-   * @returns what the provider reported, or why the probe could not run.
+   * @returns 提供方报告的内容，或这次探测跑不起来的原因。
    */
   async probe(): Promise<VisionProbe> {
     const endpoint = `${this.config.baseUrl.replace(/\/$/, '')}/chat/completions`

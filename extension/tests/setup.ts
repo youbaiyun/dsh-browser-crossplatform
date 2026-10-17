@@ -1,7 +1,7 @@
 /**
- * jsdom test setup: jsdom has no layout engine, so getBoundingClientRect
- * returns all zeros (which the visibility filter reads as hidden), and it
- * does not implement CSS.escape. Stub both with browser-equivalent behavior.
+ * jsdom 测试环境：jsdom 没有布局引擎，getBoundingClientRect
+ * 返回全零（可见性过滤器会读成隐藏），而且它
+ * 没实现 CSS.escape。给这两个打上和浏览器行为一致的桩。
  */
 
 const FAKE_RECT: DOMRect = {
@@ -33,15 +33,15 @@ Object.defineProperty(globalThis, 'CSS', {
 })
 
 /**
- * A controllable `requestAnimationFrame`.
+ * 一个可控的 `requestAnimationFrame`。
  *
- * The panel coalesces streaming repaints to one per frame, which is what keeps a long reply
- * from freezing it. jsdom does not implement `requestAnimationFrame` at all, so without a
- * stub every streaming spec would throw. Rather than making specs async just to wait a
- * frame, the callbacks are held here and released on demand.
+ * 面板把流式重绘合并成每帧一次，长回复因此
+ * 才不会把它冻住。jsdom 完全没实现 `requestAnimationFrame`，所以没有
+ * 这个桩，每个流式 spec 都会抛错。与其为了等一帧把 spec 改成异步，
+ * 不如把回调留在这里按需释放。
  *
- * Nothing runs on its own: a spec that prints must call `flushAnimationFrames()`, which
- * also makes the coalescing observable — a frame's worth of deltas produces one repaint.
+ * 不会自己跑任何东西：要打印输出的 spec 必须调 `flushAnimationFrames()`，这也
+ * 让合并行为变得可观测——一帧量的增量只会触发一次重绘。
  */
 export const flushAnimationFrames = (maxRounds = 8): void => {
   for (let round = 0; round < maxRounds; round++) {
@@ -71,18 +71,18 @@ Object.defineProperty(globalThis, 'cancelAnimationFrame', {
 })
 
 /**
- * No test may reach the network.
+ * 任何测试都不许访问网络。
  *
- * The background probes loopback ports looking for the bridge, so a spec that
- * loads it without stubbing `fetch` talks to whatever the developer happens to
- * be running. That makes results depend on the machine rather than the code, and
- * such a difference usually surfaces on someone else's checkout.
+ * 后台会探测回环端口找 bridge，所以一个加载了它
+ * 却没打桩 `fetch` 的 spec，会去跟开发者恰好正开着的
+ * 东西对话。这会让结果取决于机器而不是代码，而
+ * 这种差异通常会在别人的 checkout 上冒出来。
  *
- * Specs that need a bridge stub `fetch` themselves. Everything else gets a
- * refusal, which is what "no bridge on this port" looks like.
+ * 需要 bridge 的 spec 自己打桩 `fetch`。其余的都拿到
+ * 一个拒绝，这正是「这个端口上没有 bridge」的样子。
  *
- * A guard, not a fix for a known failure: the suite passes with and without it
- * today. It is here so that stays true.
+ * 这是一道防线，不是针对某个已知失败的修复：今天有没有它
+ * 测试套件都能通过。它在这儿就是为了让这一点一直成立。
  */
 Object.defineProperty(globalThis, 'fetch', {
   configurable: true,

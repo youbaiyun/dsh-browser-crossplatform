@@ -1,22 +1,22 @@
 /**
- * One-shot rendezvous between an action that unloads a frame and the content
- * script installed in its replacement document.
+ * 会卸载某个 frame 的动作，和装进它替代文档里的 content script 之间，
+ * 做一次性会合。
  *
  * @module
  */
 
-/** Default ceiling for replacing a model-driven snapshot round trip. */
+/** 顶替一次模型驱动的 snapshot 往返时的默认上限。 */
 const NAVIGATION_READY_TIMEOUT_MS = 8_000
 
-/** A cancellable wait for the next content-script document in one frame. */
+/** 对某个 frame 里下一个 content-script 文档的可取消等待。 */
 export interface NavigationWait {
   ready: Promise<boolean>
   cancel: () => void
 }
 
 /**
- * Listen before dispatching a navigation so a fast replacement document
- * cannot announce readiness between the action response and listener setup.
+ * 派发导航之前就开始监听，这样替换得快的文档，没法在动作响应和监听器装好之间
+ * 抢先宣告自己已就绪。
  */
 export function waitForNextDocumentReady(
   tabId: number,
@@ -34,9 +34,8 @@ export function waitForNextDocumentReady(
       if ((message as { type?: unknown }).type !== 'DSH_CONTENT_READY') return
       if (sender.tab?.id !== tabId || (sender.frameId ?? 0) !== frameId) return
       if (previousDocumentId !== undefined && sender.documentId === previousDocumentId) return
-      // A newly created Firefox tab can run the content script in its initial
-      // about:blank document. With no baseline document id, accept only the
-      // HTTP(S) destination document that browser_open_tab can navigate to.
+      // 新建的 Firefox 标签页可能把它最初的 about:blank 文档拿来跑 content script。
+      // 没有基线 document id 时，只接受 browser_open_tab 导航得到的 HTTP(S) 目标文档。
       if (previousDocumentId === undefined
         && (typeof sender.url !== 'string' || !/^https?:\/\//i.test(sender.url))) return
       finish(true)

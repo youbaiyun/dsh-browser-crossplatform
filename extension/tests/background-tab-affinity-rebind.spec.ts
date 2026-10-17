@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 
 /**
- * Background side of the tab-affinity rebind flow, driven through the
- * `dsh-control` port.
+ * tab 亲和性重绑流程的后台一侧，通过
+ * `dsh-control` 端口驱动。
  *
- * The control strip is a short-lived popup: it asks the worker to move control
- * to the tab the user is looking at, and the worker owns the deadline and the
- * binding. Nothing here depends on a panel staying open, because the strip
- * closing is normal.
+ * 控制条是一个短命的弹窗：它请求 worker 把控制权
+ * 挪到用户正在看的标签页，截止时间和绑定都由 worker 持有。
+ * 这里没有任何东西依赖面板一直开着，因为控制条
+ * 关掉是正常情况。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -59,7 +59,7 @@ function mockChrome() {
     action: {
       setBadgeText: vi.fn(async () => {}),
       setBadgeBackgroundColor: vi.fn(async () => {}),
-      // The toolbar icon has no popup: clicking it opens the control page.
+      // 工具栏图标没有 popup：点击它会打开控制页。
       onClicked: chromeEvent<[chrome.tabs.Tab]>(),
     },
     alarms: {
@@ -132,7 +132,7 @@ function latestState(postMessage: MessageSpy): ControlState | undefined {
   return sentMessages(postMessage).filter((message) => message.type === 'state').at(-1)?.state
 }
 
-/** Boot the worker (no reachable bridge) and open one control strip. */
+/** 用一个够不着的 bridge 启动 worker，再打开一个控制条。 */
 async function connectControlStrip() {
   const chromeMock = mockChrome()
   vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })))
@@ -195,7 +195,7 @@ describe('background tab-affinity rebind protocol', () => {
         error: 'The current tab could not be determined; the existing binding was left unchanged',
       })
     })
-    // A failed rebind reports itself and touches nothing else.
+    // 失败的重绑只报告自己，不碰别的任何东西。
     expect(sentMessages(postMessage)).toEqual([{
       type: 'affinity.rebind.result',
       id: 'failed-rebind',
@@ -236,9 +236,9 @@ describe('background tab-affinity rebind protocol', () => {
     })
     vi.useRealTimers()
 
-    // The port protocol has no cancellation channel, so a query that outlives
-    // the deadline still finishes; the strip is only guaranteed the timeout it
-    // already received.
+    // 端口协议没有取消通道，所以一个超了截止时间的查询
+    // 照样会跑完；控制条能拿到的保证只有它
+    // 已经收到的那个超时。
     finishQuery([tab(2)])
     await new Promise((resolve) => { setTimeout(resolve, 0) })
   })

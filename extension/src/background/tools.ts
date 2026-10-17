@@ -1,9 +1,8 @@
 /**
- * Tool dispatch: executes `tool.call` frames in an explicitly selected tab via
- * the content script and answers with the text-only result.
+ * 工具分发：在显式选定的标签页里通过 content script 执行 `tool.call` 帧，再用纯文本结果作答。
  *
- * The background service owns tab-affinity policy. Direct callers may omit a
- * target for backward-compatible active-tab dispatch in isolated tests.
+ * 标签页亲和策略归 background service 管。为了让隔离测试里的活动标签页分发保持向后兼容，
+ * 直接调用方可以省掉目标。
  *
  * @module
  */
@@ -26,25 +25,25 @@ import { waitForNextDocumentReady } from './navigation.ts'
 import type { ApprovalAuthorization, ApprovalPrompt } from '../security/approval.ts'
 import { getUiLocale } from '../i18n.ts'
 
-/** A tool call from the bridge. */
+/** 来自 bridge 的一次工具调用。 */
 export interface ToolCall {
   id: string
   name: string
   args: Record<string, unknown>
-  /** Server-authored wall-clock deadline; absent only in direct unit tests. */
+  /** 服务器给的墙钟截止时间；只有直接单元测试里才会缺。 */
   expiresAt?: number
-  /** Owning Agent session, when supplied by a current bridge. */
+  /** 发起这次调用的 Agent 会话；当前 bridge 提供了才有值。 */
   sessionId?: string
 }
 
-/** The wire answer for one tool call. */
+/** 一次工具调用的线上应答。 */
 export interface ToolAnswer {
   ok: boolean
   result?: unknown
   error?: ToolError
 }
 
-/** Snapshot limits negotiated with the bridge and forwarded after lazy injection. */
+/** 和 bridge 协商好、惰性注入之后再转发的快照限制。 */
 export interface ContentBudget {
   maxItems: number
   maxChars: number
@@ -84,7 +83,7 @@ const STATE_CHANGING_PAGE_TOOLS = new Set([
   'browser_forward',
   'browser_reload',
 ])
-/** Tools that operate on the browser tab collection rather than one page document. */
+/** 操作对象是整个标签页集合、不是某个页面文档的工具。 */
 export const TAB_MANAGEMENT_TOOL_NAMES = new Set([
   'browser_list_tabs',
   'browser_follow_tab',
@@ -92,12 +91,10 @@ export const TAB_MANAGEMENT_TOOL_NAMES = new Set([
 ])
 
 /**
- * Every `browser_*` tool this worker can execute.
+ * 这个 worker 能执行的每一个 `browser_*` 工具。
  *
- * Sorted so the list can be shown verbatim in a rejection message. It is the
- * authority for a user-typed command: a name outside this set is refused before
- * anything is dispatched, because an unknown name has no call shape to validate
- * and must never reach the page.
+ * 排过序，所以这份列表能原样放进拒绝消息里。用户输入的命令就以它为准：不在集合里的名字在分发
+ * 任何东西之前就被拒掉，因为未知名字没有可校验的调用形态，绝不能让它们到页面上。
  */
 export const BROWSER_TOOL_NAMES: readonly string[] = [
   'browser_back',
@@ -120,32 +117,32 @@ const NAVIGATION_SNAPSHOT_GUIDANCE = 'Navigation completed and the current page 
 const pendingInjections = new Map<number, Promise<void>>()
 const snapshotDocumentsByTab = new Map<number, Map<number, string>>()
 
-/** Forget delta/element state whenever the user explicitly follows a new tab. */
+/** 用户显式跟到一个新标签页时，把 delta/element 状态忘掉。 */
 export function resetTabSnapshot(tabId: number): void {
   snapshotDocumentsByTab.delete(tabId)
 }
 
-/** Whether a successful tool may have changed the controlled tab's page URL. */
+/** 一次成功的工具调用有没有可能改掉受控标签页的页面 URL。 */
 export function isNavigationCandidateTool(name: string): boolean {
   return NAVIGATION_CANDIDATE_TOOLS.has(name)
 }
 
-/** Whether a tool can run without first resolving the current controlled tab. */
+/** 这个工具是不是不用先解析当前受控标签页就能跑。 */
 export function isTabManagementTool(name: string): boolean {
   return TAB_MANAGEMENT_TOOL_NAMES.has(name)
 }
 
-/** Tab-affinity services owned by the background entry point. */
+/** 由 background 入口点持有的标签页亲和服务。 */
 export interface TabManagementContext {
-  /** Skip all browser approval prompts after the user enables unrestricted access. */
+  /** 用户开了不受限访问之后，所有浏览器审批提示都跳过。 */
   unrestrictedAccess: boolean
-  /** Controlled tab for the calling session, when one still exists. */
+  /** 调用方会话的受控标签页（还在的话）。 */
   controlledTabId?: number
-  /** Rebind subsequent tools to one existing tab without activating it. */
+  /** 把后续工具重新绑到某个已有标签页上，但不激活它。 */
   followTab?: (tab: chrome.tabs.Tab) => void | Promise<void>
-  /** Mark the point after which a state-changing operation cannot be withdrawn. */
+  /** 标记一个时点，过了它，状态变更操作就撤不回来了。 */
   commitAction?: () => void
-  /** Restore withdrawability when a content-script action was not delivered. */
+  /** content-script 操作没送到时，把可撤回性恢复回来。 */
   rollbackActionCommit?: () => void
 }
 
@@ -159,7 +156,7 @@ function isInjectablePage(url: string | undefined): boolean {
   return url !== undefined && /^https?:\/\//i.test(url)
 }
 
-/** Inject the packaged content script once per tab, coalescing concurrent recovery attempts. */
+/** 每个标签页只注入一次打包好的 content script，并发来的恢复尝试合并成一次。 */
 async function injectContentScript(tabId: number): Promise<void> {
   let pending = pendingInjections.get(tabId)
   if (pending === undefined) {
@@ -176,6 +173,41 @@ async function injectContentScript(tabId: number): Promise<void> {
   }
 }
 
+/**
+ * 一次*小动作*分发最多能多久不回来：click、type、press、scroll、select。
+ *
+ * 它们只做一件有边界的事、立刻作答，所以等这么久就说明接收端已经没了，而不是忙。
+ */
+export const CONTENT_ACTION_TIMEOUT_MS = 10_000
+
+/**
+ * 一次必须把整个页面序列化出来的分发，最多能多久不回来。
+ *
+ * `browser_snapshot` 和 `browser_get_text` 要遍历实时 DOM（含内联 frame），在重型页面上确实
+ * 慢——是秒级，不是毫秒级。以前一刀切的十秒上限会在这种活儿干到一半时把它取消，报成脚本无响应，
+ * 于是“这个页面很大”就变成了“这个页面坏了”。上限还是留着，因为一次永远不结束的调用是模型连
+ * 反应都做不出来的唯一一种失败；只是把它放到慢但真实的工作也装得下的位置上。
+ */
+export const CONTENT_READ_TIMEOUT_MS = 30_000
+
+/** 分发出去要序列化页面内容、而不是执行单个操作的那些工具。 */
+const CONTENT_READ_TOOLS = new Set(['browser_snapshot', 'browser_get_text'])
+
+/** 单次分发的上限，看这次分发要干什么。 */
+function contentActionTimeoutMs(call: ToolCall): number {
+  return CONTENT_READ_TOOLS.has(call.name) ? CONTENT_READ_TIMEOUT_MS : CONTENT_ACTION_TIMEOUT_MS
+}
+
+/**
+ * 派发出去、始终没等到应答时，统一用这一句话回报。
+ *
+ * 共用一句，是为了让走到这儿的两条路——恢复路径里没能归类的拒绝，以及
+ * {@link CONTENT_ACTION_TIMEOUT_MS} 这个上限——在模型读来完全一样。两者都意味着“这次分发可能
+ * 执行了，也可能没有”；两者都证不出它没执行，所以这两条路上恢复逻辑都刻意不重新分发，措辞也是
+ * 让模型重新 `browser_snapshot` 一次，而不是盲目重试同一个调用。
+ */
+const DISPATCH_UNANSWERED = 'The content script stopped responding after the operation was dispatched. Call browser_snapshot before continuing.'
+
 async function sendAction(
   tabId: number,
   call: ToolCall,
@@ -183,39 +215,70 @@ async function sendAction(
   budget?: ContentBudget,
   includePageDelta: boolean = false,
 ): Promise<unknown> {
-  return chrome.tabs.sendMessage(tabId, {
-    type: 'DSH_ACTION',
-    action: call.name,
-    args: withoutFrame(call.args),
-    ...budget === undefined ? {} : { budget },
-    ...includePageDelta ? { includePageDelta: true } : {},
-  }, frame.documentId === undefined ? { frameId: frame.frameId } : { documentId: frame.documentId })
-}
-
-function contentScriptReceiverMissing(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Receiving end does not exist')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => { reject(new Error(DISPATCH_UNANSWERED)) }, contentActionTimeoutMs(call))
+  })
+  try {
+    // `finally` 成功和失败两条路上都会清定时器，所以响应再快也不会留下一个挂着的定时器，
+    // 把 worker 一直唤醒。
+    return await Promise.race([
+      chrome.tabs.sendMessage(tabId, {
+        type: 'DSH_ACTION',
+        action: call.name,
+        args: withoutFrame(call.args),
+        ...budget === undefined ? {} : { budget },
+        ...includePageDelta ? { includePageDelta: true } : {},
+      }, frame.documentId === undefined ? { frameId: frame.frameId } : { documentId: frame.documentId }),
+      timeout,
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /**
- * What each numbered image was, as of the last snapshot that numbered it.
+ * 一次分发失败，是不是意味着接收方已经不在了。
  *
- * Element indices are a per-frame namespace that the page can invalidate at any
- * moment by re-rendering, and the model addresses images by number. Remembering
- * which address a number pointed at is what turns a stale index from a dead end
- * into something the content script can still resolve. Keyed by tab and frame
- * because the same number in two frames names two different images.
+ * 自愈路径（先注入、再重新分发）只在接收端*确实没了*时才安全：替换文档里那个全新的 content
+ * script 正是重试需要的东西。所以这里刻意只认“另一端不在那儿”的形态——frame 没了、文档被销毁、
+ * 上下文失效。
+ *
+ * 它绝不能匹配一次操作已经派发*之后*才关掉的消息端口。从这儿看两者一模一样，但它们不是同一件
+ * 事：页面可能已经把操作做了，只是回复丢了，而凭这条证据重新分发 `browser_click` 会点两次。
+ * 这种发送方有意报成不可恢复；{@link sendAction} 里的超时也一样从不重试。
+ *
+ * frame 消息按里面的数字匹配，不按裸短语 `was removed` 匹配。宽松的子串会把页面来的无关失败也
+ * 一起吞掉——某个元素、某个 observer、某个 listener——而这里每匹配一次，就同时授权一次重新分发
+ * 和一次状态变更操作的回滚。范围必须窄，不然一次真点击就变成两次。
+ */
+function contentScriptReceiverMissing(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message
+  if (message.includes('Receiving end does not exist')) return true
+  if (message.includes('Could not establish connection')) return true
+  if (/frame with id \d+ was removed/iu.test(message)) return true
+  if (message.includes('Extension context invalidated')) return true
+  return false
+}
+
+/**
+ * 每个带编号的图片，在最后一次为它编号的那份快照里是什么。
+ *
+ * 元素索引是 per-frame 的命名空间，页面一次重渲染就能让它失效，而模型指代图片用的就是编号。
+ * 记住一个编号曾经指向哪个地址，才把过期索引从死路变成 content script 还能解析的东西。键按
+ * 标签页和 frame 分，因为两个 frame 里的同一个编号是两张不同的图片。
  */
 const rememberedImageIdentities = new Map<string, Map<number, string>>()
 
-/** Above this, the oldest remembered numbers are dropped. */
+/** 超过这个数量，最旧的已记住编号就被丢掉。 */
 const REMEMBERED_IDENTITY_LIMIT = 500
 /**
- * Above this many tab/frame keys, the least recently snapshotted frame is dropped.
+ * tab/frame 键超过这么多个，最久没被快照过的 frame 就被丢掉。
  *
- * The inner bound alone would still leak: a closed tab or a destroyed iframe
- * leaves its key behind forever, and nothing calls back to say the frame is gone.
- * Key count grows with every tab and iframe ever snapshotted, so it needs a bound
- * of its own rather than only a bound on what each key holds.
+ * 只卡内层上限照样会漏：关掉的标签页、销毁的 iframe 会把自己的键永远留着，而没有任何回调来说
+ * 这个 frame 没了。键的数量会随着每个被快照过的标签页和 iframe 往上涨，所以它得有自己的上限，
+ * 不能只给每个键里的内容设上限。
  */
 const REMEMBERED_IDENTITY_KEY_LIMIT = 64
 
@@ -224,14 +287,13 @@ function identityMemoryKey(tabId: number, frameId: number): string {
 }
 
 /**
- * Record the identity map one snapshot answer carried.
+ * 记下一次快照应答带来的身份映射。
  *
- * Called per frame with that frame's own map, so a number is never learned from
- * the wrong document.
+ * 按 frame 调用，传的也是该 frame 自己的映射，这样编号绝不会从错的文档那儿学来。
  *
- * @param tabId - the tab the snapshot was taken in.
- * @param frameId - the frame the map belongs to.
- * @param identities - the identities that frame reported.
+ * @param tabId - 拍下这张快照的标签页。
+ * @param frameId - 这个映射所属的 frame。
+ * @param identities - 该 frame 报上来的身份。
  */
 export function rememberImageIdentities(
   tabId: number,
@@ -242,15 +304,14 @@ export function rememberImageIdentities(
   const key = identityMemoryKey(tabId, frameId)
   const byNumber = rememberedImageIdentities.get(key) ?? new Map<number, string>()
   for (const entry of identities) byNumber.set(entry.index, entry.identity)
-  // Bounded: one long-lived frame must not accumulate a number per image forever.
+  // 有上限：一个长期活着的 frame 不能为每张图无限攒编号。
   while (byNumber.size > REMEMBERED_IDENTITY_LIMIT) {
     const oldest = byNumber.keys().next()
     if (oldest.done === true) break
     byNumber.delete(oldest.value)
   }
-  // Re-insert rather than plain `set`: setting an existing key keeps its original
-  // position, so the key bound below would evict by creation order instead of by
-  // which frame has gone longest without a snapshot.
+  // 先删再插，不直接 `set`：对已有的键 set 会保住它原来的位置，下面的键上限就只能按创建顺序
+  // 驱逐，而不是按哪个 frame 最久没被快照过。
   rememberedImageIdentities.delete(key)
   rememberedImageIdentities.set(key, byNumber)
   while (rememberedImageIdentities.size > REMEMBERED_IDENTITY_KEY_LIMIT) {
@@ -260,21 +321,20 @@ export function rememberImageIdentities(
   }
 }
 
-/** Exposed for tests: what a later describe call would offer as a hint. */
+/** 暴露给测试：之后 describe 调用会当作提示提供的内容。 */
 export { rememberedImageIdentities }
 
 /**
- * Resolve one image on the controlled tab, for the vision pipeline.
+ * 在受控标签页上解析出一张图片，给视觉流水线用。
  *
- * Kept in this module because injection, frame selection and answer validation
- * are its business: the vision path should not have to reimplement them, and if
- * it did, the two copies would disagree about what a valid page answer is.
+ * 留在这个模块里，是因为注入、frame 选择和应答校验本来就归它管：视觉路径不用再实现一遍，真
+ * 实现一遍，两份代码对“什么才算有效的页面应答”迟早会不一致。
  *
- * @param tabId - the controlled tab.
- * @param index - the image's inventory index from the latest snapshot.
- * @param frameId - the frame that owns the index; element indices are per frame.
- * @param signal - bridge lifetime; cancellation stops before any page action.
- * @returns the resolved image, or a stable error answer.
+ * @param tabId - 受控标签页。
+ * @param index - 这张图在最新快照里的清单索引。
+ * @param frameId - 拥有该索引的 frame；元素索引是按 frame 分的。
+ * @param signal - bridge 生命周期；取消会在任何页面操作之前停下。
+ * @returns 解析出的图片，或一个稳定的错误应答。
  */
 export async function requestImageTarget(
   tabId: number,
@@ -290,9 +350,8 @@ export async function requestImageTarget(
   if (frame === undefined) {
     return { ok: false, error: { code: 'action-failed', message: `Frame ${String(frameId)} does not exist or has navigated. Call browser_snapshot again.` } }
   }
-  // The hint is what that number meant when the snapshot was taken. It is sent
-  // only as a fallback: the content script prefers the live index and reaches for
-  // this exclusively when the index no longer resolves.
+  // 这个提示是该编号拍快照时的含义。只当回退发出去：content script 先用实时索引，索引解析不出来
+  // 了才轮到它。
   const remembered = rememberedImageIdentities.get(identityMemoryKey(tabId, frameId))?.get(index)
   const call: ToolCall = {
     id: 'image-target',
@@ -303,18 +362,30 @@ export async function requestImageTarget(
   try {
     response = await sendAction(tabId, call, frame)
   } catch (error: unknown) {
-    // A tab restored before the worker started has no content script yet; one
-    // injection is the difference between "no such image" and "not listening".
+    // 在 worker 起来之前就恢复的标签页还没有 content script；注入一次，就是“没有这张图片”和
+    // “没人听”的区别。
     if (!contentScriptReceiverMissing(error)) throw error
-    await injectContentScript(tabId)
-    response = await sendAction(tabId, call, frame)
+    // 注入和第二次分发都用模型已经在用的词作答。放任任何一个拒绝逃出去，这次调用就会被报成
+    // `internal`，既没指出任何页面级原因，也没给下一步，而对同一个页面，一次普通快照会说它是
+    // `content-unavailable`。
+    try {
+      await injectContentScript(tabId)
+      response = await sendAction(tabId, call, frame)
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: 'content-unavailable',
+          message: 'The content script could not be loaded on this page, so the image could not be resolved. Call browser_snapshot again before retrying.',
+        },
+      }
+    }
   }
   if (!isToolAnswer(response)) {
     return { ok: false, error: { code: 'content-unavailable', message: 'The page content script returned an invalid response.' } }
   }
   if (!response.ok) {
-    // `ToolAnswer.ok` is a plain boolean rather than a discriminant, so the
-    // failure is rebuilt here instead of relying on narrowing.
+    // `ToolAnswer.ok` 只是个普通布尔值，不是判别式，所以这里把失败重建出来，不靠类型收窄。
     return {
       ok: false,
       error: response.error ?? { code: 'content-unavailable', message: 'The page refused to describe that image.' },
@@ -330,7 +401,7 @@ export async function requestImageTarget(
   return { ok: true, target }
 }
 
-/** Whether a content answer's `image` field is the shape the pipeline expects. */
+/** content 应答里的 `image` 字段是不是流水线要的形态。 */
 function isImageTarget(value: unknown): value is ImageTarget {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as ImageTarget
@@ -433,7 +504,7 @@ function cancelled(): ToolAnswer {
   return { ok: false, error: { code: 'bridge-closed', message: 'The browser tool call was cancelled.' } }
 }
 
-/** Preserve the factual approval outcome for the model without prescribing a response. */
+/** 只把审批的既成事实告诉模型，不规定它该怎么回应。 */
 function approvalFailure(approval: ApprovalPrompt, authorization: Exclude<ApprovalAuthorization, 'approved'>): ToolAnswer {
   switch (authorization) {
     case 'denied':
@@ -502,7 +573,7 @@ function answerNavigationPending(answer: ToolAnswer): boolean {
     && (answer.result as { navigationPending?: unknown }).navigationPending === true
 }
 
-/** Keep extension-authored action status outside the nonce-bound page-data boundary. */
+/** 让扩展自己写的操作状态待在受 nonce 约束的页面数据边界之外。 */
 function wrapActionDelta(status: string, pageContent: string, frame: TabFrame, maxChars: number): string {
   const prefix = `${status}\n${ACTION_DELTA_GUIDANCE}`
   const separator = '\n\n'
@@ -556,15 +627,14 @@ async function snapshotAllFrames(
       continue
     }
     capturedDocuments.set(frame.frameId, frameDocumentKey(frame))
-    // Filled per frame, from that frame's own identity map: element indices are a
-    // per-frame namespace, so the same number in two iframes names two different
-    // images and a tab-wide fill would describe the wrong one.
+    // 按 frame 填充，用的是该 frame 自己的身份映射：元素索引是 per-frame 的命名空间，两个
+    // iframe 里的同一个编号是两张不同的图片，全标签页范围一起填就会描述错的那张。
     const filled = fillImageStates(text, answer, vision)
-    // The same map, kept past the render: a describe call arriving after the page
-    // re-rendered needs to know what the number it was given used to point at.
+    // 这份映射渲染之后还留着：一个在页面重渲染之后才到的 describe 调用，得知道给它的那个编号
+    // 曾经指向什么。
     rememberImageIdentities(tabId, frame.frameId, answerImageIdentities(answer))
-    // Only the main frame's text is remembered as "the page": a sidebar or ad
-    // iframe would otherwise overwrite the page's own numbers with its own.
+    // 只有主 frame 的文本会被记成“这个页面”：否则侧边栏、广告 iframe 会拿自己的编号盖掉页面
+    // 自己的编号。
     if (frame.frameId === 0) vision?.sawPageText(stripMarkers(text))
     if (frame.frameId === 0) sections.push(filled)
     else sections.push(frameHeader(frame), filled)
@@ -635,8 +705,8 @@ async function dispatchOnce(
   if (frame === undefined) {
     return unavailable(`Frame ${frameId} does not exist or has navigated. Call browser_snapshot again.`)
   }
-  // No await occurs between this guard and tabs.sendMessage, so an expired
-  // approval cannot cross the final state-changing dispatch boundary.
+  // 从这个 guard 到 tabs.sendMessage 之间不会 await，所以过了期的审批越不过最后那道状态变更
+  // 分发边界。
   if (isCancelled(call, signal)) return cancelled()
   if (targetStillAllowed?.() === false) return targetChanged()
   const hasSnapshotBaseline = snapshotDocumentsByTab.get(tabId)?.get(frameId) === frameDocumentKey(frame)
@@ -682,8 +752,7 @@ async function dispatchOnce(
         const snapshot = await snapshotAfterNavigation(tabId, call, text, budget, targetStillAllowed, vision)
         if (snapshot !== undefined) return snapshot
       } catch {
-        // Preserve the successful navigation status when the replacement page
-        // becomes unavailable before its opportunistic snapshot completes.
+        // 替换页面在机会性快照做完之前就读不了时，导航成功这个状态保留着。
       }
     }
   } else {
@@ -706,18 +775,16 @@ async function dispatchOnce(
 }
 
 /**
- * Replace the image markers in an answer with what is known about each image.
+ * 把应答里的图片标记换成每张图已知的信息。
  *
- * This is the one place both halves exist: the text the content script rendered
- * (which numbers the images) and the states the vision pipeline holds (keyed by
- * identity). Filling here, rather than in the content script, is what lets a
- * description reach the model on the snapshot after the one that requested it —
- * and lets an image that is still being recognized say so instead of going quiet.
+ * 只有这儿能同时看到两半：content script 渲染出的文本（它给图片编号），以及视觉流水线手里的
+ * 状态（按身份存）。在这里填、而不是在 content script 里填，一段描述才能在请求它的那次快照之后
+ * 的快照上到达模型——也才能让一张还在识别中的图标明自己正在识别，而不是不吭声。
  *
- * @param text - rendered text, possibly containing markers.
- * @param response - the content script's answer, carrying the identity map.
- * @param vision - state lookup by identity; absent leaves markers untouched.
- * @returns the filled text.
+ * @param text - 已渲染的文本，可能含标记。
+ * @param response - content script 的应答，带着身份映射。
+ * @param vision - 按身份查状态；缺失就不动标记。
+ * @returns 填充后的文本。
  */
 function fillImageStates(
   text: string,
@@ -731,17 +798,17 @@ function fillImageStates(
   return fillMarkers(text, (index) => {
     const entry = identityByIndex.get(index)
     if (entry === undefined) return undefined
-    // What the page already knows outranks what the cache might: an image whose
-    // load failed is never requested, so no cache entry can exist for it.
+    // 页面已经知道的东西优先于缓存可能知道的：加载失败的图片永远不会被请求，所以它不可能有
+    // 缓存条目。
     if (entry.unavailable !== undefined) return `unavailable:${entry.unavailable}`
     return vision.states(entry.identity)
   })
 }
 
-/** Exposed for tests: the fill is the one link between rendered text and results. */
+/** 暴露给测试：填充是已渲染文本和结果之间唯一的连接点。 */
 export { fillImageStates }
 
-/** The identity map a content answer carries, when it numbered any images. */
+/** content 应答带的身份映射，前提是它给图片编过号。 */
 function answerImageIdentities(answer: ToolAnswer): ImageIdentity[] {
   if (!answer.ok || typeof answer.result !== 'object' || answer.result === null) return []
   const identities = (answer.result as { imageIdentities?: unknown }).imageIdentities
@@ -895,21 +962,20 @@ async function dispatchTabManagementTool(
 }
 
 /**
- * Dispatch one tool call to the selected tab's content script.
- * @param call - the tool call to execute.
- * @param sharePageContent - the user's page-sharing preference ('off' blocks
- *   every page-content read).
- * @param budget - snapshot limits to restore after on-demand content-script injection.
- * @param signal - bridge lifetime; cancellation prevents any not-yet-sent page action.
- * @param targetTab - tab selected by the background affinity controller.
- * @param targetStillAllowed - final fail-closed guard after asynchronous approval/navigation checks.
- * @param tabManagement - access mode and affinity callbacks for tab collection tools.
- * @returns the content script's answer, or a stable error when no tab or
- *   content script is available.
+ * 把一次工具调用分发给所选标签页的 content script。
+ * @param call - 要执行的工具调用。
+ * @param sharePageContent - 用户的页面共享偏好：`'ask'` 读页面和动手前都问，`'auto'` 都不问。
+ * @param budget - 按需注入 content script 之后要恢复的快照限制。
+ * @param signal - bridge 生命周期；取消会拦下任何还没发出去的页面操作。
+ * @param targetTab - background 亲和控制器选定的标签页。
+ * @param targetStillAllowed - 异步审批/导航检查之后最后一道 fail-closed 守卫。
+ * @param tabManagement - 标签页集合工具的访问模式和亲和回调。
+ * @returns content script 的应答；没有可用标签页或
+ *   content script 时返回一个稳定的错误。
  */
 export async function dispatchToolCall(
   call: ToolCall,
-  sharePageContent: 'ask' | 'auto' | 'off',
+  sharePageContent: 'ask' | 'auto',
   budget?: ContentBudget,
   authorize?: (prompt: ApprovalPrompt) => Promise<ApprovalAuthorization>,
   signal?: AbortSignal,
@@ -917,10 +983,10 @@ export async function dispatchToolCall(
   targetStillAllowed?: () => boolean,
   tabManagement: TabManagementContext = { unrestrictedAccess: false },
   /**
-   * What is known about each image, by identity.
+   * 按身份记着的、每张图的信息。
    *
-   * Passed in rather than imported so this module stays a dispatcher: the vision
-   * pipeline and its cache belong to the background entry point.
+   * 用参数传进来而不是 import，是为了让本模块还是个纯分发器：视觉流水线和它的缓存归
+   * background 入口点。
    */
   vision?: VisionSink,
 ): Promise<ToolAnswer> {
@@ -930,9 +996,8 @@ export async function dispatchToolCall(
   if (call.name === 'browser_describe_image') {
     return unavailable('browser_describe_image must be dispatched through the background vision path.')
   }
-  // The bridge starts the browser; reaching this dispatcher at all means it is
-  // already running. Answering here (rather than rejecting an unknown name) keeps
-  // the tool contract honest: the model called it, so it gets a real result.
+  // 浏览器是 bridge 负责启动的；能走到这个分发器，说明它已经在跑了。在这儿作答（而不是当未知
+  // 名字直接拒掉），工具契约才诚实：模型既然调了它，就该拿到一个真实结果。
   if (call.name === 'browser_launch') {
     return { ok: true, result: { text: 'The browser is already running and the extension is connected. Call browser_snapshot to see the page.' } }
   }
@@ -940,12 +1005,6 @@ export async function dispatchToolCall(
   const effectiveBudget = budget ?? { maxItems: 60, maxChars: DEFAULT_SNAPSHOT_MAX_CHARS }
   if (isTabManagementTool(call.name)) {
     return dispatchTabManagementTool(call, effectiveBudget, authorize, signal, tabManagement)
-  }
-  // Privacy boundary: with sharing off, no page content may leave the page.
-  if (!tabManagement.unrestrictedAccess
-    && sharePageContent === 'off'
-    && (call.name === 'browser_snapshot' || call.name === 'browser_get_text')) {
-    return { ok: false, error: { code: 'action-failed', message: 'Page content sharing is disabled in Settings > Page content sharing.' } }
   }
   const tab = targetTab ?? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0]
   if (isCancelled(call, signal)) return cancelled()
@@ -1008,11 +1067,10 @@ export async function dispatchToolCall(
   } catch (error: unknown) {
     if (isCancelled(call, signal)) return cancelled()
     if (!contentScriptReceiverMissing(error)) {
-      return unavailable('The content script stopped responding after the operation was dispatched. Call browser_snapshot before continuing.')
+      return unavailable(DISPATCH_UNANSWERED)
     }
-    // Manifest content scripts do not run retroactively in tabs that were
-    // already open when an unpacked extension was installed or reloaded.
-    // Recover in place so the user never has to refresh and lose page state.
+    // 在扩展以 unpacked 方式装上或重载之前就开着的 tab，manifest 里声明的内容脚本不会追溯
+    // 生效。就地恢复，用户就不用刷新、也就不用丢掉页面状态。
     try {
       await injectContentScript(tab.id)
     } catch {
@@ -1090,7 +1148,7 @@ function sameTargetDocument(call: ToolCall, before: TabFrame[], after: TabFrame[
     && frameDocumentKey(beforeFrame) === frameDocumentKey(afterFrame)
 }
 
-/** Parse a model-supplied http(s) URL for tab creation / navigation. */
+/** 解析模型给的 http(s) URL，建 tab / 导航用。 */
 export function parseHttpUrl(value: unknown): URL | undefined {
   if (typeof value !== 'string' || value.trim() === '') return undefined
   try {
@@ -1105,23 +1163,22 @@ async function removeCreatedTab(tabId: number): Promise<void> {
   try {
     await chrome.tabs.remove(tabId)
   } catch {
-    // The tab may already have been closed by the user or another tool.
+    // 这个 tab 可能已经被用户或别的工具关掉了。
   }
 }
 
 /**
- * Open a URL in a new tab, then optionally snapshot it once the document is ready.
- * Affinity rebinding is owned by the caller via `bindCreatedTab`.
+ * 在新 tab 里打开一个 URL，文档就绪之后再可选地做一次快照。
+ * affinity 的重新绑定由调用方通过 `bindCreatedTab` 负责。
  *
- * Creates a blank tab first, arms the readiness listener, then navigates so a
- * fast `document_idle` cannot announce readiness before the listener exists.
- * Cancellation before affinity bind rolls the orphan tab back; after bind the
- * open is treated as committed and reported as success even if the call expires.
+ * 先建一个空白 tab、装好就绪监听，然后再导航，这样一次很快的 `document_idle` 不可能在监听还
+ * 不存在时就说自己就绪了。在 affinity 绑定之前取消，会把这个孤儿 tab 回滚掉；绑定之后这次打开
+ * 就算已提交，调用超时也照样按成功上报。
  */
 export async function dispatchOpenTab(
   call: ToolCall,
   windowId: number,
-  sharePageContent: 'ask' | 'auto' | 'off',
+  sharePageContent: 'ask' | 'auto',
   budget: ContentBudget | undefined,
   authorize: ((prompt: ApprovalPrompt) => Promise<ApprovalAuthorization>) | undefined,
   signal: AbortSignal | undefined,
@@ -1146,7 +1203,7 @@ export async function dispatchOpenTab(
 
   let created: chrome.tabs.Tab
   try {
-    // No URL yet: register the readiness wait before the http(s) navigation.
+    // 这会儿还没有 URL：赶在 http(s) 导航之前先把就绪等待注册上。
     created = await chrome.tabs.create({ active, windowId })
   } catch (error: unknown) {
     return {
@@ -1195,20 +1252,18 @@ export async function dispatchOpenTab(
     }
   }
 
-  // Affinity is committed: further cancellation must not claim the tab was never opened.
+  // affinity 已经提交：之后再取消，也不能说这个 tab 从没打开过。
   resetTabSnapshot(tabId)
   if (!targetStillAllowed(tabId)) return targetChanged()
 
   const status = active
     ? `Opened a new tab at ${parsed.href}.`
     : `Opened a new background tab at ${parsed.href}.`
-  if (!ready || sharePageContent === 'off' || isCancelled(call, signal)) {
+  if (!ready || isCancelled(call, signal)) {
     return {
       ok: true,
       result: {
-        text: sharePageContent === 'off'
-          ? `${status} Page content sharing is disabled, so no snapshot was captured.`
-          : `${status} Call browser_snapshot again after the page loads.`,
+        text: `${status} Call browser_snapshot again after the page loads.`,
       },
     }
   }
@@ -1224,7 +1279,7 @@ export async function dispatchOpenTab(
     )
     if (snapshot !== undefined) return snapshot
   } catch {
-    // Keep the successful open when the replacement page is not yet readable.
+    // 替换页面还读不了的时候，这次成功的打开照样保留。
   }
   return {
     ok: true,

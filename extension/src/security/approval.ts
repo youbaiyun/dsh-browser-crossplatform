@@ -1,30 +1,29 @@
-/** Shared control-strip/background contract for browser action approval. */
+/** 控制条和 background 之间共享的浏览器操作审批契约。 */
 
 export type ApprovalKind = 'read' | 'action'
 export type ApprovalDecision = 'deny' | 'allow-once' | 'always-allow-reads' | 'trust-session' | 'trust-origin'
-/** Background authorization result; transport failures must not masquerade as a user decision. */
+/** background 的授权结果；传输失败绝不能伪装成用户决定。 */
 export type ApprovalAuthorization = 'approved' | 'denied' | 'unavailable' | 'timed-out' | 'cancelled'
 
-/** A policy decision awaiting a user response. */
+/** 一个等用户回话的策略决定。 */
 export interface ApprovalPrompt {
   kind: ApprovalKind
   action: string
   summary: string
   origins: string[]
-  /** True only when one stable origin can safely be added to the action allowlist. */
+  /** 只有某一个稳定 origin 能安全地加进操作允许列表时才为 true。 */
   canTrust: boolean
 }
 
 /**
- * Correlated request delivered to every open control strip.
+ * 投给每个已打开控制条的关联请求。
  *
- * `sessionId` is echoed from the bridge so the record stays self-describing
- * when several dsh conversations drive the same browser, but the control strip
- * never has to resolve or restore that conversation: the desktop GUI owns it.
+ * `sessionId` 是 bridge 回传的，这样多个 dsh 对话驱动同一个浏览器时，记录仍然自带
+ * 出处；但控制条从来不用解析或恢复那个对话：它归桌面端 GUI 所有。
  */
 export interface ApprovalRequest extends ApprovalPrompt {
   id: string
-  /** Agent session that requested the browser operation, when known. */
+  /** 请求这次浏览器操作的 agent 会话（知道的话）。 */
   sessionId?: string
 }
 

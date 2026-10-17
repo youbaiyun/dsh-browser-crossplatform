@@ -233,7 +233,7 @@ describe('withSessionDeferral', () => {
     await wrapped.call(request('session.history', { sessionId: id }))
     expect(sessionHistory).toHaveBeenCalledOnce()
 
-    // Expiry must not discard the choice after creation has already succeeded.
+    // 创建都已经成功之后，过期绝不能把这个选择丢掉。
     vi.useFakeTimers()
     vi.advanceTimersByTime(31 * 60_000)
     await provisionalId(wrapped, 'another-session')

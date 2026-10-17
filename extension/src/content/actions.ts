@@ -1,11 +1,9 @@
 /**
- * Page actions: click/type/press/scroll/navigate/get_text/wait, executed in
- * the content script against the real page (preserving login state), each
- * returning a short text status. Navigations return a fresh full snapshot
- * because the document — and the id registry — reset.
+ * 页面操作：click/type/press/scroll/navigate/get_text/wait，在 content script 里对真实
+ * 页面执行（保留登录状态），每个操作回一段简短的状态文本。导航会返回一份全新的完整快照，
+ * 因为文档——以及 id 注册表——会重置。
  *
- * All browser action results use structured text, so a
- * status line tells the model what happened and what state remains.
+ * 浏览器操作的结果一律是结构化文本，一行状态就能告诉模型发生了什么、还剩什么状态。
  *
  * @module
  */
@@ -17,63 +15,60 @@ import type { SnapshotBudget } from './snapshot.ts'
 import { buildSnapshot, renderSnapshot } from './snapshot.ts'
 
 /**
- * One image resolved to everything the background needs to describe it.
+ * 一张图片，background 描述它需要的字段都已经解析好了。
  *
- * `identity` is the cache key and the protocol's request identity at once: two
- * rows showing the same logo share it, so the page is charged for one
- * description rather than thirty.
+ * `identity` 既是缓存键，也是协议的请求标识：两行显示的是同一个 logo 时共用它，所以一个
+ * 页面只为一次描述付费，而不是三十次。
  */
 export interface ImageTarget {
   identity: string
   alt: string
   near: string
   heading: string
-  /** Protocol vocabulary: content, icon, link, button, background or canvas. */
+  /** 协议词汇：content、icon、link、button、background 或 canvas。 */
   kind: string
-  /** Absolute URL, or '' for images with no fetchable address. */
+  /** 绝对 URL；没有可抓取地址的图片是 ''。 */
   src: string
 }
 
-/** One numbered image's identity, so the background can look up its state. */
+/** 某张已编号图片的 identity，给 background 查它的状态用。 */
 export interface ImageIdentity {
   index: number
   identity: string
   /**
-   * Set when the page already knows this image cannot be read, such as an image
-   * whose load failed. A failed image is never requested, so no cache entry will
-   * ever exist for it and the reason has to come from here.
+   * 页面已经知道这张图读不了时置上，比如图片加载失败。失败的图片绝不会被请求，所以它
+   * 永远不会有缓存条目，原因只可能来自这里。
    */
   unavailable?: string
 }
 
-/** A settled action result. */
+/** 一次已经出了结果的操作。 */
 export interface ActionResult {
   text: string
-  /** Page-authored snapshot delta; the background must wrap it as untrusted. */
+  /** 页面自己生成的快照 delta；background 必须按不可信内容包装它。 */
   pageContent?: string
-  /** A same-frame document navigation was scheduled after this response. */
+  /** 回完这次响应之后，同一个 frame 里已经排了一次文档导航。 */
   navigationPending?: boolean
-  /** The image this action resolved, for the vision pipeline. */
+  /** 本次操作解析出的图片，给视觉流水线用。 */
   image?: ImageTarget
   /**
-   * Identities of the images this result numbered.
+   * 本结果编过号的那些图片的 identity。
    *
-   * The markers in the text name an index; the description cache is keyed by
-   * identity. Without this map the background would have to parse URLs back out
-   * of its own rendered text to connect the two.
+   * 文本里的标记给的是 index，描述缓存却按 identity 存。没有这个映射，background 就得
+   * 从自己渲染出的文本里把 URL 再解析回来，才能把两边对上。
    */
   imageIdentities?: ImageIdentity[]
 }
 
-/** How long an action should observe a ready document before returning. */
+/** 一次操作在返回之前，要盯着文档就绪多久。 */
 export interface PageSettlePolicy {
-  /** Earliest return after the document becomes ready. */
+  /** 文档就绪之后最早能返回的时刻。 */
   minimumMs: number
-  /** Required DOM-quiet period before returning. */
+  /** 返回之前要求 DOM 安静多久。 */
   quietMs: number
-  /** Hard cap after readiness; continuously animated pages cannot stall tools. */
+  /** 就绪之后的硬上限；一直在播动画的页面不能把工具拖住。 */
   maxAfterReadyMs: number
-  /** Hard cap while waiting for document readiness. */
+  /** 等文档就绪期间的硬上限。 */
   timeoutMs: number
 }
 
@@ -81,15 +76,13 @@ const TYPE_SETTLE: PageSettlePolicy = { minimumMs: 32, quietMs: 32, maxAfterRead
 const ACTION_SETTLE: PageSettlePolicy = { minimumMs: 100, quietMs: 50, maxAfterReadyMs: 250, timeoutMs: 5_000 }
 const SCROLL_SETTLE: PageSettlePolicy = { minimumMs: 50, quietMs: 50, maxAfterReadyMs: 150, timeoutMs: 5_000 }
 const EXPLICIT_WAIT_SETTLE: PageSettlePolicy = { minimumMs: 100, quietMs: 100, maxAfterReadyMs: 1_000, timeoutMs: 5_000 }
-/** Keep automatic action context focused while preserving the negotiated full snapshot budget. */
+/** 让自动操作的上下文保持聚焦，同时留住协商好的完整快照预算。 */
 const ACTION_DELTA_MAX_CHARS = 4_000
 
 /**
- * Wait for document readiness and a mutation-free window. The old fixed delay
- * charged every action equally and still returned too early when a late DOM
- * update landed near its boundary. This observer returns early on already
- * stable pages, extends only for real mutations, and stays bounded on pages
- * with continuous animation.
+ * 等文档就绪，再等一段没有变更的窗口。过去那个固定延迟对每个操作一样收费，可一次迟到的
+ * DOM 更新正好落在边界附近时，它还是返回得太早。这个观察器在本来就稳的页面上提前返回，
+ * 只有真变了才延长，遇上一直在动的页面也不会没完没了。
  */
 export function waitForPageSettled(policy: PageSettlePolicy = ACTION_SETTLE): Promise<boolean> {
   const startedAt = performance.now()
@@ -165,40 +158,35 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * How long a `browser_wait` condition may stay unsatisfied before it fails.
+ * 一个 `browser_wait` 条件在失败之前，最多能一直不满足多久。
  *
- * Bounded on purpose, and shorter than the bridge's own 90s per-call budget: a
- * condition runs inside the content script, and `chrome.runtime` messages cannot
- * carry an `AbortSignal`, so a cancelled tool call cannot interrupt this loop — the
- * caller stops waiting, but the poll keeps running until the deadline. Keeping the
- * deadline short bounds that, and costs nothing legitimate: a wait meant to outlast
- * ten seconds is a wait for something the page is not going to do.
+ * 这个上限是刻意加的，比 bridge 自己的 90s 单次调用预算还短：条件跑在 content script 里，
+ * 而 `chrome.runtime` 消息捎不了 `AbortSignal`，所以工具调用被取消也中断不了这个循环——
+ * 调用方不等了，轮询却会一路跑到截止时间。截止时间设短就把这点限制住了，也不亏任何正当
+ * 用法：一个想着撑过十秒的等待，等的本来就是页面绝不会做的事。
  */
 const WAIT_CONDITION_TIMEOUT_MS = 10_000
 
 /**
- * Ceiling for a caller-supplied wait budget.
+ * 调用方传进来的等待预算的上限。
  *
- * Well inside the bridge's 90s per-call timeout, so a wait cannot outlive the call
- * that asked for it, and low enough that the value cannot be used to hold a tool
- * slot open indefinitely.
+ * 离 bridge 的 90s 单次调用超时还远，所以一次等待活得不可能比请求它的那次调用更久；也够
+ * 低，免得有人拿这个值无限期占住一个工具槽位。
  */
 export const WAIT_MAX_BUDGET_MS = 60_000
-/** Poll spacing for a wait condition; short enough to feel immediate, cheap enough to hold. */
+/** 等待条件的轮询间隔；短到感觉是即时的，又便宜到能一直轮下去。 */
 const WAIT_POLL_MS = 100
 
 /**
- * Wait until a condition holds, then return.
+ * 等某个条件成立，然后返回。
  *
- * A condition that never holds is a failure, not a silent success: the model has
- * to know the page never produced what it was waiting for, so it can decide
- * whether to keep waiting or give up. The protocol's `timeout` code is what
- * carries that, and it is the reason this throws rather than returning.
+ * 永远不成立的条件算失败，不是默默成功：模型得知道页面从没产出它等的那个东西，才好决定
+ * 继续等还是放弃。协议里的 `timeout` code 就是干这个的，这里也因此抛异常而不是直接返回。
  *
- * @param description - what was waited for, for the error message.
- * @param budgetMs - how long to keep polling.
- * @param satisfied - re-evaluated on every poll.
- * @throws ActionError with code `timeout` when the deadline passes.
+ * @param description - 等的是什么，写进错误消息。
+ * @param budgetMs - 继续轮询多久。
+ * @param satisfied - 每轮都重新求一次值。
+ * @throws 过了截止时间就抛 code 为 `timeout` 的 ActionError。
  */
 async function waitUntil(description: string, budgetMs: number, satisfied: () => boolean): Promise<void> {
   const deadline = Date.now() + budgetMs
@@ -219,7 +207,7 @@ function elementOrThrow(ids: ElementIds, index: number): Element {
   return el
 }
 
-/** Error carrying a stable wire code. */
+/** 带着稳定 wire code 的错误。 */
 export class ActionError extends Error {
   constructor(
     readonly code: 'action-failed' | 'bad-args' | 'timeout',
@@ -230,7 +218,7 @@ export class ActionError extends Error {
   }
 }
 
-/** React-compatible value write: native setter + input/change events. */
+/** 和 React 对得上的赋值方式：原生 setter，再补 input/change 事件。 */
 function setNativeValue(input: HTMLInputElement | HTMLTextAreaElement, value: string): void {
   const prototype = input instanceof HTMLTextAreaElement
     ? HTMLTextAreaElement.prototype
@@ -245,15 +233,15 @@ function setNativeValue(input: HTMLInputElement | HTMLTextAreaElement, value: st
   input.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
-/** Action implementations; each returns a text result. */
+/** 各个操作的实现；每个都返回一段文本结果。 */
 export interface ActionContext {
   ids: ElementIds
   budget: SnapshotBudget
-  /** Enabled only when the background may share page content without another approval. */
+  /** 只有 background 不用再审批就能共享页面内容时才开。 */
   includePageDelta?: boolean
 }
 
-/** Run one named action with its args. */
+/** 按参数跑一个指定名字的操作。 */
 export async function runAction(action: string, args: Record<string, unknown>, ctx: ActionContext): Promise<ActionResult> {
   switch (action) {
     case 'browser_snapshot':
@@ -288,13 +276,13 @@ export async function runAction(action: string, args: Record<string, unknown>, c
 function snapshotAction(args: Record<string, unknown>, ctx: ActionContext): ActionResult {
   const delta = args.delta === true
   const region = typeof args.region === 'string' && args.region !== '' ? args.region : undefined
-  // 基线在每次快照后都更新：delta 调用才能相对上一次（无论是否 delta）比较。
+  // 每次快照都刷新基线，delta 调用才有得比——不管上一次是不是 delta。
   const view = buildSnapshot(ctx.ids, { delta, region, budget: ctx.budget }, lastSnapshot)
   lastSnapshot = view
   return { text: renderSnapshot(view, delta), imageIdentities: imageIdentitiesOf(view) }
 }
 
-/** Identities of the numbered images in a view, for the background to look up. */
+/** 一个视图里已编号图片的 identity，给 background 查。 */
 function imageIdentitiesOf(view: ReturnType<typeof buildSnapshot>): ImageIdentity[] {
   return view.images.map((image) => ({
     index: image.index,
@@ -303,15 +291,15 @@ function imageIdentitiesOf(view: ReturnType<typeof buildSnapshot>): ImageIdentit
   }))
 }
 
-/** Module-level last snapshot state for delta mode (content-script lifetime). */
+/** 模块级的最近一次快照状态，delta 模式靠它（只在 content script 活着期间有效）。 */
 let lastSnapshot: ReturnType<typeof buildSnapshot> | null = null
 
-/** Invalidate delta state after navigation (new document). */
+/** 导航之后（换了新文档）把 delta 状态作废。 */
 function resetDeltaState(): void {
   lastSnapshot = null
 }
 
-/** Attach the settled page change while retaining the full view as the next delta baseline. */
+/** 附上这次结算出来的页面变化，同时把完整视图留作下一次 delta 的基线。 */
 function withPageDelta(text: string, ctx: ActionContext): ActionResult {
   if (ctx.includePageDelta !== true || lastSnapshot === null) return { text }
   const view = buildSnapshot(ctx.ids, { delta: true, budget: ctx.budget }, lastSnapshot)
@@ -331,16 +319,14 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
     const target = el.target.trim().toLowerCase()
     const sameFrameTarget = target === '' || target === '_self'
     let href: URL | undefined
-    try { href = new URL(el.href) } catch { /* let the native click handle unusual links */ }
+    try { href = new URL(el.href) } catch { /* 让原生点击去处理不寻常的链接 */ }
     const controlledNavigation = sameFrameTarget
       && !el.hasAttribute('download')
       && (href?.protocol === 'http:' || href?.protocol === 'https:')
     if (controlledNavigation && href !== undefined) {
-      // Manual location assignment cannot preserve browser-managed link
-      // semantics such as referrer suppression, hyperlink auditing, or
-      // attribution registration. Keep native activation for those links,
-      // but do not claim a replacement document is guaranteed: an SPA may
-      // still cancel the click and remain in this document.
+      // 手动赋 location 保不住浏览器管的那些链接语义，比如 referrer 抑制、超链接审计、
+      // 归因登记。这类链接还是让浏览器原生激活，但别声称一定换来一个新文档：SPA 照样可能
+      // 取消这次点击、留在本文档里。
       const hasReferrerPolicy = typeof el.referrerPolicy === 'string' && el.referrerPolicy !== ''
       const requiresNativeActivation = el.relList.contains('noreferrer')
         || hasReferrerPolicy
@@ -352,8 +338,7 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
           text: `Clicked link [${index}] using native browser activation. Call browser_snapshot to read the resulting state.`,
         }
       }
-      // Dispatch the click handlers without its default navigation so a
-      // client-side router can cancel synchronously and keep this document.
+      // 派发 click，但不带默认导航，这样客户端路由器能同步取消、留在本文档里。
       const shouldNavigate = el.dispatchEvent(new MouseEvent('click', {
         bubbles: true,
         cancelable: true,
@@ -371,8 +356,8 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
         await waitForPageSettled(ACTION_SETTLE)
         return withPageDelta(`Clicked link [${index}].`, ctx)
       }
-      // A cross-document navigation can unload this content script before an
-      // awaited response. Answer first and navigate in the next task.
+      // 跨文档导航可能在任何 await 结算之前就把这个 content script 卸掉。所以先回话，
+      // 下一个任务里再导航。
       setTimeout(() => { location.href = href.href }, 0)
       return {
         text: `Clicked link [${index}]. Call browser_snapshot again after navigation settles.`,
@@ -391,16 +376,14 @@ async function clickAction(args: Record<string, unknown>, ctx: ActionContext): P
 }
 
 /**
- * The nearest editable host, or null when a `contenteditable="false"` island
- * blocks editing.
+ * 最近的可编辑宿主；被 `contenteditable="false"` 孤岛挡住编辑时返回 null。
  *
- * The walk must stop at the nearest `[contenteditable]` boundary instead of
- * skipping disabled ones: an element inside a non-editable island nested in an
- * editable composer belongs to the island, and resolving past it would type
- * into the surrounding composer rather than refusing the target.
+ * 往上找必须停在最近的 `[contenteditable]` 边界上，不能跳过被禁用的那些：可编辑输入框里
+ * 嵌着不可编辑孤岛，孤岛里的元素就归那个孤岛，越过它去解析只会把文本敲进外层输入框，
+ * 而不是拒绝这个目标。
  *
- * @param el - element addressed by the action.
- * @returns the owning editable host, or null when editing is blocked.
+ * @param el - 操作寻址的元素。
+ * @returns 拥有它的可编辑宿主；编辑被挡住时为 null。
  */
 function editingHost(el: HTMLElement): HTMLElement | null {
   const boundary = el.closest('[contenteditable]')
@@ -409,42 +392,40 @@ function editingHost(el: HTMLElement): HTMLElement | null {
 }
 
 /**
- * Whether the element can receive rich-text input.
+ * 这个元素能不能接收富文本输入。
  *
- * `isContentEditable` is the browser's own answer; the boundary walk covers the
- * attribute case, which is unimplemented in jsdom, where these tests run.
+ * `isContentEditable` 是浏览器自己的答案；边界查找补的是属性那条路，而它在 jsdom 里没有
+ * 实现，这些测试恰好跑在 jsdom 上。
  *
- * @param el - element addressed by the action.
- * @returns true when the element can receive rich-text input.
+ * @param el - 操作寻址的元素。
+ * @returns 元素能接收富文本输入时为 true。
  */
 function isEditable(el: Element): el is HTMLElement {
   return el instanceof HTMLElement && (el.isContentEditable || editingHost(el) !== null)
 }
 
 /**
- * Insert text into a rich-text host through the browser's editing pipeline.
+ * 走浏览器自己的编辑流水线，把文本插进富文本宿主。
  *
- * Editors such as Lexical, Draft.js and ProseMirror keep their own document
- * model and reconcile away foreign DOM writes, so assigning `textContent`
- * silently reverts and the caller's success report becomes a lie.
- * `execCommand('insertText')` is deprecated but remains the only path that
- * produces the `beforeinput`/`input` sequence those editors listen for. Hosts
- * without it keep the direct-write fallback.
+ * Lexical、Draft.js、ProseMirror 这类编辑器有自己的文档模型，外来的 DOM 写入会被它们
+ * 调和掉，赋值 `textContent` 于是悄悄落空，调用方报的成功也就成了假话。
+ * `execCommand('insertText')` 虽然废弃了，却仍是唯一能产出那些编辑器监听的
+ * `beforeinput`/`input` 序列的路子。宿主不支持它就退回直接写入。
  *
- * @param el - element addressed by the action.
- * @param text - text to insert.
- * @param replace - whether to replace the host's current contents.
+ * @param el - 操作寻址的元素。
+ * @param text - 要插入的文本。
+ * @param replace - 是否替换宿主当前的内容。
  */
 function typeIntoContentEditable(el: HTMLElement, text: string, replace: boolean): void {
-  // `isEditable` already refused a disabled island, so a null host here means
-  // the element is editable without the attribute; address it directly.
+  // `isEditable` 已经挡掉了被禁用的孤岛，所以这里宿主为 null 说明该元素没有那个属性
+  // 也可编辑；那就直接对它寻址。
   const host = editingHost(el) ?? el
   host.focus()
   const selection = host.ownerDocument.getSelection()
   if (selection !== null) {
     const range = host.ownerDocument.createRange()
     range.selectNodeContents(host)
-    // A caret collapsed to the end appends; a full selection is replaced by insertText.
+    // 折叠到末尾就是追加；整个选区则会被 insertText 替换掉。
     if (!replace) range.collapse(false)
     selection.removeAllRanges()
     selection.addRange(range)
@@ -454,7 +435,7 @@ function typeIntoContentEditable(el: HTMLElement, text: string, replace: boolean
     try {
       if (doc.execCommand('insertText', false, text)) return
     } catch {
-      // Fall through to the direct-write path below.
+      // 落到下面的直接写入路径。
     }
   }
   if (replace) host.textContent = ''
@@ -469,15 +450,14 @@ async function typeAction(args: Record<string, unknown>, ctx: ActionContext): Pr
   const replace = args.replace === true
   const el = elementOrThrow(ctx.ids, index)
 
-  // A `<select>` and a checkbox are not text fields, but the tool the model is
-  // told about fills all three: the inventory renders them, so "type into it" is
-  // the phrasing a model reaches for. Matching by value, then by visible label,
-  // then by 1-based index is the order a human tries them in.
+  // `<select>` 和 checkbox 都不是文本字段，可模型拿到的那个工具三者通吃：快照会把它们
+  // 列出来，"往里输入"就是模型自然的选择。先按 value 匹配，再按可见 label，最后按 1 起始
+  // 的序号——人依次尝试的顺序也正是这个。
   if (el instanceof HTMLSelectElement) {
     const chosen = chooseOption(el, text)
     if (chosen === undefined) {
-      // List the labels, not just the values: a value like `a` tells the reader
-      // nothing about what it selects, and this message exists to be acted on.
+      // 把 label 一起列出来，光给 value 不够：像 `a` 这样的 value 说明不了选中了什么，
+      // 而这条消息就是为了让人能照着做。
       const available = [...el.options].slice(0, 20).map((option, position) => {
         const label = option.text.trim()
         return label !== '' && label !== option.value
@@ -486,9 +466,8 @@ async function typeAction(args: Record<string, unknown>, ctx: ActionContext): Pr
       })
       throw new ActionError('action-failed', `Element [${index}] has no option matching "${text}". Available: ${available.join(', ')}${el.options.length > 20 ? ', …' : ''}.`)
     }
-    // Select through the option's own `selected` property, then tell the page:
-    // frameworks listen for `change`, and a plain assignment to `select.value`
-    // does not dispatch it.
+    // 走 option 自己的 `selected`，然后还得通知页面：框架听的是 `change`，直接赋
+    // `select.value` 不会派发它。
     for (const option of el.options) option.selected = option === chosen
     el.dispatchEvent(new Event('input', { bubbles: true }))
     el.dispatchEvent(new Event('change', { bubbles: true }))
@@ -502,22 +481,22 @@ async function typeAction(args: Record<string, unknown>, ctx: ActionContext): Pr
       throw new ActionError('bad-args', `Element [${index}] is a ${el.type}; pass true or false as text to set it.`)
     }
     if (el.disabled) {
-      // A disabled control accepts no click, so reporting the requested state
-      // would be a fiction. `<button disabled>` is refused for the same reason.
+      // 被禁用的控件根本不接受点击，报告请求的那个状态就是编造。`<button disabled>`
+      // 也是同一个道理，直接拒绝。
       throw new ActionError('action-failed', `Element [${index}] is disabled; the page decides when it may be changed.`)
     }
     if (el.type === 'radio' && wanted === false && el.checked) {
-      // A radio cannot be unchecked by clicking it — the group always has a
-      // selection — so the honest answer is a refusal, not "Unchecked".
+      // radio 靠点击取消不了选中——一组里总得有一个被选中——所以老实点拒绝，
+      // 而不是回一句 "Unchecked"。
       throw new ActionError('action-failed', `Element [${index}] is a radio and cannot be unchecked directly; check another radio in its group instead.`)
     }
-    // `click()` rather than assigning `checked`: it fires the events the page
-    // listens for and, for a radio, moves the selection within its group.
+    // 用 `click()`，别直接赋 `checked`：它会触发页面监听的那些事件，对 radio 来说还能
+    // 在组内挪动选中项。
     if (el.checked !== wanted) el.click()
     await waitForPageSettled(TYPE_SETTLE)
     if (el.checked !== wanted) {
-      // The page may reject the change (a read-only control, a handler that
-      // restores the previous value). Report what happened, not what was asked.
+      // 页面可能不认这次变更（只读控件、把值改回去的 handler）。报实际发生了什么，
+      // 别报请求了什么。
       throw new ActionError('action-failed', `Element [${index}] did not accept the change; it is still ${el.checked ? 'checked' : 'unchecked'}.`)
     }
     return withPageDelta(`${wanted ? 'Checked' : 'Unchecked'} [${index}].`, ctx)
@@ -536,11 +515,10 @@ async function typeAction(args: Record<string, unknown>, ctx: ActionContext): Pr
 }
 
 /**
- * The option a `<select>` should switch to, or undefined when nothing matches.
+ * `<select>` 该切到的那个 option；没匹配上就返回 undefined。
  *
- * Order is value → visible label → 1-based position, and the comparison is
- * case-insensitive on trimmed text so `true`/`True` and a stray newline in a
- * label both work.
+ * 依次试 value → 可见 label → 1 起始的位置，比较都在 trim 过的文本上做、也不区分大小写，
+ * 所以 `true`/`True`、以及 label 里多一个换行，都能对上。
  */
 function chooseOption(select: HTMLSelectElement, text: string): HTMLOptionElement | undefined {
   const wanted = text.trim().toLowerCase()
@@ -550,7 +528,7 @@ function chooseOption(select: HTMLSelectElement, text: string): HTMLOptionElemen
     ?? (/^\d+$/u.test(wanted) ? options[Number(wanted) - 1] : undefined)
 }
 
-/** `true`/`false` (and the usual synonyms) for a checkbox or radio. */
+/** checkbox 或 radio 的 `true`/`false`，以及常见的同义词。 */
 function parseCheckboxValue(text: string): boolean | undefined {
   const value = text.trim().toLowerCase()
   if (['true', '1', 'on', 'yes', 'checked'].includes(value)) return true
@@ -607,9 +585,9 @@ async function navigateAction(args: Record<string, unknown>): Promise<ActionResu
     throw new ActionError('bad-args', `Only http and https URLs are supported; received ${parsed.protocol}.`)
   }
   resetDeltaState()
-  // Cross-document navigation unloads this content script and destroys the
-  // tabs.sendMessage response port before any await settles — so answer
-  // FIRST, then navigate in a fresh task. The model re-snapshots after load.
+  // 跨文档导航会卸掉这个 content script，并在任何 await 结算之前就把
+  // tabs.sendMessage 的响应 port 销毁——所以先回话，再到新任务里导航。
+  // 模型会在加载完成后重新快照。
   setTimeout(() => { location.href = parsed.href }, 0)
   return {
     text: `Navigating to ${parsed.href}. Call browser_snapshot again after the page loads.`,
@@ -619,7 +597,7 @@ async function navigateAction(args: Record<string, unknown>): Promise<ActionResu
 
 async function historyAction(delta: 1 | -1): Promise<ActionResult> {
   resetDeltaState()
-  // 同 navigate：先响应再导航（文档卸载会销毁响应端口）。
+  // 和 navigate 一样：先响应再导航（文档一卸载，响应端口就没了）。
   setTimeout(() => { if (delta === -1) history.back(); else history.forward() }, 0)
   return {
     text: 'Navigating through browser history. Call browser_snapshot again after the page loads.',
@@ -645,21 +623,18 @@ async function getTextAction(args: Record<string, unknown>): Promise<ActionResul
 }
 
 async function waitAction(args: Record<string, unknown>, ctx: ActionContext): Promise<ActionResult> {
-  // Both the delay and a condition budget are bounded: the bridge gives up on a
-  // call at its own timeout, and a caller-supplied number large enough to overflow
-  // (`1e999` parses to Infinity) must not turn the poll into an infinite loop.
+  // 延迟和条件预算都封了顶：bridge 到自己的超时就放弃这次调用，而一个大到溢出的调用方
+  // 数字（`1e999` 会解析成 Infinity）绝不能把轮询变成死循环。
   const rawMs = typeof args.ms === 'number' && args.ms > 0 ? args.ms : 0
   const ms = Math.min(rawMs, WAIT_MAX_BUDGET_MS)
   const selector = typeof args.selector === 'string' && args.selector !== '' ? args.selector : undefined
-  // `pageText` collapses every run of whitespace to one space, so the needle has to
-  // be collapsed the same way or a multi-line label can never match the haystack.
+  // `pageText` 会把连续空白折成一个空格，needle 就得照样折一遍，否则多行的 label 永远
+  // 匹配不上 haystack。
   const wanted = typeof args.text === 'string' && args.text !== '' ? args.text.replace(/\s+/gu, ' ').trim() : undefined
   await waitForPageSettled(EXPLICIT_WAIT_SETTLE)
 
-  // A condition is a promise to the model that the page will actually produce
-  // what it asked for; when it never does, failing with `timeout` is the whole
-  // point of asking. Without a condition this stays what it always was: settle,
-  // then an optional extra delay.
+  // 条件就是对模型的承诺：页面确实会产出它要的东西；页面始终不产出时，用 `timeout` 失败
+  // 正是提这个问题的意义所在。没有条件时还是老样子：先结算，再补一段可选的延迟。
   if (selector !== undefined) {
     await waitUntil(`selector "${selector}" to match`, ms > 0 ? ms : WAIT_CONDITION_TIMEOUT_MS, () => document.querySelector(selector) !== null)
   } else if (wanted !== undefined) {
@@ -675,33 +650,28 @@ async function waitAction(args: Record<string, unknown>, ctx: ActionContext): Pr
 }
 
 /**
- * Resolve one image by inventory index, for the vision pipeline.
+ * 按清单里的序号解析出一张图片，给视觉流水线用。
  *
- * The content script is the only party that can see the page, so it answers with
- * the image's identity and context and nothing more: fetching bytes and talking
- * to a model are the background's business, and the page is never asked to
- * describe itself.
+ * content script 是唯一能看到页面的角色，所以它只答这张图的 identity 和上下文，别的不管：
+ * 抓字节、和模型对话都是 background 的事，页面从不需要描述自己。
  *
- * An index is a claim about the document that produced it, and a re-render breaks
- * that claim: the DOM node the id was attached to is replaced, the registry
- * retires the id with it, and the number the model remembers resolves to nothing.
- * That used to end the call even when the picture had not moved. `identity` is
- * the background's memory of what that number pointed at, so the image can be
- * found by address rather than by a number that shifted.
+ * 序号是相对产出它的那份文档说的，一次重渲染就把这个前提打破了：id 挂着的 DOM 节点被换掉，
+ * 注册表让这个 id 退役，模型记住的编号于是解析不到任何东西。以前哪怕图片一动没动，这次
+ * 调用也会就此结束。`identity` 是 background 对那个编号曾经指向什么的记忆，图片因此能按
+ * 地址找回来，而不是靠一个已经漂了的编号。
  *
- * @param args - the tool arguments (`index`, plus the background's `identity`).
- * @param ctx - the id registry, for index resolution.
- * @returns a status line plus the resolved image.
+ * @param args - 工具参数（`index`，加上 background 的 `identity`）。
+ * @param ctx - id 注册表，用来解析序号。
+ * @returns 一行状态，加上解析出的图片。
  */
 function describeImageAction(args: Record<string, unknown>, ctx: ActionContext): ActionResult {
   const index = numberArg(args, 'index')
   const element = ctx.ids.elementByIndex(index)
   /**
-   * Harvested at most once, and only when something actually needs the list.
+   * 至多采集一次，而且只在真需要这份列表时才采。
    *
-   * The harvest forces layout for up to 1500 elements looking for background
-   * images, so a call that resolves its index the ordinary way should not pay for
-   * it merely to be able to phrase a failure it will not reach.
+   * 采集会为找背景图强制布局最多 1500 个元素，所以正常解析出序号的调用不该为了一次
+   * 它遇不到的失败去准备措辞，就付这个代价。
    */
   let collected: ImageCandidate[] | undefined
   const images = (): ImageCandidate[] => (collected ??= collectImages(document))
@@ -709,10 +679,9 @@ function describeImageAction(args: Record<string, unknown>, ctx: ActionContext):
   let image = element === undefined ? undefined : images().find((candidate) => candidate.element === element)
   let recovered = false
   if (element === undefined && isAddressHint(args.identity)) {
-    // Only a unique match is a recovery. When one address is reused across many
-    // tiles — a shared logo, a placeholder — taking the first would hand the model
-    // the wrong `alt`, `near` and `heading` for an image whose answer is not cached
-    // yet, and a wrong description of the wrong tile is worse than a clear failure.
+    // 必须唯一匹配才算恢复。一个地址被许多图块复用——共用的 logo、占位图——时取第一个，
+    // 交给模型的就是错的 `alt`、`near` 和 `heading`，而这张图的答案还没缓存；给错图块错
+    // 描述，比直接清楚地失败更糟。
     const matches = images().filter((candidate) => matchesRememberedIdentity(candidate, args.identity))
     if (matches.length === 1) {
       image = matches[0]
@@ -724,9 +693,9 @@ function describeImageAction(args: Record<string, unknown>, ctx: ActionContext):
       ? imageIndexFailure(index, images, ctx)
       : `Element [${index}] is not an image that browser_snapshot listed.`)
   }
-  // The cache key and the request identity are the same value, which is what makes
-  // one page with thirty identical logos cost one description instead of thirty.
-  // The rule lives in `imageIdentity` so the snapshot reports the identical string.
+  // 缓存键和请求 identity 是同一个值，正因如此，一个有三十个相同 logo 的页面只为一次
+  // 描述付费，而不是三十次。这条规则写在 `imageIdentity` 里，所以快照报出来的是完全一样
+  // 的字符串。
   const identity = imageIdentity(image.src, index)
   const current = ctx.ids.indexOf(image.element)
   return {
@@ -747,42 +716,40 @@ function describeImageAction(args: Record<string, unknown>, ctx: ActionContext):
 }
 
 /**
- * Whether a remembered identity is an address this action can match on.
+ * 被记住的 identity 是不是一个能拿来匹配的地址。
  *
- * Only absolute addresses qualify. An image with no address is identified by its
- * inventory number, which is the very thing that went stale, so matching on that
- * number would be inventing an answer instead of recovering one.
+ * 只有绝对地址算数。没有地址的图片靠清单编号标识，而失效的恰恰就是这个编号，照它匹配等于
+ * 编一个答案出来，而不是恢复答案。
  *
- * @param identity - what the background remembers that number pointed at.
- * @returns true when it is an address.
+ * @param identity - background 记住的那个编号曾经指向什么。
+ * @returns 是地址时为 true。
  */
 function isAddressHint(identity: unknown): identity is string {
   return typeof identity === 'string' && identity !== '' && !identity.startsWith('el:')
 }
 
 /**
- * Whether one harvested image is the one a remembered identity named.
+ * 采集到的这张图片是不是被记住的 identity 指的那张。
  *
- * @param image - a harvested candidate.
- * @param identity - what the background remembers that number pointed at.
- * @returns true when this is that image.
+ * @param image - 一个采集到的候选项。
+ * @param identity - background 记住的那个编号曾经指向什么。
+ * @returns 是这张图片时为 true。
  */
 function matchesRememberedIdentity(image: ImageCandidate, identity: unknown): boolean {
   return isAddressHint(identity) && image.src === identity
 }
 
 /**
- * Why an index did not resolve, and which numbers do resolve now.
+ * 一个序号为什么没解析出来，以及现在哪些编号能解析。
  *
- * The numbers the reader was actually shown come first: a live re-scan counts far
- * more images than the snapshot's `Images` section did, and naming a number that
- * is absent from the reader's own snapshot is not a next step it can take. The
- * scan is the fallback for a document that has not been snapshotted yet.
+ * 读者真正见过的编号排在前面：实时重扫数出来的图片比快照 `Images` 小节里的多得多，而点一个
+ * 在读者自己的快照里压根不存在的编号，不是它能走的下一步。重扫是留给还没快照过的文档的
+ * 回退。
  *
- * @param index - the number that failed.
- * @param images - lazy harvest, consulted only when the snapshot cannot answer.
- * @param ctx - the id registry, for the current numbering.
- * @returns the message.
+ * @param index - 失败的那个编号。
+ * @param images - 惰性采集，快照答不上来时才查。
+ * @param ctx - id 注册表，用来取当前编号。
+ * @returns 该消息。
  */
 function imageIndexFailure(index: number, images: () => ImageCandidate[], ctx: ActionContext): string {
   const numbered = lastSnapshot === null ? [] : lastSnapshot.images.map((view) => view.index)
@@ -798,16 +765,15 @@ function imageIndexFailure(index: number, images: () => ImageCandidate[], ctx: A
 }
 
 /**
- * Map the harvested kind onto the protocol's vocabulary.
+ * 把采集那边的类别映射成协议用的词。
  *
- * The harvest says how an image was found (`img`, `svg`, `poster`,
- * `background`); the recognition request says what it is in the page (content,
- * icon, link, button, background, canvas), because that is what changes how the
- * answer should be read.
+ * 采集说的是怎么找到这张图的（`img`、`svg`、`poster`、`background`）；识别请求说的是它在
+ * 页面里是什么（content、icon、link、button、background、canvas），因为决定答案怎么读的是
+ * 后者。
  *
- * @param image - the harvested candidate.
- * @param element - its element.
- * @returns the protocol kind.
+ * @param image - 采集到的候选项。
+ * @param element - 它的元素。
+ * @returns 协议类别。
  */
 function protocolKind(image: ImageCandidate, element: Element): string {
   if (image.kind === 'background') return 'background'

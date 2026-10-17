@@ -1,11 +1,10 @@
 /**
- * Bilingual copy for the control page.
+ * 控制页的双语文案。
  *
- * Chinese is the primary text and English must be complete: the extension is
- * used by people whose dsh UI may be in either language, and a half-translated
- * surface reads as broken. Every string here is static; page- and dsh-supplied
- * values are inserted by `main.ts` with `textContent` and never through this
- * dictionary.
+ * 中文是主文案，英文必须写全：用这个扩展的人，dsh 界面可能是这两种语言里的
+ * 任一种，而只翻了一半的界面读起来就像坏了一样。这里每个字符串都是静态
+ * 的；页面和 dsh 给的值由 `main.ts` 用 `textContent` 插进去，绝不经过这份
+ * 字典。
  *
  * @module
  */
@@ -15,27 +14,24 @@ import type { OpenError } from './command.ts'
 
 export interface ControlCopy {
   /**
-   * The browser tab's title.
+   * 浏览器标签页的标题。
    *
-   * The heading a user reads above the panel is **not** drawn by this code: the
-   * browser renders the side panel's title from the extension's manifest name, so
-   * changing it means editing the locale message files. This field only covers
-   * the tab, and both are set to the same full name so the extension does not
-   * introduce itself two different ways. A `brand` field used to sit here for a
-   * heading that was never built, which made it look as though the heading were
-   * ours to change.
+   * 用户在面板上方读到的那个标题**不是**这段代码画的：浏览器拿扩展的
+   * manifest 名称渲染侧边栏标题，要改它就得改语言消息文件。这个字段只
+   * 管标签页；两者设成同一个完整名称，免得扩展用两种方式介绍自己。这里以前
+   * 还有一个 `brand` 字段，对应一个从来没做出来的标题，让人误以为那个标题归我们
+   * 改。
    */
   documentTitle: string
   /**
-   * Connection wording.
+   * 连接状态的措辞。
    *
-   * `Record<BridgeState, string>` plus the extra members, rather than a total
-   * record: every connection state must have a label (the index lookup falls
-   * back to `stopped`), while `replaced`/`reclaim` describe a condition that is
-   * not a state and would be misleading as one.
+   * 用 `Record<BridgeState, string>` 加几个额外成员，而不是一个穷尽的 record：
+   * 每种连接状态都必须有标签（索引查不到时会回落到 `stopped`），而
+   * `replaced`/`reclaim` 描述的是一种并非状态的情况，当成状态会误导人。
    */
   bridge: Record<'connecting' | 'connected' | 'reconnecting' | 'stopped', string> & {
-    /** Another browser holds the single bridge slot. */
+    /** 另一个浏览器占着唯一的 bridge 位置。 */
     replaced: string
     reclaim: string
   }
@@ -69,7 +65,7 @@ export interface ControlCopy {
   }
   plan: {
     title: string
-    /** `{done}` and `{total}` are substituted with the counts. */
+    /** `{done}` 和 `{total}` 会被替换成相应计数。 */
     progress: string
   }
   composer: {
@@ -81,17 +77,15 @@ export interface ControlCopy {
     disconnected: string
   }
   /**
-   * Why a typed `@open` directive could not be used.
+   * 用户敲的一条 `@open` 指令为什么用不了。
    *
-   * These are functions rather than templates because the two languages order the
-   * parts differently — Chinese states the rule and then the offending value,
-   * English names the value first — so a string with placeholders substituted
-   * would read as translated rather than as written.
+   * 这些写成函数而不是模板，因为两种语言排列各部分的顺序不同——中文先说规则再
+   * 说违规的值，英文先点名值——所以一个靠占位符替换的字符串读起来像翻译过来的，
+   * 而不像写出来的。
    *
-   * They live here, and not beside the parser, because a user who chose English
-   * must not be answered in Chinese. That is what they used to be: nine messages
-   * hard-coded in the parser, so every `@open` mistake reported itself in Chinese
-   * whatever language the panel was in.
+   * 它们住在这里，不住在解析器旁边，因为选了英文的用户不该收到中文答复。
+   * 它们以前正是那副样子：九条硬编码在解析器里的消息，不管面板是什么语言，
+   * 每次 `@open` 出错都报中文。
    */
   openError: {
     directiveFormat: (known: string) => string
@@ -106,16 +100,25 @@ export interface ControlCopy {
   }
   settings: {
     heading: string
-    openPages: string
-    openPagesOn: string
-    openPagesOff: string
-    openPagesOnHelp: string
-    openPagesOffHelp: string
-    openPagesUnknown: string
+    /**
+     * 设置面板第一行：**连接状态**，只读。
+     *
+     * 这组键原先叫 `openPages*`，展示的却是连接与否 —— 标签写「允许 AI 打开网页」、
+     * 徽章写「已连接/未连接」，还把 `policy !== null`（有没有 policy）当成了连接状态。
+     * 两件不同的事挤在一行，读者只能猜。现在这行只讲连接，取名也照它实际表达的东西。
+     */
+    connection: string
+    connectionOn: string
+    connectionOff: string
+    connectionConnecting: string
+    /** 已连接时说什么。 */
+    connectionHelp: string
+    /** 明确断线（`stopped`）时说什么——与「还没收到 state」是两回事。 */
+    connectionOffHelp: string
+    connectionUnknown: string
     sharing: string
     sharingAsk: string
     sharingAuto: string
-    sharingOff: string
     sharingHelp: string
     tabSwitch: string
     tabSwitchFollow: string
@@ -124,24 +127,11 @@ export interface ControlCopy {
     tabSwitchHelp: string
     conversation: string
     conversationFresh: string
-    conversationPinned: string
-  /** Label of the 「工作区内」 mode. */
-  conversationWorkspace: string
+    conversationLast: string
+    /** 「全部工作区」模式的标签。 */
+    conversationWorkspace: string
     conversationHelp: string
-    conversationPick: string
-    conversationLoading: string
-    conversationNone: string
-    conversationUntitled: string
-  /**
-   * Marker on a conversation the desktop is working in right now.
-   *
-   * The single most useful thing the picker can say: the list is long, the titles
-   * repeat, and the conversation whose turn is running is nearly always the one the
-   * user is looking at. Without it the only signal is a timestamp.
-   */
-  conversationRunning: string
     autoOpen: string
-    autoOpenHelp: string
     unrestricted: string
     unrestrictedHelp: string
     widthHint: string
@@ -152,18 +142,17 @@ export interface ControlCopy {
     visionTierStandard: string
     visionTierEnhanced: string
   }
-  empty: {
-    title: string
-  }
   common: {
     reconnecting: string
     reconnectFailed: string
+    /** 桌面端以 4002/1008 拒绝握手时说的话，必须点明"用户可以怎么修"。 */
+    bridgeRejected: string
     close: string
   }
 }
 
 const ZH: ControlCopy = {
-  documentTitle: 'dsh 浏览器扩展（全端）',
+  documentTitle: 'dsh 浏览器扩展（全平台）',
   bridge: {
     connecting: '正在连接',
     connected: '已连接',
@@ -181,9 +170,9 @@ const ZH: ControlCopy = {
     follow: '跟过去',
     keepAlways: '留在这里，不再问',
     lostTitle: '操作的页面被关闭了',
-    // Names the one action that exists. "Pick a page" implied a chooser, but the
-    // button binds the tab you are already on — so the sentence says to switch
-    // first, and the button below it does the binding.
+    // 这里点名唯一存在的那个动作。“Pick a page” 暗示有得选，但这个按钮绑定
+    // 的就是你已经在的那个标签页——所以这句话先说要去切页，再由它下面那个按钮
+    // 完成绑定。
     lostText: 'AI 已暂停，不会自作主张换页面。想让它继续，就切到你希望它操作的页面，再点下面的按钮绑定；不管它也行。',
     bind: '用我现在这个页面',
     bindFailed: '无法接管这个页面',
@@ -213,7 +202,7 @@ const ZH: ControlCopy = {
     sending: '发送中',
     stop: '停止',
     openHint: '@open 网页地址（可加 pace=slow 让它慢一点、pin=off 不接管页面）',
-    disconnected: '还没连上桌面端 —— 先把桌面端打开，再重新打开这个侧边栏',
+    disconnected: '还没连上桌面端 —— 要先打开 dsh 才会开始连接；只打开浏览器是连不上的，打开 dsh 后重新打开这个侧边栏即可',
   },
   openError: {
     directiveFormat: (known) => `指令格式：${known} <网址> [pace=…] [pin=…]`,
@@ -229,34 +218,28 @@ const ZH: ControlCopy = {
   },
   settings: {
     heading: '更改设置',
-    openPages: '桌面端允许 AI 打开网页',
-    openPagesOn: '已连接',
-    openPagesOff: '未连接',
-    openPagesOnHelp: '需要给你看页面时，它直接打开，不先问你。开关在桌面端，这里改不了。',
-    openPagesOffHelp: '它不会打开新网页，只能读你已经打开的页面。',
-    openPagesUnknown: '还没连上桌面端。先启动桌面端，再重新打开侧边栏。',
-    sharing: '让 AI 读取网页',
+    connection: 'dsh 连接状态',
+    connectionOn: '已连接',
+    connectionOff: '未连接',
+    connectionConnecting: '正在连接',
+    connectionHelp: '要先打开 dsh 才会开始连接；只打开浏览器是连不上的。连上之后，桌面端就能读你正在看的那一页。',
+    connectionOffHelp: '没连上 dsh。要先打开 dsh 才会开始连接——只打开浏览器连不上；启动 dsh 后重新打开侧边栏即可。',
+    connectionUnknown: '还没连上桌面端。要先打开 dsh 才会开始连接——只打开浏览器连不上；启动 dsh 后重新打开侧边栏即可。',
+    sharing: 'AI 读取权限',
     sharingAsk: '每次询问',
     sharingAuto: '直接读取',
-    sharingOff: '从不',
-    sharingHelp: '它读你正在看的网页之前，会不会先问你。选「从不」网页内容不离开浏览器——但下面那个「不再询问，直接操作」开着时会覆盖这一项。',
-    tabSwitch: 'AI 跟随标签页',
+    sharingHelp: '每次询问：AI 读取网页和执行操作时都会询问\n直接读取：AI 在读取和执行操作时都不再询问你',
+    tabSwitch: 'AI 跟随网页',
     tabSwitchFollow: '跟随',
     tabSwitchKeep: '留在原页面',
     tabSwitchAsk: '每次询问',
-    tabSwitchHelp: '你换到别的标签页，它跟不跟过去。选「每次询问」，会弹出来让你决定。',
-    conversation: '对话发到',
-    conversationFresh: '新开一段',
-    conversationPinned: '当前对话',
-  conversationWorkspace: '工作区内',
-    conversationHelp: '你在这里打的话，发到桌面端哪段对话。「当前对话」从列表里挑一段；「工作区内」自动同步该工作区里的所有对话（只读镜像，你打的字仍发到本面板自己的对话）。',
-    conversationPick: '选择对话',
-    conversationLoading: '正在读取…',
-    conversationNone: '请选择…',
-    conversationUntitled: '未命名',
-  conversationRunning: '进行中',
-    autoOpen: '自动弹出侧边栏',
-    autoOpenHelp: '它一动浏览器，这边就自己弹出来。你能实时看到它在找什么、下什么、点哪里。平常聊天不弹。',
+    tabSwitchHelp: 'AI 就像人一样：你打开新的页面时，AI 能不能看见你新开的网页。默认「跟随」，不再询问。',
+    conversation: '对话同步',
+    conversationFresh: '工作区内新建对话',
+    conversationLast: '工作区内上次浏览器对话',
+    conversationWorkspace: '全部工作区',
+    conversationHelp: '你在浏览器插件中的对话，发到桌面端哪段对话位置。三档都局限在「浏览器对话」这个工作区内。\n工作区内新建对话：重新在浏览器插件里对话时，会在「浏览器对话」工作区里新建一个对话。\n工作区内上次浏览器对话：继续上次在「浏览器对话」工作区里的那段对话。\n全部工作区：不管你从哪个工作区发出对话，都同步到浏览器插件里。',
+    autoOpen: '打开浏览器时是否自动打开插件侧边栏',
     unrestricted: '不再询问，直接操作',
     unrestrictedHelp: '读网页、点按钮、关标签页，都不再问你。不确定它在做什么就别开。',
     widthHint: '宽度由浏览器决定，拖左边缘调整，Chrome 会记住。',
@@ -267,19 +250,17 @@ const ZH: ControlCopy = {
     visionTierStandard: '标准',
     visionTierEnhanced: '增强',
   },
-  empty: {
-    title: '准备就绪',
-  },
   common: {
     reconnecting: '正在重连后台',
     reconnectFailed: '后台连接已断开，请重新加载页面',
+    bridgeRejected: '桌面端拒绝了这次连接：令牌或扩展 id 对不上。如果你手动加载的是文件名带「-store」的包，请改用不带「-store」的那个（它带 key，id 才在白名单里）；否则请检查扩展的 token 设置。',
     close: '关闭',
   },
 }
 
 const EN: ControlCopy = {
-  // English has no parenthetical to mirror: the store name is the same phrase,
-  // so the short form and the full name are identical here.
+  // 英文没有对应的括注要镜像：商店名本身就是同一个词组，所以这里的短名称和
+  // 完整名称在这里是一样的。
   documentTitle: 'dsh Browser Extension',
   bridge: {
     connecting: 'Connecting',
@@ -327,7 +308,7 @@ const EN: ControlCopy = {
     sending: 'Sending',
     stop: 'Stop',
     openHint: '@open <url> [pace=fast|normal|slow] [pin=on|off] — the extension opens it so you can watch',
-    disconnected: 'dsh is not connected — start the desktop app, then reopen this panel',
+    disconnected: 'Not connected — dsh has to be running first: opening the browser alone cannot connect. Start dsh, then reopen this panel.',
   },
   openError: {
     directiveFormat: (known) => `Format: ${known} <url> [pace=…] [pin=…]`,
@@ -343,34 +324,28 @@ const EN: ControlCopy = {
   },
   settings: {
     heading: 'Change settings',
-    openPages: 'The desktop lets the AI open pages',
-    openPagesOn: 'Connected',
-    openPagesOff: 'Not connected',
-    openPagesOnHelp: 'It opens a page directly when it needs to show you one, without asking. The switch is in the desktop app and cannot be changed here.',
-    openPagesOffHelp: 'It will not open new pages, only read the ones you already have open.',
-    openPagesUnknown: 'Not connected to the desktop app. Start it, then reopen this panel.',
-    sharing: 'Let the AI read pages',
-    sharingAsk: 'Ask me',
+    connection: 'dsh connection status',
+    connectionOn: 'Connected',
+    connectionOff: 'Not connected',
+    connectionConnecting: 'Connecting',
+    connectionHelp: 'dsh has to be running first — opening the browser alone cannot connect. Once connected, the desktop can read the page you are looking at.',
+    connectionOffHelp: 'Not connected to dsh. dsh has to be running first — opening the browser alone cannot connect; start dsh, then reopen this panel.',
+    connectionUnknown: 'Not connected to dsh yet. dsh has to be running first — opening the browser alone cannot connect; start dsh, then reopen this panel.',
+    sharing: 'AI read permission',
+    sharingAsk: 'Ask every time',
     sharingAuto: 'Read directly',
-    sharingOff: 'Never',
-    sharingHelp: 'Whether it asks before reading the page you are on. "Never" keeps page content in the browser — but the "act without asking" switch below overrides this one while it is on.',
-    tabSwitch: 'AI follows tab switches',
+    sharingHelp: 'Ask every time: the AI asks before reading the page and before acting\nRead directly: the AI asks neither before reading nor before acting',
+    tabSwitch: 'AI follows new pages',
     tabSwitchFollow: 'Follow',
     tabSwitchKeep: 'Stay on the page',
     tabSwitchAsk: 'Ask me',
-    tabSwitchHelp: 'Whether it comes with you when you switch tabs. "Ask me" pops up a choice each time.',
-    conversation: 'Send messages to',
-    conversationFresh: 'A new chat',
-    conversationPinned: 'Current chat',
-  conversationWorkspace: 'In the workspace',
-    conversationHelp: 'Which desktop conversation receives what you type here. "Current chat" picks one from a list; "In the workspace" mirrors every conversation in the workspace automatically (a read-only mirror — what you type still goes to this panel\'s own conversation).',
-    conversationPick: 'Choose a conversation',
-    conversationLoading: 'Reading…',
-    conversationNone: 'Choose one…',
-    conversationUntitled: 'Untitled',
-  conversationRunning: 'running',
-    autoOpen: 'Open the side panel automatically',
-    autoOpenHelp: 'The panel opens while it uses the browser, so you can watch what it searches, downloads and clicks. Ordinary chat does not open it.',
+    tabSwitchHelp: 'The AI is like a person here: when you open a new page, can it see the page you just opened? It follows by default, without asking.',
+    conversation: 'Chat sync',
+    conversationFresh: 'New chat in the workspace',
+    conversationLast: 'Last browser chat in the workspace',
+    conversationWorkspace: 'All workspaces',
+    conversationHelp: 'Which desktop chat receives what you type in the browser panel. The first two stay inside the desktop workspace the extension uses for browsing.\nNew chat in the workspace: talking in the extension again starts a new chat in that workspace.\nLast browser chat in the workspace: continues the chat you last used in that workspace.\nAll workspaces: whichever workspace you send from, it syncs into the extension.',
+    autoOpen: 'Open the side panel automatically when the browser is used',
     unrestricted: 'Stop asking and just act',
     unrestrictedHelp: 'Reading pages, clicking buttons and closing tabs all happen without asking you. Do not turn this on unless you know what it is doing.',
     widthHint: 'The browser decides the width; drag the left edge, and Chrome remembers it.',
@@ -381,12 +356,10 @@ const EN: ControlCopy = {
     visionTierStandard: 'Standard',
     visionTierEnhanced: 'Enhanced',
   },
-  empty: {
-    title: 'Ready',
-  },
   common: {
     reconnecting: 'Reconnecting to the background',
     reconnectFailed: 'The background connection is gone; reload this panel',
+    bridgeRejected: 'The desktop app rejected this connection: the token or the extension id does not match. If you side-loaded an archive whose name contains "-store", use the one without it instead — only that build carries the manifest key whose id is on the allowlist. Otherwise check the extension\'s token setting.',
     close: 'Close',
   },
 }
@@ -396,15 +369,13 @@ export function controlCopy(locale: UiLocale): ControlCopy {
 }
 
 /**
- * Turn a directive-parsing failure into a sentence the user can read.
+ * 把指令解析失败变成用户读得懂的一句话。
  *
- * The parser reports a reason rather than a message, because it has no locale and
- * because a module that builds its own user-facing sentences cannot be reused for
- * anything else. This is the single place that decides how a reason is worded.
+ * 解析器报的是原因而不是消息，因为它没有 locale，也因为一个自己拼用户可见
+ * 句子的模块没法被别处复用。这里是唯一决定原因该怎么措辞的地方。
  *
- * An unknown `kind` falls back to the generic message instead of throwing: a
- * newer background build could send a reason this panel has not learned, and
- * failing to explain a typo is not worth a blank panel.
+ * 未知的 `kind` 回落到通用消息，不抛错：更新的后台构建可能发来一个这个
+ * 面板还没学会的原因，而为了解释一个笔误换来空白面板不值得。
  */
 export function describeOpenError(locale: UiLocale, error: OpenError): string {
   const copy = controlCopy(locale).openError

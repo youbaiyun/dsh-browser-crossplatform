@@ -1,19 +1,15 @@
 /**
- * Bridge WebSocket carrier: token-authenticated connection registry, gateway
- * RPC dispatch, per-connection event pump, and tool-call dispatch to the
- * connected browser extension.
+ * bridge 的 WebSocket 承载层：带 token 认证的连接注册表、gateway RPC 派发、每连接的
+ * 事件泵，以及向已连接的浏览器扩展派发工具调用。
  *
- * The route this server mounts (`/ext/bridge`) lives OUTSIDE the /api trust
- * fence (which only guards the client-connection routes), so the bridge brings
- * its own authentication: a bearer token presented in the `hello` frame within
- * HELLO_TIMEOUT_MS. Host calls terminate at the bridge-owned Host adapter.
- * Methods the /api carrier pins to loopback (`PRIVILEGED_METHODS`)
- * stay loopback-only here regardless of the token, defense in depth for
- * `--host 0.0.0.0` deployments.
+ * 本服务挂的路由（`/ext/bridge`）在 /api 信任围栏之外（那道围栏只管 client-connection
+ * 的路由），所以 bridge 自带认证：`hello` 帧里出示 bearer token，且要在
+ * HELLO_TIMEOUT_MS 之内到达。Host 调用终结在 bridge 自有的 Host 适配器上。被 /api
+ * 承载层钉在 loopback 上的那些方法（`PRIVILEGED_METHODS`）在这里同样只允许 loopback，
+ * 跟 token 无关——这是给 `--host 0.0.0.0` 部署留的纵深防御。
  *
- * One active connection at a time: a new authenticated socket replaces the
- * previous one (the old socket is closed and its in-flight tool calls settle
- * as `bridge-closed`).
+ * 同一时刻只有一条活跃连接：新的已认证 socket 会顶掉上一个（旧 socket 被关掉，它还在
+ * 途中的工具调用以 `bridge-closed` 结束）。
  *
  * @module
  */
@@ -40,10 +36,9 @@ import type { ImageRelay } from './image-relay.ts'
 import { verifyToken } from './token.ts'
 
 /**
- * Gateway methods the /api carrier pins to loopback (mirror of
- * client-connection's PRIVILEGED_METHODS; kept verbatim so the two fences
- * cannot drift). The bridge rejects these for non-loopback remotes even with
- * a valid token.
+ * 被 /api 承载层钉在 loopback 上的 gateway 方法（镜像 client-connection 的
+ * PRIVILEGED_METHODS，原样保留，两道围栏才不会各自漂移）。就算 token 有效，bridge 对
+ * 非 loopback 的远端也照样拒绝这些方法。
  */
 const PRIVILEGED_METHODS = new Set([
   'host.pickDirectory',
@@ -58,47 +53,44 @@ const PRIVILEGED_METHODS = new Set([
   'credentials.unset',
 ])
 
-/** Session mutations whose WebSocket arrival order is behaviorally significant. */
+/** 到达顺序会显著影响行为的那些 session 变更。 */
 const ORDERED_SESSION_METHODS = new Set([
   BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD,
   'session.prompt',
   'session.cancel',
 ])
 
-/** Loopback IPv4/IPv6 literals (IPv4-mapped included). Exported for tests and reuse. */
+/** loopback 的 IPv4/IPv6 字面量（含 IPv4 映射形式）。导出它是为了测试和复用。 */
 export function isLoopbackAddress(address: string | undefined): boolean {
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
 }
 
-/** Build the only Origin value that may skip the token on loopback. */
+/** 构造那个唯一能在 loopback 上跳过 token 的 Origin 值。 */
 export function extensionOrigin(extensionId: string): string {
   return `chrome-extension://${extensionId}`
 }
 
 /**
- * Whether an upgrade's `Origin` identifies *this* extension.
+ * 一次升级的 `Origin` 是不是*本*扩展。
  *
- * The scheme alone is not an identity: every Chrome extension presents some
- * `chrome-extension://` origin, so matching the prefix would let any other
- * installed extension — or a local process that simply sets the header — reach
- * the bridge without the token. The ids must be named, and every one of them is
- * compared exactly.
+ * 光看 scheme 不算身份：每个 Chrome 扩展出示的都是某种 `chrome-extension://` origin，
+ * 只匹配前缀的话，任何另一个已安装的扩展——或者一个只是设了这个头的本地进程——都能不带
+ * token 够到 bridge。id 必须逐个点名，而且每一个都精确比较。
  *
- * More than one id is allowed because one build can have several. An unpacked
- * development load is pinned by the manifest `key`, while the Chrome Web Store
- * refuses a manifest that carries that key and assigns an id of its own — so the
- * same source legitimately presents either origin.
+ * 允许配置多个 id，是因为同一个构建可能有多个。未打包的开发加载被 manifest 的 `key`
+ * 钉死，而 Chrome 应用商店会拒收带那个 key 的 manifest、自己分配一个 id——所以同一份
+ * 源码出示其中任意一个 origin 都是正当的。
  *
- * @param origin - the upgrade request's `Origin` header, if any.
- * @param extensionId - comma-separated configured ids; empty disables the bypass.
- *   Surrounding whitespace and empty entries are ignored, so a trailing comma is
- *   harmless rather than a silently unconfigured bridge.
- * @returns true only for an exact match against one of the named ids.
+ * @param origin - 升级请求的 `Origin` 头（如果有）。
+ * @param extensionId - 逗号分隔的已配置 id；为空就禁掉这条绕过。
+ *   首尾空白和空条目都忽略，所以末尾多一个逗号没事，不会变成一个悄悄没配置好的
+ *   bridge。
+ * @returns 只有和某个点名的 id 精确匹配时才为 true。
  */
 export function isTrustedExtensionOrigin(origin: string | undefined, extensionId: string | undefined): boolean {
-  // A direct constructor call may omit the field entirely (the schema default
-  // only applies on the plugin path), so anything that is not a non-empty string
-  // means "no id configured" rather than "compare against undefined".
+  // 直接调构造函数可能压根不填这个字段（schema 默认值只在插件路径上生效），
+  // 所以只要不是非空字符串，就表示“没有配置 id”，
+  // 而不是“拿去跟 undefined 比”。
   if (typeof origin !== 'string' || typeof extensionId !== 'string' || extensionId === '') return false
   return extensionId
     .split(',')
@@ -107,7 +99,7 @@ export function isTrustedExtensionOrigin(origin: string | undefined, extensionId
     .some((id) => origin === extensionOrigin(id))
 }
 
-/** Error thrown by requestTool; the tool registry turns it into an isError result. */
+/** requestTool 抛出的错误；工具注册表会把它变成 isError 结果。 */
 export class BridgeToolError extends Error {
   constructor(
     readonly code: ToolErrorCode,
@@ -118,68 +110,65 @@ export class BridgeToolError extends Error {
   }
 }
 
-/** Dependencies the bridge needs from the host. */
+/** bridge 需要宿主提供的依赖。 */
 export interface BridgeServerDeps {
-  /** Bearer token the extension must present in `hello`. */
+  /** 扩展必须在 `hello` 中出示的 bearer token。 */
   token: string
   /**
-   * Id of the one Chrome extension allowed to skip the bearer token on a
-   * loopback upgrade. Empty (or absent, for a directly constructed server)
-   * means no origin skips the token, which is the safe default for an
-   * unconfigured bridge.
+   * 允许在 loopback 升级时跳过 bearer token 的那一个 Chrome 扩展 id。为空（直接构造
+   * server 时则是没给）表示没有任何 origin 能跳过 token，这是未配置 bridge 的安全
+   * 默认值。
    */
   extensionId?: string
-  /** Active dsh Host adapter used for unary calls, events, and waterfalls. */
+  /** 当前的 dsh Host 适配器，unary 调用、事件和 waterfall 都走它。 */
   api: BrowserHostApi
-  /** Default per-tool-call timeout in ms. */
+  /** 单次工具调用的默认超时，单位毫秒。 */
   toolTimeoutMs: number
-  /** Capabilities to echo in `hello.ok` (negotiated snapshot budgets). */
+  /** 要在 `hello.ok` 中回显的能力（协商后的快照预算）。 */
   caps: BridgeCaps
-  /** What the desktop app allows, sent alongside the caps in `hello.ok`. */
+  /** 桌面端允许哪些行为，随能力一起放在 `hello.ok` 里发过去。 */
   policy: BridgePolicy
   /**
-   * Image recognition on the extension's behalf. Absent when no vision model is
-   * configured, which the extension learns from `hello.ok`'s policy.
+   * 替扩展做图片识别。没配置视觉模型时缺省，扩展会从 `hello.ok` 的 policy 里知道
+   * 这一点。
    */
   imageRelay?: ImageRelay
   /**
-   * Why no relay is available, in words the user can act on.
+   * 为什么没有可用的中继，说得让用户能据此行动。
    *
-   * Sent in `hello.ok` so the extension can put it in front of whoever asked for an
-   * image, instead of reporting only that recognition is unavailable — which leaves
-   * the reader with a dead end and no next step.
+   * 在 `hello.ok` 里发过去，扩展就能把它摆到那个要求识别图片的人面前，而不是只报
+   * “识别不可用”——那会让读者卡在死胡同里，没有下一步。
    */
   visionUnavailableReason?: string
-  /** Seed a followed-page snapshot into a live or deferred Agent session. */
+  /** 把一份被跟随页面的快照注入活跃或延迟创建的 Agent session。 */
   injectBrowserSnapshot: (sessionId: string, snapshot: string) => void | Promise<void>
   /**
-   * Permanently delete one session's durable storage. Callers archive the
-   * session through the gateway first; this only removes files.
+   * 永久删掉某个 session 的持久化存储。调用方会先通过 gateway 归档该 session，这里只
+   * 负责删文件。
    */
   purgeSession: (sessionId: string) => Promise<void>
   /**
-   * Test seam: force the remote address seen by the privilege gate. The
-   * sandbox cannot bind arbitrary loopback literals, so the non-loopback
-   * branch is exercised through this override; production never sets it.
+   * 测试接缝：强制指定权限闸门看到的远端地址。沙箱里绑不了任意的 loopback 字面量，
+   * 所以非 loopback 分支靠这个 override 覆盖；生产环境从不设置它。
    */
   remoteAddressOverride?: string
-  /** Seconds a fresh socket may present `hello`; defaults to HELLO_TIMEOUT_MS. */
+  /** 新 socket 多久之内要出示 `hello`；默认 HELLO_TIMEOUT_MS。 */
   helloTimeoutMs?: number
-  /** Server ping cadence; defaults to PING_INTERVAL_MS. */
+  /** 服务端 ping 的节奏；默认 PING_INTERVAL_MS。 */
   pingIntervalMs?: number
 }
 
-/** One in-flight tool call awaiting the extension's `tool.result`. */
+/** 一次在途的工具调用，正在等待扩展的 `tool.result`。 */
 interface PendingTool {
   resolve: (result: unknown) => void
   reject: (error: BridgeToolError) => void
   timer: NodeJS.Timeout
 }
 
-/** A socket that passed authentication and owns the single active slot. */
+/** 一个已通过认证、并占据那唯一活跃槽位的 socket。 */
 interface ReadyConnection {
   ws: WebSocket
-  /** Remote address captured at upgrade time (loopback gate for privileged methods). */
+  /** 升级时捕获的远端地址（特权方法的 loopback 闸门）。 */
   remoteAddress: string | undefined
   abort: AbortController
   pump: Promise<void>
@@ -187,18 +176,17 @@ interface ReadyConnection {
 }
 
 function sendFrame(ws: WebSocket, frame: BridgeFrame): void {
-  /* v8 ignore next -- teardown race: the socket can die between a pump's
-  readiness check and this write; the guard refuses writes on dead sockets */
+  /* v8 ignore next -- 拆除期竞态：socket 可能在某个 pump 的就绪检查
+  与这次写入之间死掉；这个守卫拒绝对已死的 socket 写入 */
   if (ws.readyState !== WebSocket.OPEN) return
   ws.send(JSON.stringify(frame))
 }
 
 /**
- * Decode one ws message payload to text. Exported so all three delivery
- * shapes (fragmented buffer list, Buffer, ArrayBuffer) are unit-testable
- * directly — node ws only ever delivers Buffers in practice.
- * @param data - ws message payload.
- * @returns the decoded UTF-8 text.
+ * 把一条 ws 消息载荷解成文本。之所以导出，是为了让三种投递形态（分片的 buffer 数组、
+ * Buffer、ArrayBuffer）都能直接单元测试——实际用起来 node ws 只会投递 Buffer。
+ * @param data - ws 消息载荷。
+ * @returns 解码后的 UTF-8 文本。
  */
 export function messageToText(data: Buffer | ArrayBuffer | Buffer[]): string {
   if (Array.isArray(data)) return Buffer.concat(data).toString('utf8')
@@ -207,8 +195,7 @@ export function messageToText(data: Buffer | ArrayBuffer | Buffer[]): string {
 }
 
 /**
- * Token-authenticated bridge server. Construct once per plugin instance;
- * dispose with {@link close}.
+ * 带 token 认证的 bridge 服务端。每个插件实例构造一次，用 {@link close} 收尾。
  */
 export class BridgeServer {
   private readonly wss = new WebSocketServer({ noServer: true })
@@ -220,10 +207,10 @@ export class BridgeServer {
   constructor(private readonly deps: BridgeServerDeps) {}
 
   /**
-   * Handle one HTTP upgrade for the bridge path.
-   * @param req - upgrade request (carries the client's remote address).
-   * @param socket - raw socket transferred by the HTTP server.
-   * @param head - bytes already read after the upgrade headers.
+   * 处理 bridge 路径上的一次 HTTP 升级。
+   * @param req - 升级请求（带着客户端的远端地址）。
+   * @param socket - HTTP 服务端移交过来的原始 socket。
+   * @param head - 升级头之后已经读到的字节。
    */
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const remote = this.deps.remoteAddressOverride ?? req.socket.remoteAddress
@@ -232,15 +219,14 @@ export class BridgeServer {
   }
 
   /**
-   * Request one browser action from the connected extension.
-   * @param name - tool name (also the wire action name).
-   * @param args - validated tool arguments.
-   * @param signal - caller cancellation (abort settles the call as cancelled).
-   * @param timeoutMs - per-call budget; defaults to the plugin config value.
-   * @param sessionId - optional owning Agent session for approval continuity.
-   * @returns the extension's action result.
-   * @throws BridgeToolError when no extension is connected, the call times
-   *   out, is cancelled, or the extension reports a failure.
+   * 向已连接的扩展要一次浏览器动作。
+   * @param name - 工具名（同时也是 wire 动作名）。
+   * @param args - 已校验的工具参数。
+   * @param signal - 调用方的取消信号（abort 会让这次调用以“已取消”结束）。
+   * @param timeoutMs - 单次调用的预算；默认取插件配置里的值。
+   * @param sessionId - 可选的、拥有这次调用的 Agent session，用来保持审批的连续性。
+   * @returns 扩展的动作结果。
+   * @throws 没有扩展连接、调用超时、被取消，或扩展报错时抛 BridgeToolError。
    */
   requestTool(
     name: string,
@@ -253,9 +239,9 @@ export class BridgeServer {
     if (conn === null) {
       throw new BridgeToolError('bridge-closed', 'no browser extension is connected to the bridge')
     }
-    // A caller that already aborted must not dispatch: the abort listener
-    // below does not replay for pre-aborted signals, so the call would be
-    // sent to the extension and executed despite the cancellation.
+    // 已经 abort 的调用方绝不能派发：下面的 abort 监听器不会为预先 abort 的信号重放，
+    // 那样这次调用还是会被发给扩展并执行掉，
+    // 尽管它已经被取消。
     if (signal.aborted) {
       throw new BridgeToolError('bridge-closed', 'tool call cancelled before dispatch')
     }
@@ -270,17 +256,17 @@ export class BridgeServer {
         reject(error)
       }
       const cancel = (error: BridgeToolError): void => {
-        // The extension may be paused on a user approval after the caller has
-        // stopped waiting. Withdraw that approval before settling locally so
-        // a late click cannot execute an expired action.
+        // 调用方不再等待之后，扩展可能还停在等用户批准上。在本地结清之前先撤回那份
+        // 批准，这样一个迟到的点击
+        // 就执行不了一个已经过期的动作。
         sendFrame(conn.ws, { t: 'tool.cancel', id })
         settle(error)
       }
       const onAbort = (): void => {
-        // A caller that stops waiting is a timeout, not a missing connection:
-        // reporting `bridge-closed` here made "the extension never answered"
-        // indistinguishable from "there was never a connection", which is exactly
-        // the distinction needed to diagnose a browser that is connected but idle.
+        // 调用方停止等待属于超时，不是连接不存在：在这里报 `bridge-closed` 会让
+        // “扩展一直没回答”和“从来就没有连接”
+        // 变得分不出来，而这个区别恰恰是诊断
+        // “浏览器连着但闲着”所需要的。
         cancel(new BridgeToolError('timeout', 'tool call cancelled before the extension answered'))
       }
       timer = setTimeout(() => {
@@ -296,9 +282,9 @@ export class BridgeServer {
         expiresAt,
         ...(sessionId === undefined ? {} : { sessionId }),
       } satisfies BridgeFrame), (error) => {
-        /* v8 ignore next -- teardown race: when the write fails, the socket's
-        close handler settles the same call with the same code; the callback
-        path is a defensive second settle, covered via the close path */
+        /* v8 ignore next -- 拆除期竞态：写入失败时，socket 的 close 处理器
+        会用同一个错误码结算同一次调用；这条 callback 路径是防御性的第二次结算，
+        经由 close 路径覆盖 */
         if (error != null) {
           settle(new BridgeToolError('bridge-closed', `bridge socket failed before delivery: ${error.message}`))
         }
@@ -307,33 +293,32 @@ export class BridgeServer {
   }
 
   /**
-   * Terminate the server: close the acceptor, drop all sockets, reject all
-   * in-flight tool calls.
-   * @returns a promise resolving after the acceptor and all pumps stop.
+   * 关掉服务端：关闭 acceptor、丢掉所有 socket、拒掉所有在途的工具调用。
+   * @returns 等 acceptor 和所有 pump 都停下来之后才 resolve 的 promise。
    */
   async close(): Promise<void> {
-    // Idempotent: a second close must not touch the acceptor (ws throws
-    // "The server is not running" when closing an already-closed server).
+    // 幂等：第二次 close 绝不能碰 acceptor（关一个已经关掉的服务端时，
+    // ws 会抛 "The server is not running"）。
     if (this.closed) return
     this.closed = true
-    // Capture the live pump BEFORE replaceConnection nulls the connection.
+    // 趁 replaceConnection 还没把连接置空，先抓住活着的那个 pump。
     const pumps = this.current === null ? [] : [this.current.pump]
     this.replaceConnection()
     for (const socket of this.wss.clients) socket.terminate()
     this.current = null
     await new Promise<void>((resolve, reject) => {
       this.wss.close((error) => {
-        /* v8 ignore next -- acceptor close cannot fail: close() is idempotent
-        and the noServer acceptor only reports teardown of already-terminated clients */
+        /* v8 ignore next -- acceptor 的关闭不可能失败：close() 是幂等的，
+        而 noServer acceptor 只会报告已经终止的客户端的拆除 */
         if (error === undefined) resolve()
-        /* v8 ignore next -- same unreachable arm */
+        /* v8 ignore next -- 同一条不可达分支 */
         else reject(error)
       })
     })
     await Promise.all(pumps)
   }
 
-  /** @returns whether an authenticated extension is currently connected. */
+  /** @returns 当前是否有已认证的扩展连接着。 */
   hasConnection(): boolean {
     return this.current !== null
   }
@@ -351,21 +336,21 @@ export class BridgeServer {
         return
       }
       if (helloTimer !== undefined) {
-        // Pending state: only `hello` is legal.
+        // 待握手状态：只有 `hello` 是合法的。
         if (frame.t !== 'hello') {
           ws.close(1008, 'hello first')
           return
         }
-        // Zero-config local mode: a loopback upgrade from *this* extension skips
-        // the token, so the extension can auto-discover the bridge without the
-        // user pasting anything. WebSockets have no same-origin policy, so any
-        // page or local process can reach 127.0.0.1 with a loopback remote — the
-        // shortcut is therefore bound to the configured extension id, matched
-        // against the exact Origin. A `chrome-extension://` prefix is NOT an
-        // identity: every Chrome extension has one.
-        // Firefox moz-extension:// origins contain a per-install UUID rather than
-        // the manifest's stable Gecko ID, so they are not an identity boundary
-        // and must present the bearer token. Non-loopback remotes must too.
+        // 零配置本地模式：来自*本*扩展的 loopback 升级跳过 token，
+        // 这样扩展能自己发现 bridge，用户什么都不用粘。
+        // WebSocket 没有同源策略，任何页面或本地进程都能顶着 loopback 远端
+        // 访问 127.0.0.1——所以这条捷径绑在已配置的扩展 id 上，
+        // 而且要和确切的 Origin 比对。`chrome-extension://` 前缀**不是**
+        // 身份：每个 Chrome 扩展都有一个。
+        // Firefox 的 moz-extension:// origin 带的是每次安装都不同的 UUID，
+        // 不是 manifest 里那个稳定的 Gecko ID，所以它构不成身份边界，
+        // 必须出示 bearer token。
+        // 非 loopback 的远端也一样。
         const loopbackNoToken = isLoopbackAddress(remoteAddress)
           && isTrustedExtensionOrigin(origin, this.deps.extensionId)
         if (!loopbackNoToken && !verifyToken(this.deps.token, frame.token)) {
@@ -388,7 +373,7 @@ export class BridgeServer {
     ws.once('error', onClose)
   }
 
-  /** Promote an authenticated socket to the single active slot. */
+  /** 把一个已认证的 socket 提升为那唯一的活跃槽位。 */
   private promote(ws: WebSocket, remoteAddress: string | undefined): void {
     this.replaceConnection()
     const abort = new AbortController()
@@ -405,24 +390,24 @@ export class BridgeServer {
       } catch (error: unknown) {
         if (!abort.signal.aborted && ws.readyState === WebSocket.OPEN) {
           sendFrame(ws, { t: 'error', code: 'stream-failed', message: String(error) })
-          // An authenticated socket without its Remote streams is unusable but
-          // otherwise appears healthy to the extension. Closing the generation
-          // activates its bounded reconnect loop and rebuilds every follower.
+          // 一个已认证、却没有 Remote 流的 socket 没法用，
+          // 可在扩展看来其它方面都正常。关掉这一代连接
+          // 会激活它有界的重连循环，并重建每个 follower。
           ws.close(1011, 'event stream failed')
         }
       }
     })()
     this.current = { ws, remoteAddress, abort, pump, ping }
-    // The relay's presence is the single source of truth for this flag, so the
-    // plugin cannot advertise a capability it did not wire up.
+    // 中继在不在是这个标志的唯一依据，
+    // 这样插件就宣传不了一个它没接上的能力。
     sendFrame(ws, {
       t: 'hello.ok',
       caps: this.deps.caps,
       policy: {
         ...this.deps.policy,
         imageRecognition: this.deps.imageRelay?.available === true,
-        // Carried rather than logged: it is the user's only way to learn what to
-        // fix, and the extension is where they will read it.
+        // 随帧带过去，而不是记日志：用户只有这一条途径知道该修什么，
+        // 而他们会在扩展里读到它。
         ...this.deps.imageRelay?.available === true || this.deps.visionUnavailableReason === undefined
           ? {}
           : { imageRecognitionHint: this.deps.visionUnavailableReason },
@@ -458,22 +443,21 @@ export class BridgeServer {
       case 'tool.cancel':
       case 'ping':
       case 'error':
-        // Protocol violations and unsolicited server-side shapes are ignored;
-        // the extension is the only sender on this channel.
+        // 协议违规的、以及服务端主动发来的形态都忽略；
+        // 这条通道上只有扩展会发东西。
         break
     }
   }
 
-  /** Recognition requests in flight; the extension bounds its side as well. */
+  /** 在途的识别请求；扩展那边也会限制自己的并发。 */
   private imageCallsInFlight = 0
   private readonly maxImageCalls = 4
 
   /**
-   * Serve one image-recognition request from the extension.
+   * 处理扩展发来的一次图片识别请求。
    *
-   * A failure is answered with a frame rather than a throw, because the extension
-   * records it in the manifest: the model must be told "there is an image here
-   * and it could not be read", not shown nothing at all.
+   * 失败用一个帧应答回去，而不是抛异常，因为扩展要把它记进 manifest：模型必须知道
+   * “这里有一张图，但读不出来”，而不是什么都看不到。
    */
   private async handleImageCall(frame: Extract<ClientFrame, { t: 'image.call' }>): Promise<void> {
     const ws = this.current?.ws
@@ -511,9 +495,8 @@ export class BridgeServer {
   }
 
   /**
-   * Preserve prompt/cancel arrival order per session. In particular, the
-   * first prompt may still be materializing a provisional session; its cancel
-   * must not reach the gateway until that admission has completed.
+   * 按 session 保住 prompt/cancel 的到达顺序。尤其是第一条 prompt 可能还在创建临时
+   * session；在那次接纳完成之前，它的 cancel 绝不能到 gateway。
    */
   private routeRpc(frame: Extract<ClientFrame, { t: 'rpc' }>): void {
     const sessionId = orderedSessionId(frame)
@@ -535,8 +518,8 @@ export class BridgeServer {
 
   private async handleRpc(frame: Extract<ClientFrame, { t: 'rpc' }>): Promise<void> {
     const conn = this.current
-    /* v8 ignore next -- replacement race: a frame can land between a socket
-    replacement and the next promotion; the re-check keeps the handler total */
+    /* v8 ignore next -- 顶替竞态：一帧可能落在 socket 被顶替和下一次提升之间；
+    这次复查让该处理器保持全定义 */
     if (conn === null) return
     const forbidden = PRIVILEGED_METHODS.has(frame.method) && !isLoopbackAddress(conn.remoteAddress)
     if (forbidden) {
@@ -606,10 +589,10 @@ export class BridgeServer {
     }
   }
 
-  /** Relay a pending Host waterfall response through the active adapter. */
+  /** 把待处理的 Host waterfall 响应经当前适配器中继出去。 */
   private async handleRespond(frame: Extract<ClientFrame, { t: 'respond' }>): Promise<void> {
     const conn = this.current
-    /* v8 ignore next -- replacement race; a closed socket simply drops the receipt */
+    /* v8 ignore next -- 顶替竞态；已关闭的 socket 只是把回执丢掉 */
     if (conn === null) return
     try {
       const result = await this.deps.api.respond(frame.rpcId, frame.result, conn.abort.signal)
@@ -628,7 +611,7 @@ export class BridgeServer {
     else pending.reject(new BridgeToolError(payloadCode(payload), payloadMessage(payload)))
   }
 
-  /** Close the current connection (if any) and settle its in-flight calls. */
+  /** 关掉当前连接（如果有），并结清它还在途中的调用。 */
   private replaceConnection(): void {
     const conn = this.current
     if (conn === null) return
@@ -669,11 +652,10 @@ function orderedSessionId(frame: Extract<ClientFrame, { t: 'rpc' }>): string | u
 }
 
 /**
- * Tool error payload → stable code. The wire parser enforces string fields,
- * so the fallback branches are parser-gated; exported so the fallback
- * contract is unit-testable directly.
- * @param payload - extension-reported error payload.
- * @returns the stable error code.
+ * 工具错误载荷 → 稳定的错误码。wire 解析器会强制 string 字段，所以这些回退分支由
+ * 解析器把关；导出它是为了让回退契约能直接单元测试。
+ * @param payload - 扩展上报的错误载荷。
+ * @returns 稳定的错误码。
  */
 export function payloadCode(payload: unknown): ToolErrorCode {
   if (typeof payload === 'object' && payload !== null) {
@@ -685,11 +667,10 @@ export function payloadCode(payload: unknown): ToolErrorCode {
 }
 
 /**
- * Tool error payload → message. The wire parser enforces string fields, so
- * the fallback branches are parser-gated; exported so the fallback contract
- * is unit-testable directly.
- * @param payload - extension-reported error payload.
- * @returns the human-readable message.
+ * 工具错误载荷 → 消息。wire 解析器会强制 string 字段，所以这些回退分支由解析器把关；
+ * 导出它是为了让回退契约能直接单元测试。
+ * @param payload - 扩展上报的错误载荷。
+ * @returns 人能读的消息。
  */
 export function payloadMessage(payload: unknown): string {
   if (typeof payload === 'object' && payload !== null) {

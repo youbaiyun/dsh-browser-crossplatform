@@ -4,9 +4,9 @@ import { runAction } from '../src/content/actions.ts'
 import type { ElementIds } from '../src/content/ids.ts'
 
 /**
- * Rich-text hosts (Lexical, Draft.js, ProseMirror) keep their own document
- * model and reconcile away foreign `textContent` writes, so typing must go
- * through the browser editing pipeline instead of a direct DOM assignment.
+ * 富文本宿主（Lexical、Draft.js、ProseMirror）有自己的文档
+ * 模型，会把外来的 `textContent` 写入当成差异抹掉，所以输入必须走
+ * 浏览器编辑管线，不能直接赋值 DOM。
  */
 
 const BUDGET = { maxItems: 20, maxForms: 10, maxChars: 2_000 }
@@ -24,15 +24,15 @@ function host(html = ''): HTMLElement {
 }
 
 /**
- * Model the editing pipeline rather than only its return value.
+ * 模拟编辑管线本身，而不只是它的返回值。
  *
- * A stub that just returns `true` cannot distinguish "the command ran" from
- * "the editor accepted the input", which is the exact failure this fix exists
- * to correct. This one replaces the current selection and emits the
- * `beforeinput`/`input` sequence, so the resulting DOM is the observable proof.
+ * 一个只返回 `true` 的桩分不出「命令执行了」和
+ * 「编辑器接受了这次输入」，而这正是这次修复要纠正的
+ * 失败。这个桩会替换当前选区并发出
+ * `beforeinput`/`input` 序列，所以最终的 DOM 才是可观测的证据。
  *
- * @param accept - when false, simulates a host that refuses the command.
- * @returns the `execCommand` spy.
+ * @param accept - 为 false 时模拟一个拒绝这条命令的宿主。
+ * @returns `execCommand` 这个 spy。
  */
 function stubEditingPipeline(accept = true): ReturnType<typeof vi.fn> {
   const spy = vi.fn((command: string, _ui: boolean, value: string) => {
@@ -69,7 +69,7 @@ describe('typing into rich-text editors', () => {
 
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith('insertText', false, 'hello world')
-    // The observable outcome, not just the invocation.
+    // 要的是可观测的结果，不只是调用本身。
     expect(el.textContent).toBe('hello world')
   })
 
@@ -138,7 +138,7 @@ describe('typing into rich-text editors', () => {
 
     await runAction('browser_type', { index: 5, text: 'y' }, { ids: idsFor(inner!), budget: BUDGET })
 
-    // The text belongs to the outer host, not to the addressed span.
+    // 文本属于外层宿主，不属于被寻址的那个 span。
     expect(el.textContent).toBe('xy')
   })
 
@@ -152,7 +152,7 @@ describe('typing into rich-text editors', () => {
       runAction('browser_type', { index: 9, text: 'x' }, { ids: idsFor(chip!), budget: BUDGET }),
     ).rejects.toMatchObject({ message: 'Element [9] is not editable (span).' })
 
-    // The island is not editable, and the surrounding composer must not be used.
+    // 这个 island 不可编辑，也不能去动周围的 composer。
     expect(spy).not.toHaveBeenCalled()
     expect(el.textContent).toBe('@mention')
   })

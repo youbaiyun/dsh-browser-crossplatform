@@ -9,7 +9,7 @@ import {
   type Settings,
 } from '../src/settings.ts'
 
-/** Normalize an untrusted candidate exactly as the storage reader would. */
+/** 完全按存储读取器的方式，规范化一个不可信的候选值。 */
 function normalize(candidate: unknown): Settings {
   return normalizeSettings(candidate as Partial<Settings> | undefined)
 }
@@ -18,8 +18,8 @@ describe('normalizeSettings', () => {
   it('keeps a valid vision tier and refuses to guess at anything else', () => {
     expect(normalizeSettings({ visionTier: 'low' }).visionTier).toBe('low')
     expect(normalizeSettings({ visionTier: 'enhanced' }).visionTier).toBe('enhanced')
-    // A corrupted storage value must land on the safe tier, not on the cheapest
-    // one: the difference is whether images leave the machine at all.
+    // 一个坏掉的存储值必须落在安全的档位上，不是最便宜的档位上：两者的差别在于
+    // 图片到底会不会离开这台机器。
     expect(normalizeSettings({ visionTier: 'nonsense' } as unknown as Partial<Settings>).visionTier).toBe('off')
     expect(normalizeSettings(undefined).visionTier).toBe('off')
   })
@@ -33,10 +33,9 @@ describe('normalizeSettings', () => {
     expect(normalized.visionEndpoint).toBe('https://api.example.com/v1')
     expect(normalized.visionApiKey).toBe('secret')
     expect(normalizeSettings(undefined).visionEndpoint).toBe('')
-    // The model is configuration because the endpoint is: pointing the browser at
-    // another provider while the id stayed fixed would send a name that provider has
-    // never heard of. Empty means "take the shared default", which the caller
-    // resolves, so an install that never sets it is still correct.
+    // 模型算配置项，是因为端点也算：把浏览器指向另一家 provider，而 id 却固定
+    // 不变，发过去的名字那家 provider 从没听说过。空值表示「采用共享默认值」，
+    // 由调用方去解析，所以从不设置它的安装也是对的。
     expect(normalized.visionModel).toBe('custom-vision')
     expect(normalizeSettings({ visionModel: '   ' }).visionModel).toBe('')
   })
@@ -44,11 +43,11 @@ describe('normalizeSettings', () => {
   it('falls back to the defaults for an empty or missing candidate', () => {
     const fromUndefined = normalizeSettings(undefined)
     expect(fromUndefined).toEqual(SETTINGS_DEFAULTS)
-    // The result is a fresh object, not the shared defaults record.
+    // 结果是一个全新对象，不是那份共享的默认值记录。
     expect(fromUndefined).not.toBe(SETTINGS_DEFAULTS)
 
     expect(normalize({})).toEqual(SETTINGS_DEFAULTS)
-    // A missing storage value or a corrupted non-object must not throw.
+    // 存储值缺失、或者坏成了非对象，都不能抛异常。
     expect(normalize(null)).toEqual(SETTINGS_DEFAULTS)
     expect(normalize('not settings')).toEqual(SETTINGS_DEFAULTS)
     expect(normalize(7)).toEqual(SETTINGS_DEFAULTS)
@@ -65,21 +64,19 @@ describe('normalizeSettings', () => {
       trustedActionOrigins: [],
       approvalNotifications: true,
       autoOpenPanel: true,
-      // Following the tab the user moved to is the shipped default; the strip can put it
-      // back to asking, which is the mode that never moves the target on its own.
+      // 跟着用户切到的标签页走是出厂默认值；控制条可以把它改回「询问」，那个模式永远
+      // 不会自己挪动目标。
       tabSwitch: 'follow',
-      // Mirroring the desktop's browser workspace, so an instruction issued there shows
-      // up without being picked first.
+      // 跟桌面端的浏览器工作区保持一致，这样在那里发出的指令不用先被选中就会显示
+      // 出来。
       sessionScope: 'workspace',
-      pinnedSessionId: null,
       readWidth: 640,
     })
-    // Every field is always present, so the panel never renders `undefined`.
+    // 每个字段始终存在，面板永远不会渲染出 `undefined`。
     expect(Object.keys(fromUndefined).sort()).toEqual([
       'approvalNotifications',
       'autoOpenPanel',
       'bridgeUrl',
-      'pinnedSessionId',
       'readWidth',
       'sessionScope',
       'sharePageContent',
@@ -103,17 +100,19 @@ describe('normalizeSettings', () => {
       token: 'bearer-token',
     })
 
-    // Whitespace-only input collapses to the empty "auto-discover" value.
+    // 全是空白的输入会收敛成空值，也就是「自动发现」那个取值。
     expect(normalize({ bridgeUrl: '   ', token: '\t' }))
       .toMatchObject({ bridgeUrl: '', token: '' })
     expect(normalize({ bridgeUrl: 42, token: null }))
       .toMatchObject({ bridgeUrl: '', token: '' })
   })
 
-  it('accepts only ask/auto/off for sharePageContent', () => {
+  it('accepts only ask/auto for sharePageContent, and folds the retired "off" onto ask', () => {
     expect(normalize({ sharePageContent: 'ask' }).sharePageContent).toBe('ask')
     expect(normalize({ sharePageContent: 'auto' }).sharePageContent).toBe('auto')
-    expect(normalize({ sharePageContent: 'off' }).sharePageContent).toBe('off')
+    // `'off'` 是已删掉的那一档。存过它的用户必须落到 `'ask'`——他们当年选的是
+    // "更严格的一档"，降级成"什么都不问"正好把意图反着实现。
+    expect(normalize({ sharePageContent: 'off' }).sharePageContent).toBe('ask')
 
     for (const invalid of ['sometimes', 'ON', '', true, 1, null, undefined, {}]) {
       expect(normalize({ sharePageContent: invalid }).sharePageContent).toBe('auto')
@@ -121,21 +120,21 @@ describe('normalizeSettings', () => {
   })
 
   it('keeps unrestrictedBrowserAccess a strict boolean, falling back to the default', () => {
-    // An explicit choice survives in both directions — a user who turned it off keeps it
-    // off, which is what makes the switch meaningful.
+    // 明确做出的选择两个方向都保留——把开关关掉的用户会保持关闭，这才让
+    // 这个开关有意义。
     expect(normalize({ unrestrictedBrowserAccess: true }).unrestrictedBrowserAccess).toBe(true)
     expect(normalize({ unrestrictedBrowserAccess: false }).unrestrictedBrowserAccess).toBe(false)
 
-    // Anything that is not a boolean falls back to the shipped default rather than to
-    // `false`. The previous form (`source.x === true`) pinned this field to `false` for
-    // every unreadable value, so the default could be changed in `SETTINGS_DEFAULTS` and
-    // this line would quietly undo it — which is exactly what happened.
+    // 任何不是布尔值的东西都回退到出厂默认值，而不是 `false`。以前那种写法
+    // （`source.x === true`）会把每个读不出来的值都把这个字段钉死为 `false`，于是
+    // 默认值在 `SETTINGS_DEFAULTS` 里改了也没用，这一行会悄悄把它撤销——事情正是这样
+    // 发生的。
     for (const loose of ['true', 'yes', '1', 1, 0, null, undefined, {}, []]) {
       expect(normalize({ unrestrictedBrowserAccess: loose }).unrestrictedBrowserAccess)
         .toBe(SETTINGS_DEFAULTS.unrestrictedBrowserAccess)
     }
-    // Stated plainly as well, so the intent survives a change to the default: a record
-    // that says nothing about the field gets the default, not "off".
+    // 这里也明写一遍，好让意图在默认值被改动后依然成立：一份对该字段只字未提的记录
+    // 拿到的是默认值，不是「关闭」。
     expect(normalize({}).unrestrictedBrowserAccess).toBe(SETTINGS_DEFAULTS.unrestrictedBrowserAccess)
   })
 
@@ -173,7 +172,7 @@ describe('normalizeSettings', () => {
     expect(normalize({ approvalNotifications: true })).toMatchObject({ approvalNotifications: true })
     expect(normalize({ approvalNotifications: false })).toMatchObject({ approvalNotifications: false })
 
-    // Anything that is not literally `false` keeps the default.
+    // 任何不是字面量 `false` 的值都保持默认。
     for (const notFalse of ['false', 0, null, undefined, {}, []]) {
       expect(normalize({ approvalNotifications: notFalse })).toMatchObject({ approvalNotifications: true })
     }
@@ -181,7 +180,7 @@ describe('normalizeSettings', () => {
 
   it('keeps the reading cap inside a range that is still a line length', () => {
     expect(normalize({ readWidth: 800 }).readWidth).toBe(800)
-    // Narrower than a usable column is raised; absurdly wide is capped.
+    // 比可用栏宽更窄的会被抬高，宽得离谱的会被封顶。
     expect(normalize({ readWidth: 120 }).readWidth).toBe(360)
     expect(normalize({ readWidth: 9000 }).readWidth).toBe(1200)
     for (const invalid of [undefined, null, 'wide', Number.NaN, {}]) {
@@ -193,38 +192,36 @@ describe('normalizeSettings', () => {
     expect(normalize({ tabSwitch: 'follow' }).tabSwitch).toBe('follow')
     expect(normalize({ tabSwitch: 'keep' }).tabSwitch).toBe('keep')
     expect(normalize({ tabSwitch: 'ask' }).tabSwitch).toBe('ask')
-    // Compared against the default rather than a literal, so changing the shipped
-    // default does not need this list edited twice — and an invalid value can never
-    // silently become a valid mode.
+    // 拿默认值比，不拿字面量比，这样改出厂默认值时不必连这份列表一起改，而且
+    // 无效的值永远不会悄悄变成一个合法模式。
     for (const invalid of ['always', 'FOLLOW', '', true, 1, null, undefined, {}]) {
       expect(normalize({ tabSwitch: invalid }).tabSwitch).toBe(SETTINGS_DEFAULTS.tabSwitch)
     }
   })
 
-  it('accepts only the three conversation scopes, defaulting to the workspace', () => {
+  it('accepts the three conversation scopes, defaulting to mirroring all workspaces', () => {
     expect(normalize({ sessionScope: 'fresh' }).sessionScope).toBe('fresh')
-    expect(normalize({ sessionScope: 'pinned' }).sessionScope).toBe('pinned')
+    expect(normalize({ sessionScope: 'last' }).sessionScope).toBe('last')
     expect(normalize({ sessionScope: 'workspace' }).sessionScope).toBe('workspace')
-    for (const invalid of ['current', 'PINNED', '', true, 1, null, undefined, {}]) {
+    for (const invalid of ['current', 'LAST', '', true, 1, null, undefined, {}]) {
       expect(normalize({ sessionScope: invalid }).sessionScope).toBe(SETTINGS_DEFAULTS.sessionScope)
     }
   })
 
-  it('keeps a pinned session id only when it is a usable string', () => {
-    expect(normalize({ pinnedSessionId: 'session-7' }).pinnedSessionId).toBe('session-7')
-    expect(normalize({ pinnedSessionId: '  session-7  ' }).pinnedSessionId).toBe('session-7')
-    // A junk id must collapse to "nothing chosen" rather than routing the next
-    // prompt at a session id built from whatever was in storage.
-    for (const invalid of ['', '   ', 42, true, null, undefined, {}, []]) {
-      expect(normalize({ pinnedSessionId: invalid }).pinnedSessionId).toBeNull()
-    }
+  it('folds the retired "pinned" scope onto "last" instead of the default', () => {
+    // `pinned` 那一档已经并入 `last`。让它掉到默认值 `workspace` 会把"接着自己那段
+    // 对话"的用户改到"镜像全部工作区"——那不是他选的东西。所以这条迁移路径单独钉住。
+    expect(normalize({ sessionScope: 'pinned' }).sessionScope).toBe('last')
+    // 只剩 `pinnedSessionId` 的旧记录：那个字段已经删掉了，范围落回默认。
+    expect(normalize({ sessionScope: 'fresh', pinnedSessionId: 'session-7' }).sessionScope).toBe('fresh')
+    expect('pinnedSessionId' in normalize({ pinnedSessionId: 'session-7' })).toBe(false)
   })
 
   it('preserves a complete, already-normalized candidate', () => {
     const candidate: Settings = {
       bridgeUrl: 'ws://127.0.0.1:8799/bridge',
       token: 'bearer-token',
-      sharePageContent: 'off',
+      sharePageContent: 'ask',
       visionTier: 'standard',
       visionEndpoint: 'https://api.example.com/v1',
       visionModel: 'custom-vision',
@@ -234,8 +231,7 @@ describe('normalizeSettings', () => {
       approvalNotifications: false,
       autoOpenPanel: false,
       tabSwitch: 'ask',
-      sessionScope: 'pinned',
-      pinnedSessionId: 'session-42',
+      sessionScope: 'last',
       readWidth: 800,
     }
 
@@ -260,8 +256,8 @@ describe('normalizeSettings', () => {
 
     expect(SETTINGS_DEFAULTS).toEqual(before)
 
-    // The normalized allowlist is a fresh array: a caller cannot corrupt the
-    // defaults or the next read by mutating what it received.
+    // 规范化后的白名单是全新数组：调用方改自己收到的东西，破坏不了默认值或
+    // 下一次读取。
     dirty.trustedActionOrigins.push('https://evil.example.com')
     expect(normalizeSettings(undefined).trustedActionOrigins).toEqual([])
     expect(SETTINGS_DEFAULTS.trustedActionOrigins).toEqual([])

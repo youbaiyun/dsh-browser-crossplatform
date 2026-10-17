@@ -1,21 +1,19 @@
 /**
- * The startup check that the cost switch actually took effect.
+ * 启动时检查成本开关到底生效没有。
  *
- * A provider that ignores `thinking: {type: 'disabled'}` answers normally, so
- * nothing looks wrong while every image costs several times the image itself —
- * thinking tokens are the large part of the bill on a pure perception task. The
- * request body cannot prove it was honoured; `usage` can.
+ * 忽略 `thinking: {type: 'disabled'}` 的提供方照样作答，于是一切看起来都没问题，而每张
+ * 图片的开销却是图片本身的数倍——纯感知任务上，thinking token 才是账单的大头。请求体证明
+ * 不了这个开关被遵守，`usage` 可以。
  *
- * This runs once, in the background, and only ever warns. A deployment whose
- * provider reports nothing stays quiet rather than crying wolf: zero means "none
- * billed as far as this response says", not proof.
+ * 这段检查只在后台跑一次，而且只发警告。提供方什么都不上报的部署就保持沉默，而不是虚报
+ * 狼来了：零意味着“就本次响应而言没有计费”，并不等于证据。
  *
  * @module
  */
 
 import type { VisionClient } from './vision.ts'
 
-/** Run the probe and report a switch that was silently ignored. */
+/** 运行这次探测，并报告被静默忽略的开关。 */
 export function checkThinkingIsOff(vision: VisionClient, warn: (message: string) => void): void {
   void vision.probe().then((probe) => {
     if (!probe.ok) {
@@ -30,6 +28,6 @@ export function checkThinkingIsOff(vision: VisionClient, warn: (message: string)
       )
     }
   }).catch(() => {
-    // A diagnostic must never be able to break startup.
+    // 一项诊断绝不能有本事把启动弄坏。
   })
 }

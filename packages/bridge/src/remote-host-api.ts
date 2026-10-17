@@ -1,7 +1,6 @@
 /**
- * dsh 0.2 Host adapter: unary calls through TypertGateway, plus the Session
- * and forwarded-event plumbing assembled from the gateway, history, and
- * event-generation modules.
+ * dsh 0.2 Host 适配器：unary 调用走 TypertGateway，Session 和转发事件管道则由 gateway、
+ * history、event-generation 三个模块拼起来。
  *
  * @module dsh-browser-crossplatform/src/remote-host-api
  */
@@ -35,7 +34,7 @@ interface InvokeTarget {
 }
 
 
-/** Build the dsh 0.2 Host implementation. */
+/** 构造 dsh 0.2 的 Host 实现。 */
 export function createRemoteHostApi(
   gateway: TypertGatewayLike,
   connection: HostConnectionLike,
@@ -46,7 +45,7 @@ export function createRemoteHostApi(
 class RemoteHostApi implements BrowserHostApi {
   private readonly fetchHandler: ReturnType<HostConnectionLike['createSharedFetchHandler']>
   private readonly extensionSessions = new ExtensionSessionRegistry()
-  /** Last known session/follow tip per Session; drives session/page throughSeq. */
+  /** 每个 Session 已知的最后 session/follow 顶端；用来驱动 session/page 的 throughSeq。 */
   private readonly historyCursors = new Map<string, number>()
   private activeEvents: EventGeneration | undefined
 
@@ -68,9 +67,9 @@ class RemoteHostApi implements BrowserHostApi {
     if ('error' in target) return { ok: false, error: target.error }
 
     try {
-      // Deferred Sessions have no history call with which to establish the
-      // follower. Open it after materialization and before prompt admission,
-      // so the first user/turn events cannot race past the extension.
+      // 被延迟的 Session 没有 history 调用可以拿来建 follower。要在它创建之后、
+      // 接纳 prompt 之前把 follower 打开，这样最早的 user/turn 事件
+      // 才不会抢在扩展前面溜掉。
       if (call.method === 'session.prompt') {
         const sessionId = sessionIdOf(call.payload)
         if (sessionId !== undefined) await this.activeEvents?.ensureSessionFollow(sessionId, call.signal)
@@ -81,9 +80,9 @@ class RemoteHostApi implements BrowserHostApi {
         args: target.args,
         signal: call.signal,
       })
-      // Only claim ownership after a successful create/prompt. A failed prompt
-      // against a Desktop session must not steal later ask_user_question away
-      // from the native waterfall.
+      // 只在 create/prompt 成功之后才认领所有权。针对桌面 session 的失败 prompt
+      // 绝不能把后面的 ask_user_question
+      // 从原生 waterfall 手里抢走。
       if (call.method === 'session.create' || call.method === 'session.prompt') {
         this.extensionSessions.note(sessionIdOf(call.payload))
         this.extensionSessions.note(sessionIdOf(value))
@@ -162,21 +161,18 @@ class RemoteHostApi implements BrowserHostApi {
   }
 
   /**
-   * Start streaming one Session's events to the extension without prompting it.
+   * 不让它发提示，只管把某个 Session 的事件推给扩展。
    *
-   * `session.prompt` opens the follower as a side effect, which is why a panel
-   * that sends its own prompt sees its own conversation. A panel that is
-   * *watching* a conversation the desktop app drives has no prompt to send, so
-   * without this it receives nothing: the extension's renderer drops every event
-   * whose sessionId is not the one it is bound to, and nothing ever binds it to a
-   * running Session.
+   * `session.prompt` 会顺带打开 follower，自己发提示的面板之所以能看见自己那段对话，靠的
+   * 就是这个。而一个只是在*观看*桌面应用驱动的那段对话的面板没有提示可发，没有这个调用
+   * 它就什么都收不到：扩展的渲染层会丢掉所有 sessionId 与它绑定的那个对不上的事件，而
+   * 没有任何东西把它绑到一个正在运行的 Session 上。
    *
-   * Read-only by construction — it opens the same follower `session.history`
-   * would and returns no Session value — so it cannot change a Session's state or
-   * admit a turn.
+   * 从构造上就是只读的——它打开的 follower 和 `session.history` 会打开的完全一样，也不
+   * 返回任何 Session 值——所以它既改不了 Session 的状态，也接纳不了一个 turn。
    *
-   * @param call - the Host call; `sessionId` names the Session to follow.
-   * @returns `{ following: true }`, or a bad-request/gateway failure.
+   * @param call - Host 调用；`sessionId` 指定要跟随的 Session。
+   * @returns `{ following: true }`，或 bad-request/gateway 失败。
    */
   private async sessionFollow(call: HostRpcCall): Promise<HostRpcResult> {
     const sessionId = sessionIdOf(call.payload)
@@ -196,19 +192,17 @@ class RemoteHostApi implements BrowserHostApi {
   }
 
   /**
-   * Stop reading every Session except the ones named, releasing their streams.
+   * 停止读取指定之外的所有 Session，并把它们的流放掉。
    *
-   * The counterpart to {@link sessionFollow}, and what keeps a whole-workspace mirror
-   * from holding a stream per conversation for the lifetime of the connection. The
-   * caller declares what it is still watching rather than what to close: the set it
-   * holds is the authority, so an extension that missed a state change still ends up
-   * with exactly the streams it wants, and naming a Session it does not follow is a
-   * no-op rather than an error.
+   * 它是 {@link sessionFollow} 的对立面，也是让整个工作区镜像不至于在连接活着的整段时间
+   * 里为每段对话各攥一条流的东西。调用方声明的是它还在看什么，不是要关掉什么：它手里的
+   * 集合才算数，所以就算扩展漏掉了一次状态变化，最后留下来的也恰好是它想要的那些流；
+   * 指定一个它没在跟随的 Session 只是空操作，不是错误。
    *
-   * Read-only in the same sense as `session.follow` — it only stops reads.
+   * 和 `session.follow` 一样是只读的——它只是停止读取。
    *
-   * @param call - the Host call; `keep` lists the Session ids still wanted.
-   * @returns `{ following: n }`, the number of Sessions still being read.
+   * @param call - Host 调用；`keep` 列出仍然需要的 Session id。
+   * @returns `{ following: n }`，即仍在被读取的 Session 数。
    */
   private sessionUnfollow(call: HostRpcCall): HostRpcResult {
     if (!isRecord(call.payload)) return badRequest('session.unfollow payload must be an object')
@@ -218,8 +212,8 @@ class RemoteHostApi implements BrowserHostApi {
     }
     const keep = new Set<string>()
     for (const entry of Array.isArray(raw) ? raw : []) {
-      // A malformed entry is skipped rather than failing the call: the request's whole
-      // purpose is to release resources, and refusing it would leave them held.
+      // 格式不对的条目跳过，不让整个调用失败：这个请求的全部目的就是
+      // 释放资源，拒掉它反而会让资源继续被占着。
       if (typeof entry === 'string' && entry !== '') keep.add(entry)
     }
     if (this.activeEvents === undefined) {
@@ -233,7 +227,7 @@ class RemoteHostApi implements BrowserHostApi {
     }
   }
 
-  /** Combine the deployment catalog with the Session's durable next selection. */
+  /** 把部署的目录与该 Session 持久化的下一项选择合并起来。 */
   private async sessionModels(call: HostRpcCall): Promise<HostRpcResult> {
     if (!isRecord(call.payload)) return badRequest('session.models payload must be an object')
     const sessionId = sessionIdOf(call.payload)
@@ -241,7 +235,7 @@ class RemoteHostApi implements BrowserHostApi {
       const catalog = await this.gateway.invoke({
         namespace: 'session', method: 'modelCatalog', args: {}, signal: call.signal,
       })
-      // Provisional Sessions request only the catalog and overlay their pending choice.
+      // 临时 Session 只要目录，再叠上自己那几项还没落定的选择。
       const projections = sessionId === undefined ? undefined : await this.gateway.invoke({
         namespace: 'session', method: 'projections', args: { request: { sessionId } }, signal: call.signal,
       })
@@ -255,8 +249,8 @@ class RemoteHostApi implements BrowserHostApi {
   }
 
   /**
-   * Resolve a Host-legal throughSeq for older history pages.
-   * Never invent Number.MAX_SAFE_INTEGER â€” session/page rejects tips past the log cursor.
+   * 给更旧的历史分页算出一个 Host 认可的 throughSeq。
+   * 绝不要凭空造一个 Number.MAX_SAFE_INTEGER——session/page 会拒绝越过日志游标顶端的值。
    */
   private async historyThroughSeq(sessionId: string, signal: AbortSignal): Promise<number> {
     const cached = this.historyCursors.get(sessionId)
@@ -273,8 +267,8 @@ class RemoteHostApi implements BrowserHostApi {
   }
 
   private noteHistoryCursor(sessionId: string, cursor: number): void {
-    // Host session/page refuses throughSeq past the durable tip; MAX_SAFE_INTEGER is
-    // only a UI sentinel elsewhere and must never be forwarded as a page tip.
+    // Host 的 session/page 会拒绝越过持久化顶端的 throughSeq；MAX_SAFE_INTEGER 在
+    // 别处只是个 UI 哨兵值，绝不能当成分页顶端转发出去。
     if (!Number.isSafeInteger(cursor) || cursor < -1 || cursor === Number.MAX_SAFE_INTEGER) return
     const previous = this.historyCursors.get(sessionId)
     if (previous === undefined || cursor > previous) this.historyCursors.set(sessionId, cursor)
@@ -417,7 +411,7 @@ function sessionIdOf(payload: unknown): string | undefined {
     : undefined
 }
 
-/** Map Host ModelCatalog into the extension's session.models directory shape. */
+/** 把 Host ModelCatalog 映射成扩展的 session.models 目录形状。 */
 function adaptModelCatalog(value: unknown, next?: ReturnType<typeof modelSelectionOf>): unknown {
   if (!isRecord(value)) return value
   const selection = next ?? modelSelectionOf(value.default)

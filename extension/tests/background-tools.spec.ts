@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CONTENT_ACTION_TIMEOUT_MS,
+  CONTENT_READ_TIMEOUT_MS,
   dispatchToolCall,
   isNavigationCandidateTool,
+  requestImageTarget,
   type ToolAnswer,
   type ToolCall,
 } from '../src/background/tools.ts'
@@ -146,6 +149,146 @@ describe('dispatchToolCall', () => {
       args: { delta: false },
       budget,
     }, { documentId: 'document-7' })
+  })
+
+  it('recovers in place when a navigation kills the frame the action was dispatched to', async () => {
+    // 报告上来的 bug：一次整文档导航（一次 OAuth 跳转）在动作被派发的同一瞬间
+    // 摧毁了内容脚本的上下文，而 `sendMessage` 是以一个 *navigation* 消息
+    // 拒的，不是 'Receiving end does not exist'。那个
+    // 判定函数只认后一种形态，于是一个自愈路径本来就要处理的场景
+    // 被报给模型说无法恢复，模型只能盲目重试。
+    const chromeMock = mockChrome({
+      tab: { id: 7, url: 'https://example.com/redirect' },
+      responses: [new Error('Frame with id 0 was removed.'), OK],
+    })
+
+    const answer = await dispatchToolCall(CALL, 'auto')
+
+    expect(answer.ok).toBe(true)
+    // 恢复路径跑了：先注入一次，再把动作重新派发。
+    expect(chromeMock.executeScript).toHaveBeenCalledWith({
+      target: { tabId: 7, allFrames: true },
+      files: ['content.js'],
+    })
+    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(2)
+    expect(answer).not.toMatchObject({
+      error: { message: expect.stringContaining('stopped responding after the operation was dispatched') },
+    })
+  })
+
+  it('bounds a dispatch that is never answered, so a hang has an exit', async () => {
+    // `sendAction` 以前是一个没有上限的裸 `chrome.tabs.sendMessage`。一个上下文
+    // 正在被拆掉的 frame 可能让 promise 永远挂着，模型随后
+    // 就会等一个永远不会结算的调用——这是读取方看不见、也没法应对的
+    // 唯一失败模式。时间被伪造了，所以测试是在量这个上限，而不是把它等完。
+    vi.useFakeTimers()
+    try {
+      const chromeMock = mockChrome({
+        tab: { id: 7, url: 'https://example.com/hangs' },
+        respond: () => new Promise(() => {}),
+      })
+
+      const pending = dispatchToolCall(CALL, 'auto')
+      // `CALL` 是一次快照，所以它的上限走读取那一档，不是单次动作那一档。
+      // 往前推进一毫秒越过它：`advanceTimersByTimeAsync(ms)` 会把第一个
+      // tick 花在 now+0 上，所以正好排在 `ms` 的定时器不会被触发。
+      await vi.advanceTimersByTimeAsync(CONTENT_READ_TIMEOUT_MS + 1)
+      const answer = await pending
+      expect(answer).toMatchObject({
+        ok: false,
+        error: { code: 'content-unavailable', message: expect.stringContaining('stopped responding after the operation was dispatched') },
+      })
+      // 这个上限只是一道封顶，不是重试：动作可能已经在页面上跑过了，
+      // 所以绝不能光凭一次超时就把任何东西派发两次。
+      expect(chromeMock.sendMessage).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 20_000)
+
+  it('does not mistake an unrelated "was removed" failure for a dead frame', async () => {
+    // 这个判定函数每匹配一次，就同时授权重新派发、以及对一个
+    // 会改变状态的动作做回滚，所以绝不能放宽成一个光秃秃的短语。`was removed` 就是
+    // 陷阱：页面可以报告某个元素、某个 observer 或某个 listener 被移除，而
+    // 这些都不代表接收方已经不在了。凭这种证据重新派发一次点击
+    // 就会点两次。
+    const chromeMock = mockChrome({
+      tab: { id: 7, url: 'https://example.com/fragile' },
+      responses: [new Error('The element was removed from the document before the action could run.')],
+    })
+    const rollbackActionCommit = vi.fn()
+
+    const answer = await dispatchToolCall(
+      { id: 'unrelated-removal', name: 'browser_click', args: { index: 2 } },
+      'auto',
+      undefined,
+      async () => 'approved',
+      undefined,
+      undefined,
+      undefined,
+      { unrestrictedAccess: true, commitAction: vi.fn(), rollbackActionCommit },
+    )
+
+    expect(answer).toMatchObject({
+      ok: false,
+      error: { code: 'content-unavailable', message: expect.stringContaining('stopped responding after the operation was dispatched') },
+    })
+    expect(chromeMock.sendMessage).toHaveBeenCalledOnce()
+    expect(chromeMock.executeScript).not.toHaveBeenCalled()
+    expect(rollbackActionCommit).not.toHaveBeenCalled()
+  })
+
+  it('gives a page read more time than a single action', () => {
+    // 上限必须跟着工作量走。`browser_snapshot` 和 `browser_get_text`
+    // 会序列化实时 DOM（包括各个 frame），在重页面上这合理地要花上
+    // 比一次点击更长的时间——两者共用十秒上限时，这份工作会在
+    // 半途被取消，并报成脚本无响应，把「这个页面很大」变成
+    // 「这个页面坏了」。这条接线被这里其余所有派发测试走到，
+    // 它们都会经由读取上限解析一次快照。
+    expect(CONTENT_READ_TIMEOUT_MS).toBeGreaterThan(CONTENT_ACTION_TIMEOUT_MS)
+  })
+
+  it('answers content-unavailable when image recovery cannot load the content script', async () => {
+    // 图片路径以前在注入后重新派发，让重试抛出的任何东西以原始拒绝的
+    // 形式逃出去。调用方会把原始拒绝报成 `internal`，这没告诉
+    // 模型关于这个页面的任何信息——而 `content-unavailable` 才是它已经
+    // 知道怎么处理的错误码。注入本身被拒时也一样。
+    const chromeMock = mockChrome({
+      tab: { id: 7, url: 'https://example.com/gallery' },
+      responses: [new Error('Could not establish connection. Receiving end does not exist.')],
+      injectionError: new Error('Cannot access contents of the page.'),
+    })
+
+    const answer = await requestImageTarget(7, 0, 0)
+
+    expect(answer.ok).toBe(false)
+    if (answer.ok) throw new Error('unreachable')
+    expect(answer.error.code).toBe('content-unavailable')
+    expect(answer.error.message).toContain('content script')
+    expect(chromeMock.executeScript).toHaveBeenCalledOnce()
+  })
+
+  it('still refuses a frame the page does not have, rather than injecting for it', async () => {
+    // 恢复路径是为 *接收方缺失* 准备的，不是为 frame 缺失。放宽
+    // 判定函数绝不能把「你寻址的 frame 不存在」变成一次注入
+    // 加第二次派发：那里没有任何东西可投递，而模型正在用的
+    // 编号元素命名空间也已经失效了。
+    const chromeMock = mockChrome({
+      tab: { id: 7, url: 'https://example.com/frames' },
+      frames: [{ frameId: 0, parentFrameId: -1, documentId: 'document-7', url: 'https://example.com/frames' }],
+    })
+
+    const answer = await dispatchToolCall(
+      { id: 'gone-frame', name: 'browser_click', args: { index: 3, frame: 9 } },
+      'auto',
+      undefined,
+      async () => 'approved',
+    )
+
+    expect(answer.ok).toBe(false)
+    expect(answer).toMatchObject({ error: { message: expect.stringContaining('does not exist or has navigated') } })
+    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    expect(chromeMock.executeScript).not.toHaveBeenCalled()
   })
 
   it('does not retry or roll back a dispatched action when its response port closes', async () => {
@@ -293,12 +436,17 @@ describe('dispatchToolCall', () => {
     expect(commitAction).toHaveBeenCalledTimes(2)
   })
 
-  it('skips sharing blocks and approval prompts only in unrestricted mode', async () => {
+  it('skips approval prompts in unrestricted mode', async () => {
     const authorize = vi.fn(async () => 'denied' as const)
     mockChrome({ tab: { id: 8, url: 'https://example.com/' }, tabs: [managedTab(8)] })
 
+    // 这一行原先传的是 `'off'`，用来证明"共享阻断在 unrestricted 下会被跳过"。
+    // `'off'` 那一档已经删掉了（它号称页面内容不出浏览器，实际却被出厂即开的
+    // unrestricted 盖成 `'auto'`，一档都不生效），所以这里换成 `'ask'` ——
+    // 两者在 unrestricted 下走同一条路（都不是 `'auto'`），而这条用例要证的正是
+    // "unrestricted 一开，审批提示就不再出现"。
     await expect(dispatchToolCall(
-      CALL, 'off', undefined, authorize, undefined, undefined, undefined,
+      CALL, 'ask', undefined, authorize, undefined, undefined, undefined,
       { unrestrictedAccess: true },
     )).resolves.toMatchObject({ ok: true })
     await expect(dispatchToolCall(
@@ -332,16 +480,6 @@ describe('dispatchToolCall', () => {
       error: { message: expect.stringContaining('navigated while approval was pending') },
     })
     expect(followTab).not.toHaveBeenCalled()
-  })
-
-  it('keeps the page-sharing privacy boundary ahead of tab access', async () => {
-    const chromeMock = mockChrome({ tab: { id: 7, url: 'https://example.com' } })
-
-    await expect(dispatchToolCall(CALL, 'off')).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'action-failed' },
-    })
-    expect(chromeMock.query).not.toHaveBeenCalled()
   })
 
   it('dispatches to an explicitly bound background tab without querying the active tab', async () => {

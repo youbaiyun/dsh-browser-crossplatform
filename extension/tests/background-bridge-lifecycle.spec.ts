@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 
 /**
- * Lifecycle and panel-protocol tests for the browser-execution worker.
+ * 浏览器跑 worker 的生命周期与面板协议测试。
  *
- * The bridge is not leased to anything: the worker connects as soon as its
- * settings load, because installing the extension is the choice. A
- * `dsh-control` port is only a panel that observes state and answers decisions.
- * These tests boot the real worker against a faked `chrome.*` and a fake
- * WebSocket, and assert that contract instead of the old panel-lease one.
+ * bridge 不租给任何人：worker 在设置加载完就
+ * 连上，因为安装扩展本身就是那个选择。
+ * `dsh-control` 端口只是一个看状态、答决策的面板。
+ * 这些测试用一个伪造的 `chrome.*` 和一个伪造的
+ * WebSocket 启动真实 worker，断言的是这套契约，而不是旧的面板租约契约。
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -18,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 import type { ApprovalRequest } from '../src/security/approval.ts'
 import { CONTROL_PORT_NAME, type ControlState } from '../src/settings.ts'
 
-/** Caps the worker offers in its `hello`; the bridge echoes negotiated caps back. */
+/** worker 在 `hello` 里给出的 caps；bridge 会把协商好的 caps 回显回来。 */
 const HELLO_CAPS = { textOnly: true, snapshotMaxChars: 32_000, maxInteractiveItems: 60 }
 const KEEPALIVE_ALARM = 'dsh-bridge-keepalive'
 const BRIDGE_URL = 'wss://bridge.example/ext/bridge'
@@ -47,9 +47,9 @@ class FakeWebSocket extends EventTarget {
   }
 
   receive(frame: unknown): void {
-    // The real bridge always answers `hello` with a policy, so the fake one
-    // does too; a fixture that omits it is rejected by the frame parser and the
-    // connection silently never authenticates.
+    // 真 bridge 总是用一份 policy 回答 `hello`，所以这个假的
+    // 也照做；省略它的 fixture 会被帧解析器拒掉，连接
+    // 就永远静默地认证不完。
     const delivered = isRecord(frame) && frame.t === 'hello.ok' && frame.policy === undefined
       ? { ...frame, policy: { openPagesForUser: true } }
       : frame
@@ -89,7 +89,7 @@ function htmlTab(tabId: number): chrome.tabs.Tab {
   }
 }
 
-/** A panel port: named, and answerable. */
+/** 一个面板端口：有名字，能应答。 */
 function controlPort() {
   const onMessage = chromeEvent<[unknown]>()
   const onDisconnect = chromeEvent<[]>()
@@ -105,7 +105,7 @@ function controlPort() {
 
 type MessageSpy = ReturnType<typeof vi.fn>
 
-/** One message the worker pushed to a panel, with the fields under test. */
+/** worker 推给面板的一条消息，带上待测字段。 */
 interface ControlMessageLike {
   type?: string
   state?: ControlState
@@ -129,11 +129,11 @@ function approvalRequest(postMessage: MessageSpy): ApprovalRequest | undefined {
 }
 
 /**
- * Open the fake socket and wait until the worker's `hello` has gone out.
+ * 打开伪造的 socket，等到 worker 的 `hello` 发出来。
  *
- * The client attaches its frame listener in the same turn that sends `hello`,
- * so a frame pushed while that turn is still pending would be delivered to
- * nobody.
+ * 客户端在发 `hello` 的同一轮里挂上自己的帧监听器，
+ * 所以这一轮还 pending 时推进来的帧会没有
+ * 任何人接。
  */
 async function openBridge(socket: FakeWebSocket): Promise<void> {
   socket.open()
@@ -164,7 +164,7 @@ function mockChrome(options: {
   const action = {
     setBadgeText: vi.fn(async () => {}),
     setBadgeBackgroundColor: vi.fn(async () => {}),
-    // The toolbar icon has no popup; the side panel is opened by the browser.
+    // 工具栏图标没有 popup；侧边面板由浏览器打开。
     onClicked: chromeEvent<[chrome.tabs.Tab]>(),
   }
   const sidePanel = {
@@ -232,11 +232,11 @@ function mockChrome(options: {
 }
 
 /**
- * The last-loaded copy of the worker module.
+ * worker 模块最后加载的那份副本。
  *
- * A qued discovery retry holds the module graph alive and fires into it later,
- * so the teardown has to cancel through the same instance the test used. A plain
- * `import()` in afterEach would load a fresh copy and start new timers instead.
+ * 排队中的一次发现重试会让模块图活着并在之后触发，
+ * 所以拆除必须取消测试用的同一个实例。在
+ * afterEach 里用普通的 `import()` 会加载一份新副本、启动新的定时器。
  */
 let loadedWorker: { cancelPendingWork?: () => void } | undefined
 
@@ -259,13 +259,13 @@ describe('background bridge lifecycle', () => {
 
     loadedWorker = await import('../src/background/index.ts')
 
-    // No port was ever connected: the connection is not what starts the bridge.
+    // 从没连过任何端口：bridge 不是这次连接启动的。
     await vi.waitFor(() => { expect(FakeWebSocket.instances).toHaveLength(1) })
     const socket = FakeWebSocket.instances[0]!
     expect(socket.url).toBe('ws://127.0.0.1:3080/ext/bridge')
     expect(chromeMock.alarms.create).toHaveBeenCalledWith(KEEPALIVE_ALARM, { periodInMinutes: 0.5 })
     expect(chromeMock.alarms.clear).not.toHaveBeenCalled()
-    // The side panel is opened by the browser itself, not by an action handler.
+    // 侧边面板是浏览器自己开的，不是 action handler 开的。
     expect(chromeMock.sidePanel.setPanelBehavior).toHaveBeenCalledWith({ openPanelOnActionClick: true })
 
     await openBridge(socket)
@@ -273,7 +273,7 @@ describe('background bridge lifecycle', () => {
 
     const control = controlPort()
     chromeMock.onConnect.emit(control.port)
-    // Connecting answers with the current view state immediately.
+    // 一连上就立刻用当前视图状态作答。
     expect(sentMessages(control.postMessage)[0]).toMatchObject({ type: 'state' })
     await vi.waitFor(() => {
       expect(latestState(control.postMessage)).toMatchObject({
@@ -285,16 +285,16 @@ describe('background bridge lifecycle', () => {
   })
 
   it('always connects, because installing the extension is the choice', async () => {
-    // There is no autoConnect setting: a panel that has to be told to connect is
-    // a support burden, and a legacy stored value must not switch it off.
+    // 没有 autoConnect 这个设置：一个得被告知去连接的面板是
+    // 一种支持负担，而遗留的存储值绝不能把它关掉。
     const chromeMock = mockChrome({
       localGet: async () => ({ dshSettings: { autoConnect: false } }),
     })
     vi.stubGlobal('WebSocket', FakeWebSocket)
-    // A legacy `autoConnect: false` must not stop the extension connecting, so
-    // discovery has to succeed here for the socket below to exist at all.
-    // The answer must be a `ws://` URL: the bridge-config reply is validated, and
-    // a secure-scheme one would be skipped as unusable rather than dialled.
+    // 遗留的 `autoConnect: false` 绝不能阻止扩展连接，所以
+    // 发现流程必须在这里成功，下面的 socket 才可能冒出来。
+    // 答案必须是 `ws://` URL：bridge-config 回复会被校验，
+    // 而安全协议的 URL 会被当成不可用跳过，不会被拨打。
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       wsUrl: 'ws://127.0.0.1:3080/ext/bridge',
     }), { status: 200 })))
@@ -368,13 +368,13 @@ describe('panel protocol', () => {
   it('acknowledges a settings save only after persistence and keeps the bridge for a policy change', async () => {
     let finishSettingsWrite!: () => void
     const settingsWrite = new Promise<void>((resolve) => { finishSettingsWrite = resolve })
-    /** Every settings save the worker attempted, in order. */
+    /** worker 尝试过的每一次设置保存，按顺序排。 */
     const savedSettings: Record<string, unknown>[] = []
     const chromeMock = mockChrome({
       localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL } }),
-      // Only the settings write is held open. The worker's diagnostic probe
-      // writes its own key to the same store, and gating that too would stall
-      // the very queue this test observes.
+      // 只挂起这次设置写入。worker 的诊断探测
+      // 会把自己的键写进同一个存储，把那个也卡住就会堵死
+      // 这个测试正要观察的队列。
       localSet: async (items) => {
         if (!('dshSettings' in items)) return
         savedSettings.push(items.dshSettings as Record<string, unknown>)
@@ -397,8 +397,8 @@ describe('panel protocol', () => {
       id: 'policy-1',
       settings: { unrestrictedBrowserAccess: true },
     })
-    // Counted on settings saves rather than on every call to the store: the
-    // worker also writes a diagnostic record, and that is not a settings save.
+    // 统计的是设置保存次数，不是对存储的每次调用：
+    // worker 还会写一条诊断记录，那不算一次设置保存。
     await vi.waitFor(() => { expect(savedSettings).toHaveLength(1) })
     expect(sentMessages(control.postMessage)).not.toContainEqual(expect.objectContaining({
       type: 'settings.result',
@@ -412,7 +412,7 @@ describe('panel protocol', () => {
     expect(chrome.storage.local.set).toHaveBeenCalledWith({
       dshSettings: expect.objectContaining({ unrestrictedBrowserAccess: true }),
     })
-    // A policy change is not a connection change: the live socket stays.
+    // policy 变化不是连接变化：活跃的 socket 保持不变。
     expect(FakeWebSocket.instances).toHaveLength(1)
     expect(socket.readyState).toBe(FakeWebSocket.OPEN)
   })
@@ -469,17 +469,17 @@ describe('panel protocol', () => {
   it('reports a settings persistence failure back to the panel that asked', async () => {
     const chromeMock = mockChrome({
       localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL } }),
-      // The failure under test is the settings save. Letting the diagnostic
-      // probe's writes fail too would break settings persistence generally and
-      // drag boot behaviour into a test about save handling.
+      // 这次要测的失败是设置保存。让诊断
+      // 探测的写入也一起失败会普遍搞坏设置持久化，
+      // 把启动行为拖进一个关于保存处理的测试里。
       localSet: async (items) => {
         if ('dshSettings' in items) throw new Error('Storage is unavailable')
       },
     })
     vi.stubGlobal('WebSocket', FakeWebSocket)
-    // Nothing is configured, so boot discovers. One discovery call yields the
-    // socket this test needs; a refusal would leave the panel with no bridge at
-    // all and turn a save-handling test into a discovery test.
+    // 什么都没配置，所以启动会走发现流程。一次发现调用就能拿到
+    // 这个测试要的 socket；一次拒绝会让面板完全没有 bridge，
+    // 把一个保存处理测试变成发现流程测试。
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       wsUrl: 'ws://127.0.0.1:3080/ext/bridge',
     }), { status: 200 })))
@@ -506,8 +506,8 @@ describe('panel protocol', () => {
         error: 'Storage is unavailable',
       })
     })
-    // The failed save never reached the connection layer: the address it tried
-    // to set was not dialled, and the live socket is untouched.
+    // 那次失败的保存从没到过连接层：它想设置的
+    // 地址没有被拨打，活跃的 socket 也没受影响。
     expect(FakeWebSocket.instances).toHaveLength(socketsBefore)
     expect(socket.readyState).toBe(FakeWebSocket.OPEN)
   })
@@ -543,7 +543,7 @@ describe('panel protocol', () => {
       entry: expect.objectContaining({ id: 'close-1', state: 'running' }),
     }))
 
-    // A panel that opens later still sees every decision that is still pending.
+    // 之后才打开的面板照样能看到每个还没结算的决定。
     control.onMessage.emit({ type: 'state.request' })
     await vi.waitFor(() => {
       expect(latestState(control.postMessage)?.approvals.map((entry) => entry.id)).toContain(request.id)
@@ -564,8 +564,8 @@ describe('panel protocol', () => {
   })
 
   it('opens the panel itself when the model starts using the browser', async () => {
-    // The user wants to watch the work happen — what it is looking for, what it
-    // is downloading — so a browser tool call brings the panel forward.
+    // 用户想看着事情发生——它在找什么、在
+    // 下载什么——所以一次浏览器工具调用会把面板带到前台。
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL } }) })
     vi.stubGlobal('WebSocket', FakeWebSocket)
 
@@ -574,7 +574,7 @@ describe('panel protocol', () => {
     const socket = FakeWebSocket.instances[0]!
     await openBridge(socket)
     socket.receive({ t: 'hello.ok', caps: HELLO_CAPS })
-    // Opening the panel is not the panel's doing: no port is connected here.
+    // 打开面板的不是面板自己：这里没有连任何端口。
     expect(chromeMock.sidePanel.open).not.toHaveBeenCalled()
 
     socket.receive({
@@ -585,8 +585,8 @@ describe('panel protocol', () => {
       expiresAt: Date.now() + 10_000,
     })
     await vi.waitFor(() => { expect(chromeMock.sidePanel.open).toHaveBeenCalledOnce() })
-    // It targets the window in front of the user, not whichever window Chrome
-    // happens to consider current.
+    // 它认的是用户面前的那个窗口，而不是 Chrome
+    // 碰巧认为当前的那个窗口。
     expect(chromeMock.sidePanel.open).toHaveBeenCalledWith({ windowId: 1 })
   })
 
@@ -600,8 +600,8 @@ describe('panel protocol', () => {
     await openBridge(socket)
     socket.receive({ t: 'hello.ok', caps: HELLO_CAPS })
 
-    // A prompt is a conversation, not a browser action. Drive it far enough that
-    // the worker has really issued its RPCs, then assert nothing opened.
+    // prompt 是一次对话，不是浏览器动作。把它推到
+    // worker 真发出自己的 RPC，再断言什么都没打开。
     socket.receive({
       t: 'event',
       frame: { rpcId: 'rpc-1', method: 'session/create', payload: {} },
@@ -612,7 +612,7 @@ describe('panel protocol', () => {
   })
 
   it('opens the panel once for a burst of browser work, not once per call', async () => {
-    // A model that runs ten calls in a row must not fight the user ten times.
+    // 一个连跑十次调用的模型，不该跟用户抢十次。
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL } }) })
     vi.stubGlobal('WebSocket', FakeWebSocket)
 
@@ -660,7 +660,7 @@ describe('panel protocol', () => {
     call('snap-1')
     await vi.waitFor(() => { expect(chromeMock.sidePanel.open).toHaveBeenCalledOnce() })
 
-    // A later turn is a new thing to watch, so the panel is brought forward again.
+    // 后面的一轮是新的事情要看，面板会再被带到前台一次。
     vi.useFakeTimers({ shouldAdvanceTime: true })
     vi.setSystemTime(Date.now() + 61_000)
     call('snap-2')
@@ -687,16 +687,16 @@ describe('panel protocol', () => {
       args: {},
       expiresAt: Date.now() + 10_000,
     })
-    // Let the call finish so the assertion is not racing it.
+    // 让这次调用收尾，断言才不会和它抢跑。
     await vi.waitFor(() => {
       expect(socket.sent).toContainEqual(expect.objectContaining({ t: 'tool.result', id: 'snap-1' }))
     })
     expect(chromeMock.sidePanel.open).not.toHaveBeenCalled()
   })
 
-  it('promotes "don\'t ask again" into the stored tab-switch setting', async () => {    // The per-switch prompt used to forget its own answer on every worker
-    // restart, so the user was asked the same question forever. Answering with
-    // "keep, don't ask again" must therefore be written to settings.
+  it('promotes "don\'t ask again" into the stored tab-switch setting', async () => {    // 每个开关的提示以前一重启 worker 就忘了自己的答案，
+    // 于是用户永远被问同一件事。用
+    // 「保留，别再问」回答，就必须写进设置。
     const chromeMock = mockChrome({ localGet: async () => ({ dshSettings: { bridgeUrl: BRIDGE_URL, tabSwitch: 'ask' } }) })
     vi.stubGlobal('WebSocket', FakeWebSocket)
 
@@ -710,7 +710,7 @@ describe('panel protocol', () => {
       expect(latestState(control.postMessage)?.affinity).toMatchObject({ controlled: { tabId: 1 } })
     })
 
-    // The user switches away, which raises the prompt in the default `ask` mode.
+    // 用户切走了，这在默认的 `ask` 模式下会弹提示。
     chromeMock.tabs.onActivated.emit({ tabId: 2, windowId: 1 })
     const handoff = await vi.waitFor(() => {
       const state = latestState(control.postMessage)!
@@ -725,11 +725,11 @@ describe('panel protocol', () => {
     })
     await vi.waitFor(() => { expect(latestState(control.postMessage)?.affinity.status).toBe('background') })
 
-    // The preference, not just the pin, was persisted.
+    // 存下来的是那个偏好，不只是 pin。
     expect(chrome.storage.local.set).toHaveBeenCalledWith({
       dshSettings: expect.objectContaining({ tabSwitch: 'keep' }),
     })
-    // And it is what a panel now sees, so the sheet shows the same answer.
+    // 而且这正是面板现在看到的，于是显示同一个答案。
     expect(latestState(control.postMessage)?.settings.tabSwitch).toBe('keep')
   })
 
@@ -756,7 +756,7 @@ describe('panel protocol', () => {
         expect.objectContaining({ requireInteraction: true }),
       )
     })
-    // Fail closed: no panel answered, so nothing may run yet.
+    // 失败关闭：没有面板作答，所以什么都还跑不了。
     expect(chromeMock.tabs.remove).not.toHaveBeenCalled()
   })
 
@@ -778,12 +778,12 @@ describe('panel protocol', () => {
       controlled: { tabId: 1 },
     })
 
-    // A user tab switch suspends tool dispatch until the panel chooses.
+    // 用户切标签页会让工具派发暂停，直到面板做出选择。
     chromeMock.tabs.onActivated.emit({ tabId: 2, windowId: 1 })
     const handoff = await vi.waitFor(() => {
       const state = latestState(control.postMessage)!
       expect(state.affinity.status).toBe('handoff')
-      // The switch placeholder is replaced by the tab's real metadata.
+      // 占位的切换项会被标签页的真实元数据替换。
       expect(state.affinity.active?.url).toBe('https://example.com/2')
       return state
     })
@@ -816,7 +816,7 @@ describe('panel protocol', () => {
     })
     expect(followed.affinity.controlled).toMatchObject({ tabId: 3 })
 
-    // A decision about a switch the user already resolved changes nothing.
+    // 对一个用户已经解决过的开关做决定，不会改变任何东西。
     const messageCount = sentMessages(control.postMessage).length
     control.onMessage.emit({ type: 'affinity.respond', revision: handoff.affinity.revision, decision: 'keep' })
     await new Promise((resolve) => { setTimeout(resolve, 0) })
@@ -829,13 +829,13 @@ describe('panel protocol', () => {
 })
 
 /**
- * First-run guidance.
+ * 首次运行引导。
  *
- * A freshly installed extension is not pinned to the toolbar and cannot pin
- * itself, so a user who installs from a file sees nothing appear. The
- * notification is the only thing standing between them and never finding it —
- * which is exactly the kind of feature that breaks quietly, because the people
- * who maintain it have already installed the extension and never see it again.
+ * 刚装好的扩展没被固定到工具栏，也没法自己
+ * 固定，所以从文件安装的用户看不到任何东西出现。那条
+ * 通知是他们和「永远找不到它」之间唯一的东西——
+ * 而这正是那种会悄悄坏掉的功能，因为维护它的人
+ * 早就装好了扩展，再也不会看到它。
  */
 describe('first-run guidance', () => {
   it('offers the toolbar hint on a fresh install', async () => {
@@ -852,7 +852,7 @@ describe('first-run guidance', () => {
         expect.objectContaining({ requireInteraction: true }),
       )
     })
-    // The message has to say where the icon went, or it is just noise.
+    // 这条消息必须说清楚图标去哪了，否则只是噪声。
     const calls = chromeMock.notifications.create.mock.calls as unknown as [string, { message: string }][]
     expect(calls.at(-1)?.[1].message).toMatch(/toolbar|拼图/i)
   })

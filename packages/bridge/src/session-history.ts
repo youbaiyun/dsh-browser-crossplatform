@@ -1,6 +1,6 @@
 /**
- * Session history decoding: the `session/follow` baseline, its records, and the
- * compact chunk-row expansion older logs still use.
+ * Session 历史解码：`session/follow` 基线、它的记录，以及更旧的日志还在用的紧凑
+ * chunk-row 展开。
  *
  * @module dsh-browser-crossplatform/src/session-history
  */
@@ -9,7 +9,7 @@ import { openWireStream, type TypertGatewayLike } from './dsh-gateway.ts'
 import { isRecord } from './host-api.ts'
 
 export interface SessionSnapshot {
-  /** Inclusive Host log tip from session/follow; required for later session/page calls. */
+  /** session/follow 返回的宿主机日志顶端（含端点）；后续的 session/page 调用需要它。 */
   readonly cursor: number
   readonly records: readonly unknown[]
   readonly hasMore: boolean
@@ -60,9 +60,8 @@ export async function oneShotSessionSnapshot(
 
 export function historyValue(snapshot: SessionSnapshot): Record<string, unknown> {
   return {
-    // V3 records remain durable events with embedded Assistant streams. Keep
-    // the legacy chunk-row decoder for older logs/Hosts, without assigning
-    // synthetic durable seqs to the new process-local assistant stream.
+    // V3 记录仍然是带内嵌 Assistant 流的持久事件。给旧的日志/宿主机保留传统的
+    // chunk-row 解码器，但别给新的进程内 assistant 流配合成的持久 seq。
     events: snapshot.records.flatMap(historyRecordEvents).map(event => ({ event })),
     hasMore: snapshot.hasMore,
     ...(snapshot.projections === undefined ? {} : { projections: snapshot.projections }),

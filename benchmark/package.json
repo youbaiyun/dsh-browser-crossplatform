@@ -1,7 +1,7 @@
 {
   "name": "dsh-browser-benchmark",
   "private": true,
-  "version": "0.38.5",
+  "version": "0.38.6",
   "type": "module",
   "description": "Paired benchmark: this extension's bridge against a Playwright baseline on the same model, profile and tasks.",
   "scripts": {
