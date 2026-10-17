@@ -22,7 +22,7 @@
 | **离线包**（自己加载 / 商店上传用）    | [Releases](https://github.com/youbaiyun/dsh-browser-crossplatform/releases) 里的两个 zip                                    |
 
 ```sh
-# 从 npm 装（已发布：dsh-browser-crossplatform@0.38.5）：
+# 从 npm 装（已发布：dsh-browser-crossplatform@0.38.6）：
 dsh plugin --profile desktop add dsh-browser-crossplatform   # 命令行版 dsh web 用 --profile web
 
 # 或者直接从这个仓库装，不经过 npm：

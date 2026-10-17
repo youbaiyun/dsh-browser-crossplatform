@@ -21,7 +21,7 @@ Three routes — pick any one:
 | **Offline packages** (to load yourself / upload to the store) | The two zips under [Releases](https://github.com/youbaiyun/dsh-browser-crossplatform/releases) |
 
 ```sh
-# From the npm registry (published: dsh-browser-crossplatform@0.38.5):
+# From the npm registry (published: dsh-browser-crossplatform@0.38.6):
 dsh plugin --profile desktop add dsh-browser-crossplatform   # the CLI dsh web uses --profile web
 
 # Or straight from this repository, with no registry involved:
