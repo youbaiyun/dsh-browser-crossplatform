@@ -5,6 +5,23 @@ This project is a derivative of
 are listed only where this fork has something to say about them; see  
 [COPYRIGHT.md](COPYRIGHT.md) for which files belong to whom.
 
+## [0.38.8]
+
+A version-only release cut from the `0.38.7` tree, so a desktop install can carry this build as a
+version of its own instead of reusing a number that already means "the registry release".
+
+### Changed
+
+- The root package, `@dsh-browser/protocol`, `dsh-browser-crossplatform`, `dsh-browser-extension`
+  and both extension manifests all report `0.38.8`.
+- No source, protocol or wire-format change: a `0.38.7` bridge and a `0.38.8` extension still
+  interoperate, and so does the reverse.
+
+### Verification
+
+The bridge and all four extension targets build from this tree, the test suites and the typechecks
+pass, and the four release zips are repackaged under the new name.
+
 ## [0.38.7]
 
 A bridge-only release that fixes the one failure every fresh install eventually hit: the extension
