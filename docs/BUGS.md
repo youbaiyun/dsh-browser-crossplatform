@@ -5,634 +5,352 @@
 
 状态标记：`未修` / `调查中` / `已修（版本号）`
 
----
-
-## BUG-001 — 导航打断派发时，`content-unavailable` 的自愈路径被跳过
-
-**状态**：已修（0.38.6）
-**首次发现**：0.38.5（扩展 `kdhkdgfcinfkmogifamoapmheihhcjfk`，未打包加载 `D:\DSH-demo-0.38.5\extension\dist`）
-**影响**：连续 `browser_*` 调用在页面发生跳转时中断，模型收到一条不可操作的错误，必须靠人重试才能恢复
-
-### 症状
-
-页面主导航（尤其是 OAuth 跳转）发生在我派发一个内容脚本动作的**同一瞬间**时，工具调用失败并返回：
-
-```
-The content script stopped responding after the operation was dispatched. Call browser_snapshot before continuing.
-```
-
-连发第二次、第三次同样失败，间隔约 1–2 秒后自行恢复。三次实测原始报错：
-
-| # | 报错 |
-|---|---|
-| 1 | `The content script stopped responding after the operation was dispatched. Call browser_snapshot before continuing.` |
-| 2 | `The content script did not answer after it was loaded. Call browser_snapshot again before retrying.` |
-| 3 | `The controlled tab was closed. Open the dsh browser control strip and bind the current page before retrying.` |
-
-第 3 条发生在受控标签页真的被关闭时（我用 `active:false` 开后台标签页，受控目标漂移），
-与第 1、2 条可能同源也可能不同源，**暂不合并**，等复现能区分再定。
-
-### 复现
-
-触发环境是可稳定重放的公开页面跳转：
-
-1. 受控标签页停在 `support.broadcom.com/...`；
-2. 派发一个会触发跳转的动作（当时是打开下载页，服务端 302 到登录页）；
-3. 跳转目标是 `access.broadcom.com/default/ui/v1/signin/`（跨站、整文档导航）；
-4. 在跳转的同一刻调用 `browser_snapshot` → 报第 1 条；
-5. 紧接着再调 `browser_snapshot` → 报第 2 条；
-6. 第三次调用恢复正常。
-
-关键特征：**跳转是整文档导航**（`documentId` 改变），且该页在 iframe 里还有第三方
-反机器人组件（`service2.mtcaptcha.com`，带了 `about:blank` 子帧）——`allFrames: true`
-会把这些帧一并计入注入范围。
-
-### 定位
-
-抛出第 1 条的位置是
-
-`extension/src/background/tools.ts:1008-1012`
-
-```ts
-} catch (error: unknown) {
-  if (isCancelled(call, signal)) return cancelled()
-  if (!contentScriptReceiverMissing(error)) {
-    return unavailable('The content script stopped responding after the operation was dispatched. Call browser_snapshot before continuing.')
-  }
-  // …下面是注入自愈路径
-  await injectContentScript(tab.id)
-```
-
-而 `contentScriptReceiverMissing` 只认一种形状
-
-`extension/src/background/tools.ts:195-197`
-
-```ts
-function contentScriptReceiverMissing(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('Receiving end does not exist')
-}
-```
-
-**由此可推断的事实链**（每一步都能核对）：
-
-1. 能走到 1011 行，说明 `sendAction(tabId, …)` **确实 reject 了** —— 不是无限挂起；
-2. 它的 rejection **不是** `'Receiving end does not exist'`，否则会走 1016 行的 `injectContentScript` 自愈；
-3. 于是那些**本来能被自愈的**场景，被当成不可恢复错误回报给了模型；
-4. `injectContentScript`（`tools.ts:162-177`）内部用 `pendingInjections` 做并发合并，且
-   `chrome.scripting.executeScript` 本身的 rejection 也**没有**被转成友好错误 —— 它是
-   `await` 在 try 里，失败就再抛。
-
-`sendAction` 本身确实是裸的 `chrome.tabs.sendMessage`，**没有超时**
-
-`extension/src/background/tools.ts:179-193`
-
-```ts
-return chrome.tabs.sendMessage(tabId, { … }, { frameId: frame.frameId })
-```
-
-全仓库唯一的导航等待超时在 `navigation.ts:60`（`waitForNextDocumentReady`，
-`NAVIGATION_READY_TIMEOUT_MS`），**内容脚本动作这条路径没有等价保护**。
-所以「挂起」和「reject」两种情况目前都没有统一出口。
-
-### 疑似原因（待验证，不要当结论）
-
-整文档导航销毁了内容脚本所在的 JS 上下文，`sendMessage` 因此以**另一种消息**被拒绝
-（跨文档导航时 Chrome 常见的几种：帧已移除、端口关闭、上下文失效）。当前代码只识别了
-`Receiving end does not exist` 一种。另外 `allFrames: true` 加上第三方 iframe，
-会让「哪个帧先消失」变得不确定，可能放大这个窗口。
-
-### 建议修法
-
-1. **收窄判定条件**，把「接收端不存在」类错误统一成同一个谓词：匹配
-   `Receiving end does not exist`、以及导航/帧失效类的消息；命中即走既有的
-   `injectContentScript` 自愈路径，而不是回报不可恢复。
-2. **给 `sendAction` 加一个有界超时**（与 `navigation.ts` 的思路一致），
-   让「挂起」也有确定出口，超时后按第 1 条同样归入可自愈。
-3. **让 `injectContentScript` 的失败也落到 `content-unavailable`**，
-   别把 `chrome.scripting` 的原始 rejection 透出去。
-4. **报错文案改成可操作的中文**，并把「已自动重试」与「需要人工重试」两种情况分开；
-   现在这条英文长句对用户没有指引，模型也只能原样重来。
-
-### 回归测试建议
-
-在 `extension/tests/` 里加一个用例：模拟 `chrome.tabs.sendMessage` 以
-「非 `Receiving end does not exist` 形状」的导航错误 reject，断言
-(a) 不返回上面那条 `content-unavailable`，(b) 调用了 `injectContentScript`，
-(c) 重试一次后返回成功。现有 `tests/background-tools.spec.ts` 顶部的 `mockChrome`
-已经能做这件事。
-
-### 实际修法（0.38.6）
-
-`extension/src/background/tools.ts`。建议 1、3 照做，第 2 条**改了方向**，第 4 条只做了
-「指向可操作」这一半 —— 理由写在下面，因为它和「看起来更省事」的做法相反。
-
-**1）谓词扩容** —— `contentScriptReceiverMissing`（`:244`）从只认一句，扩到「接收端不存在」
-这一族：`Receiving end does not exist`、`Could not establish connection`、`No frame with id`、
-`was removed`、`Extension context invalidated`。
-
-**它故意不收录「端口已关闭」**（`The message port closed …`）。
-从发送端看，它和上面几种一模一样，但**不是同一个事件**：动作可能已经在页面上执行了，
-只是回包丢了。据此重发 `browser_click` 就会点两次。所以这一种仍按不可恢复回报。
-`background-tools.spec.ts` 里本来就有一条测试钉着这个取舍（原名
-*"does not retry or roll back a dispatched action when its response port closes"*），
-本次一个字没改，它继续通过 —— 这是「扩容没扩过头」的证据。
-
-**2）超时：加了上限，但不自动重试** —— 新增
-`CONTENT_ACTION_TIMEOUT_MS = 10_000`（`:188`），`sendAction` 用 `Promise.race` 包住
-`sendMessage`，`finally` 里清定时器。
-
-**这里与建议 2 的「超时后按第 1 条同样归入可自愈」不同**，是有意的：超时比端口关闭**更**
-不可知 —— 端口关闭至少说明消息送到了，超时连「页面到底收没收到」都不知道。
-若超时也去重发，`browser_press`/`browser_click` 就可能执行两次，而这是不可撤销的。
-所以超时的出口是「确定地失败 + 告诉模型先 `browser_snapshot` 重读页面」，不是静默重试。
-两处文案统一为 `DISPATCH_UNANSWERED`（`:199`），因为它们对调用方是同一件事。
-
-**3）自愈失败不再透出原始 rejection** —— 主路径 `:1066-1069` 原本就已归入
-`content-unavailable`；**漏的是图片路径** `requestImageTarget`（`:365-378`）：注入被拒或
-第二次派发失败都会把 `chrome.scripting` 的原始 rejection 抛出去，而调用方
-（`index.ts:2246`）把它报成 `internal` —— 一个不指向任何页面原因、也不给下一步的错误码，
-同一个页面走 `browser_snapshot` 却是 `content-unavailable`。现已一并归入
-`content-unavailable`。
-
-**4）文案** —— 未改成中文：整条工具链的报错都是英文，单点中文化会让模型和用户看到两套
-语言。只做了「可操作」这一半：超时与未分类两种都明确要求先 `browser_snapshot` 再重试。
-「已自动重试 / 需人工重试」的区分本次未做，因为自动重试现在只发生在**确认接收端已消失**
-时，这两种情况在文案上已经不混。
-
-### 回归测试
-
-`extension/tests/background-tools.spec.ts`，四条：
-
-| 用例 | 钉住的行为 |
-|---|---|
-| `recovers in place when a navigation kills the frame the action was dispatched to` | 导航类错误 → 注入 + 重发 → 成功；且**不再**报「stopped responding」 |
-| `still refuses a frame the page does not have, rather than injecting for it` | 扩容没扩过头：不存在的 frame 仍然直接拒绝，既不注入也不派发 |
-| `bounds a dispatch that is never answered, so a hang has an exit` | 超时**有界**（假定时器）且**只派发一次**，不重试 |
-| `answers content-unavailable when image recovery cannot load the content script` | 图片路径自愈失败 → `content-unavailable`，不再是 `internal` |
-
-前三条在修之前都是红的（第 2 条一开始就绿，保留它是为了防扩容过头）。
-
-### 复核
-
-- `extension`：550 → 现 552 passed（含上述新增），`pnpm run typecheck` 通过；
-- `packages/bridge` 全量通过，无回归。
+本文件从 `0.38.8` 起只保留当前两版（商店 `0.38.7` / 未打包 `0.38.8`）相关的问题记录，
+更早版本的条目已随旧版本移除；编号仍沿用原序号。
 
 ---
 
-## BUG-002 — 发送后输入框里的文字不消失，要手删；再按一次回车会重发同一句
+## BUG-008 — unary 网关调用没带 Peer：面板「已连接」，但对话全废
 
-**状态**：已修（0.38.6）
-**首次发现**：0.38.5（本工作区源码；面板为侧边栏 `control/main.ts`）
-**影响**：面板看起来像没发出去；同一句话会被重复发送，且每次都要人工清空输入框
+**状态**：已修（待发版）
+**首次发现**：2026-11-07，桌面端 0.2.2-rc.1 + 扩展 0.38.7
+**影响**：面板显示「已连接」，`workspace.list` 也正常，但任何走 unary 网关调用的操作都失败——
+`session.models` 直接回错，模型选择器拿不到目录，发消息也走不下去
 
 ### 症状
 
-在侧边栏面板的输入框里写完指令、按回车发送后，输入框里的文字**仍然留在原地**，
-必须自己全选删掉。面板其实已经收到了指令（对话里出现了这条消息、模型也回了），
-所以这条"没发出去"的感觉是假的 —— 但字是真的没清。
+同一条连接里两种结果，非常好认：
 
-### 定位
+```
+{"t":"rpc","id":"q1","method":"session.models","payload":{}}    → {"ok":false,
+  "error":{"code":"gateway/internal","message":"Cannot read properties of undefined (reading 'signal')"}}
+{"t":"rpc","id":"q2","method":"workspace.list","payload":{}}    → {"ok":true, ...}
+```
 
-`extension/control/main.ts:853` 的 `submit()` 只清了状态字段，没清 DOM：
+`session.create` / `session.history` 反而回 `ok:true`：那是 session-deferral 层给的临时 id
+和备份空事件，不代表模型链路是通的，很容易被误判成「模型报错」。
 
-```ts
-private submit(): void {
-  const value = this.draft.trim()
-  ...
-  else void this.runPrompt(intent.text)
+### 根因
+
+dsh 0.2.2-rc.1 的 `TypertGatewayService.prepareInvocation()` 第一行就是
+`assertPeerLive(request.peer, endpoint)`，而它读的是 `peer.signal`：
+
+```js
+function assertPeerLive(peer, endpoint) {
+  if (peer.signal.aborted) throw new TypertGatewayError('gateway/peer-disposed', ...)
 }
 ```
 
-三条发送路径都在**各自的 promise 里**把 `this.draft` 清成 `''`
-（`runPrompt` `:934`、`runCommand` `:906`、`runOpen` `:887`），
-随后调 `refreshForTurn()`。而 `refreshForTurn()`
-（`main.ts:1060`）只重建 header、transcript 和发送/停止按钮：
-
-```ts
-private refreshForTurn(): void {
-  this.replaceHeader()
-  this.renderTranscript()
-  this.refreshComposerAction()   // ← 只换按钮，从来没有回写输入框的值
-}
-```
-
-`<textarea>` 是**故意**保留不重建的节点（0.38.5 的改动就是为了不再丢焦点和打字），
-于是 `input.value` 永远停在用户最后敲进去的那串字符上。
-全仓库唯一那句 `input.value = this.draft` 在 `render()`（`main.ts:979`）和
-`composerWrap()`（`main.ts:1759`）里 —— 而这两条路在一次成功的发送里都不会走：
-发送走的是部分重绘。
-
-**这是一次修复带出来的回归**：0.38.5（CHANGELOG "(Sending a prompt or stopping a run also
-destroyed the composer)"）把这几条路径从完整 `render()` 改成部分重绘，解决了丢焦点，
-但漏了"输入框的值也要跟着 `draft` 走"这一半 —— 改之前完整重绘会连值一起重建，
-所以这个洞当时看不出来。
+0.38.7 给 Remote 流（`$events`、`session/follow`、`workspace/follow`）补了 Peer，
+但 `RemoteHostApi` 里 4 处 `gateway.invoke({...})` 仍然只传 `signal`。0.2.2 没有兜底；
+同一仓库 devDependency 的 0.2.0-rc.2 有 `request.peer ?? this.operatorPeer()`，所以
+**测试全绿也发现不了这个问题**——除非断言的是 Peer 本身。
 
 ### 复现
 
-1. 在面板输入框里输入 `总结这个页面`；
-2. 按回车；
-3. 消息已发出、模型开始回，**但输入框里仍是 `总结这个页面`**；
-4. 再按一次回车 → 同一句话被发送第二遍。
+不需要浏览器扩展，直接拿 `ws` 连桥：
+
+1. 连 `ws://127.0.0.1:3080/ext/bridge`，`Origin: chrome-extension://<扩展 id>`；
+2. 首帧 `{"t":"hello","token":"<~/.dsh/ext-bridge-token>","caps":{"textOnly":true,"snapshotMaxChars":32000,"maxInteractiveItems":60}}`；
+3. 发 `{"t":"rpc","id":"q1","method":"session.models","payload":{}}` → `ok:false`（上面那条错）；
+4. 同连接发 `workspace.list` → `ok:true`，正好把「Peer 导出」这一层隔离出来。
 
 ### 修法
 
-新增 `refreshComposerValue()`（`main.ts:1082`），在 `refreshForTurn()` 里调用，
-并让 `render()` 复用同一个方法（原来那段逻辑内联在 `render()` 里）：
-
-```ts
-private refreshComposerValue(): void {
-  const input = this.root.querySelector<HTMLTextAreaElement>('.composer__input')
-  if (input === null) return
-  if (input.value === this.draft) return
-  input.value = this.draft
-  this.autoGrow(input)
-}
-```
-
-两个细节：**只有值真的不同才写**（无谓的重绘不该动光标，用户可能已经在输入下一条），
-以及**顺带重算高度**，否则清空后输入框会保持上一次撑开的高度。
-
-失败路径的行为**故意不变**：命令被拒时 `this.draft = echo` 会把原文放回输入框，
-这是"被拒的命令可以改，不用重打"的设计（`control-page.spec.ts:896` 守着这条）。
+- `packages/bridge/src/remote-host-api.ts`：4 处 `gateway.invoke` 全部补
+  `peer: this.wirePeer.peer`（`call()` 通用分发、`session.history` 的 `page`、
+  `session.models` 的 `modelCatalog` 与 `projections`）。
+- `packages/bridge/src/dsh-gateway.ts`：`TypertGatewayLike.invoke` 的请求类型加
+  `peer?: PeerLike | undefined`（借来的 `browserPeer` 场景下 `wirePeer.peer` 可能为空）。
 
 ### 回归测试
 
-`extension/tests/control-page.spec.ts:875`（发给模型）与 `:896`（`@open`，不走模型）
-各自断言发送后 `.composer__input` 的值为 `''`。
-
-写测试时**先确认它能红**：在修之前这两条都以 `expected '总结这个页面' to be ''` 失败。
-之所以 0.38.5 带着这个 bug 发布，正是因为整个测试套件里
-**没有一条断言过发送后的输入框内容**
-（`control-page.spec.ts:875` 原来的三个用例只断言"发出去了什么"，不问"框里还剩什么"；
-`panel-simulation.spec.ts` 的两条专注焦点与"下一条还在不在"，也不看清空）。
+| 用例 | 钉住的行为 |
+|---|---|
+| `packages/bridge/tests/remote-host-api.spec.ts` → `hands the Connection Peer to every unary invoke…` | 4 次 unary invoke 的 `request.peer` 都是同一个 Peer；只断言 `ok:true` 不够，rc.2 会兜底放行 |
 
 ### 复核
 
-- `pnpm test`（extension）：551 passed（含新增 4 条）；`pnpm test`（packages/bridge）：253 passed, 1 skipped；
-- `pnpm run typecheck`（extension）：通过；
-- 同一份测试也把 0.38.5 原本就守住的"焦点不丢、下一条不被吞"跑了一遍
-  （`panel-simulation.spec.ts` 100 轮无焦点丢失、无输入丢失），确认这次回写没有把它们弄坏。
+- `packages/bridge`：**264 passed**（+1 skipped），`pnpm run build`（`tsc -b` + `tsdown`）通过；
+- 实机（宿主 0.2.2-rc.1）WS 复现：`session.models` → `ok:true`，
+  `groups = deepseek-official:2, deepseek-account:2`，`workspace.list` 仍 `ok:true`；
+- 链接插件的热重载**不可靠**：后续实测里 Plugin Manager 的 `set_plugin`/`set_bundle` 都报 applied，
+  运行中的宿主却仍在跑启动时加载的那份模块（机制见 BUG-009 附）。所以让新 `lib` 生效**以重启桌面端为准**；
+  本次实机验证发生在宿主已经重新装配过一次之后。
 
 ---
 
-## BUG-003 — 「扩展没装」的判定只认一个 id、只找四种 profile、还指向错的浏览器
+## BUG-009 — 同一会话并发读历史互相顶掉：`session/follow` 被 Host 取消
 
-**状态**：已修（0.38.6）
-**首次发现**：0.38.5（报告人在 `agpipnjijkpomaannkijkilggoffdiaf` 上装的是商店版，默认浏览器 Chrome，同时开着 Edge）
-**影响**：商店版用户会被告知「这台机器上没有任何浏览器配置装过这个扩展」，并被引向 `edge://extensions/` 的开发模式路线 —— 三句话里没有一句是对的
+**状态**：已修（待发版）
+**首次发现**：2026-11-07，桌面端 0.2.2-rc.1 + 桥 0.38.8（压力测试发现）
+**影响**：扩展对同一个 `sessionId` 同时发两条以上 `session.history`（不带 `beforeSeq`）时，
+只有一两个成功，其余报 `gateway/cancelled`
 
 ### 症状
 
-报告人按官方 INSTALL 装好商店版扩展后，`browser_*` 调用全部失败并返回：
-
 ```
-The extension is not installed in any browser profile on this machine, ...
-It has to be installed once at edge://extensions/ (turn on developer mode, then "Load unpacked" ...)
+session.history ×5 并发 → ok: 2
+  ×3 {"code":"gateway/cancelled","message":"Remote invocation \"session/follow\" was aborted"}
 ```
 
-而他装的**就是商店版**、就装在他**正在用的浏览器**里；桥接本身也一直在线。同一份报告里
-另外两条根因（31 字符商店 id、版本不一致）已分别由 `9ba58ec` 与本轮修掉，这里是**第三条**。
+串行 5 次全成功（每次 11–14 ms，344–360 条事件，`hasMore: true`）；并发时首个和最后一个成功、
+中间失败，所以很容易被当成「偶发抖动」。
 
-### 三个独立缺陷，合起来生产了那句错话
+### 根因
 
-**① 只认一个 id** —— `packages/bridge/src/browser-launch.ts:165`（0.38.5）
+`oneShotSessionSnapshot()` 为了取一页历史会自己开一条 `session/follow`。Host 对每个 Session
+只保留一条活跃 follow，新流一开旧流就被 abort（网关里 `remoteCancelled(endpoint)` →
+`RemoteError('gateway/cancelled', …)`）。桥这边从不串行化，扩展的并发读就必然互踩。
+扩展订阅事件之后走的 `EventGeneration` 路径不受影响，最容易踩中的是「还没订阅事件就读历史」
+的时序和纯 WS 客户端。
 
-```ts
-const EXTENSION_DIRECTORY_NAME = 'kdhkdgfcinfkmogifamoapmheihhcjfk'
-```
+### 修法
 
-`browsersWithExtensionInstalled()`（`:362-386`）拿它去查 `<profile>/Extensions/<id>`。
-但一份构建**有两个可能的 id**：开发/未打包加载由 manifest 的 `key` 钉住第一个，而商店
-**拒绝**带 `key` 的清单、自己分配第二个。商店版装在
-`…\Extensions\agpipnjijkpomaannkijkilggoffdiaf\0.38.5_0`，于是永远查不到。
-
-**② profile 只枚举到 `Profile 3`** —— `:381`
-
-```ts
-const profiles = ['Default', 'Profile 1', 'Profile 2', 'Profile 3']
-```
-
-自建 profile 目录名、`Profile 4` 及以上全部漏掉。
-
-**③ 指向的浏览器是 `running[0]`** —— `:839`
-
-```ts
-const browserId = running[0]?.id ?? 'chrome'
-```
-
-`running[0]` 只是进程列表返回的先后。报告人默认浏览器是 Chrome、Chrome 也在运行，
-但 `running[0]` 取到 Edge，于是报错把他导向 `edge://extensions/`。
-
-**④ 文案超出了实际检查范围** —— `:847` 与 `:899` 断言
-*"not installed in any browser profile on this machine"*，而实际只查了「一个 id × 四个目录名」。
-
-**⑤（同一类，顺手查出）占位 id 被当成浏览器名用** —— 「默认浏览器」这个候选的 `id` 是字面量
-`'default'`（因为操作系统给的是**路径**，不是名字）。而 `extensionsPageUrl()` 只认
-`'edge'`、其余一律 `chrome://extensions/`，于是**默认浏览器是 Edge 的用户**会被导向
-`chrome://extensions/` —— 和 ③ 是同一个「指错浏览器」的方向，只是发生在另一条分支。
-
-### 实际修法（0.38.6）
-
-`packages/bridge/src/browser-launch.ts`，三处缺陷各修一处，并让文案只声称查到的事：
-
-- **`EXTENSION_DIRECTORY_NAMES`**（导出）取代单个常量，两个 id 都探测。仍是本地副本 ——
-  该模块不能 import `../src/index.ts`（会成环），`extension-identity.spec.ts` 断言两份一致。
-- **`chromiumProfileNames()`** 改为枚举真实的 user-data 根目录：只保留
-  `Default` / `Profile <n>` 两种真实形状（所以 `Local State` 这个**文件**永远不会被当目录探测），
-  序号按数值排序（`Profile 10` 不会排到 `Profile 2` 前面），`Default` 固定在前。
-  **列不到目录时回退到原来那四个名字**，而不是返回空 —— 目录读不到**不能**变成「没装」。
-  枚举能力通过 `LaunchDeps.listDirectory` 注入，便于测试。
-- **扫描同时返回「查了什么」**：`scanExtensionInstalls()` 返回
-  `{ installed, checked }`，`checked` 是 `<浏览器> (<profile 列表>)` 标签。
-  `browsersWithExtensionInstalled()` 保留原签名与返回形状（只给 `installed`），
-  在它之上实现，其它调用点不动。
-- **`runningBrowserId()`**：默认浏览器优先（**但只在它确实在运行的那些里面选**，因为文案说的是
-  "已在运行"）；匹配方式先按**规范化完整路径**，再按可执行文件**名**，且只有在恰好一个候选
-  id 用这个文件名时才采信 —— `chrome.exe` 同时属于 Chrome 和 Chromium，有歧义就**不猜**
-  （猜错正是本条 bug）。都没命中才退回 `DETECTION_ORDER`，最后才是原来的 `running[0]`。
-- **文案**：两处都改为 `The extension was not found in the browser profiles this bridge read
-  (…)`，逐条列出真正读过的浏览器与 profile；一个目录都没读到时说
-  `the browser profile directories this bridge could locate`，不假装查过。安装方式**商店与
-  开发者两条都给出**，不再只讲 "Load unpacked"。
-- **⑤ 占位 id 先还原成真 id**：新增 `browserId = idOfDefaultExecutable(chosen.path, candidates)
-  ?? chosen.id ?? 'chrome'`，四处 `extensionsPageUrl(chosen.id)` 全改成 `browserId`。
-  `idOfDefaultExecutable` 对**无法识别**的路径返回 `undefined`（例如测试里那个不在候选表里的
-  路径），此时才回落到占位 id —— 也就是说它**不会**猜。
+- `packages/bridge/src/session-history.ts`：新增 `SNAPSHOT_QUEUE: Map<sessionId, Promise>`
+  把同一会话的一次性快照串起来；`openSnapshot()` 在 `gateway/cancelled` 或 message 含
+  `aborted` 时重试一次（间隔 25 ms），调用方自己 abort 的不重试。
+- 不改协议、不改 Host 调用形状，只是把桥内部的并发收敛掉。
 
 ### 回归测试
 
-`packages/bridge/tests/browser-launch.spec.ts`（49 → 65 条）新增覆盖：商店 id 目录能被发现；
-只装了商店版时文案说"已安装"；`Profile 4` 能被发现；`Local State` 永不被探测；目录列不到时
-回退到已知名字；`checked` 标签稳定有序；默认浏览器优先于进程列表顺序；无法解析默认浏览器时
-退回 `DETECTION_ORDER`；两处文案都只声称查过的东西；以及 **⑤**：默认浏览器是 Edge 且没连上时，
-文案与 `installUrl` 都必须是 `edge://extensions/` 而不是 `chrome://extensions/`。
-（写 ⑤ 这条测试时先用了 `/opt/edge/msedge`，它不在 Linux 候选表里、解析不出 id，于是照旧失败 ——
-那是我测试写错了路径，不是修法没生效；换成真实的 `/usr/bin/microsoft-edge` 后才正确变绿。
-顺带证明了这个实现**对认不出的路径不猜**。）
-`extension-identity.spec.ts` 原先断言源码里 `const EXTENSION_DIRECTORY_NAME = '<id>'`，
-重构后改为断言 `[...EXTENSION_DIRECTORY_NAMES]` 深等于 `[...DEFAULT_EXTENSION_IDS]` ——
-比原来**更强**（原来只比第一个 id）。
+| 用例 | 钉住的行为 |
+|---|---|
+| `tests/session-history.spec.ts`（3 个） | 并发 3 次全部成功；第一次被 Host 取消后重试一次；调用方 abort 不重试 |
 
 ### 复核
 
-- `packages/bridge`：237 → 253 passed（+1 skipped），`pnpm run typecheck` 通过；
-- 在报告人这台真机上跑 `scanExtensionInstalls('win32', process.env, …)` →
-  `{ installed: ["chrome"], checked: ["chrome (Default)", "edge (Default)"] }`；
-- 改动只落在 `packages/bridge/`，`git diff --numstat` 为 `+231/-37`（`browser-launch.ts`），
-  不是整文件重写；四个改动文件的 CR 字节数均为 0（与仓库既有 LF 一致）。
+- `packages/bridge`：**274 passed**（+1 skipped），`pnpm run build` 通过；
+- 实机：当前宿主里加载的仍是 17:51 那一版 `lib`（原因见下），所以并发历史实测仍是 2/5；
+  重启桌面端后该阶段应全绿，重启前可用 `STRESS_SKIP_HISTORY=1 node scripts/stress-bridge.mjs`
+  先跑其余阶段。
+
+### 附：链接插件的热更新不总生效
+
+这次依次试过 `set_plugin include:bridge-browser`、`set_bundle` 关→开、甚至把 `main` 指到新文件名，
+宿主仍在跑启动时加载的那份模块（临时塞进 `openSnapshotOnce` 的 300 ms 延迟一次都没出现）。
+`@deepseek-ai/dsh-hmr` 的 `reconcileProfile()` 会把「模块在宿主自己的静态依赖链里」
+（`host-module`）或「entries 与 running 数量对不上」（`unmanaged-plugin`）的模块登记为 pending，
+登记过的 URL 之后再变也不识别。**结论：改 `packages/bridge` 的源码后以重启桌面端为准，
+别指望 Plugin Manager 一定能把链接包的新 `lib` 顶进去。**
 
 ---
 
----
+## BUG-010 — 实机测试报告（2026-11-07，桌面端 0.2.2-rc.1 + 扩展 0.38.7）13 项
 
-## BUG-004 — 手动安装文档指向开发者路径，且没说明 `-store` 包缺 `key`
+**状态**：已修（待发版；P2-9 复核为「本来就对，补测试」）
+**首次发现**：2026-11-07，Chrome 155，商店扩展 id `agpipnjijkpomaannkijkilggoffdiaf`，
+靶页 `http://127.0.0.1:8123/`
+**影响**：其中 P0-1/P0-2 会让「跟到后台标签页」和「后台开标签页」在默认
+`tabSwitch: 'follow'` 下全部失效；P0-0 让浏览器重启后扩展不再自动连回来；其余是
+自动快照/文本/报错语义上的不一致
 
-**状态**：已修（0.38.6）
-**首次发现**：0.38.6（本轮对着 Release 产物核对安装文档时发现；不是用户上报）
-**影响**：照文档手动加载扩展的人，会装成「永远连不上」的状态，而且没有任何线索指向"装错了包"
+### 根因与修法
 
-### 症状
-
-文档第 1 步在讲"商店还没上架时怎么装"，原话是：
-
-> 在 `chrome://extensions` 打开「开发者模式」→「加载已解压的扩展程序」→ 选构建好的
-> `extension/dist` 目录。
-
-这句话对**有源码 checkout 的开发者**成立，对**从 Release 下载的普通用户**不成立 ——
-他们手上只有 zip，没有 `extension/dist`。于是有两种走法，而其中一种是坑：
-
-1. 解压 `dsh-browser-crossplatform-0.38.6.zip` → 能连；
-2. 解压 `dsh-browser-crossplatform-0.38.6-store.zip`（名字更"正式"，很容易被选中）→
-   **侧边栏永远「未连接」**，而且看起来和"桌面端没开"一模一样。
-
-### 定位
-
-两个 zip 的 `manifest.json` 实测差异：
-
-| 包 | 含 `key` | 手动加载后的扩展 id | 在桥接白名单里 |
+| 编号 | 现象 | 根因 | 修法 |
 |---|---|---|---|
-| `…-0.38.6.zip` | **是** | `kdhkdgfcinfkmogifamoapmheihhcjfk`（由 `key` 推导，固定） | ✅ |
-| `…-0.38.6-store.zip` | **否** | 由加载路径推导，每次装的位置不同就不同 | ❌ |
-
-`-store` 不带 `key` 是**设计如此**：Chrome Web Store 拒绝带 `key` 的清单，id 由商店分配。
-所以那个包只能上传，不能手动加载。
-
-而桥接这一段是闭合的 —— `packages/bridge/src/server.ts:354-358`：
-
-```ts
-const loopbackNoToken = isLoopbackAddress(remoteAddress)
-  && isTrustedExtensionOrigin(origin, this.deps.extensionId)
-if (!loopbackNoToken && !verifyToken(this.deps.token, frame.token)) {
-  ws.close(4002, 'bad token')
-  return
-}
-```
-
-不在白名单 + 空 token（扩展默认不带 token）⇒ 直接 `4002`。
-
-### 实际修法（0.38.6）
-
-改文档，改的是**可执行性**而不是措辞 —— `docs/INSTALL.md:37,40`、`docs/INSTALL.zh.md:36,39`：
-
-- 选目录的标准从"`extension/dist`"改成**「含 `manifest.json` 的那个文件夹」**，并给出
-  Release 场景的对应动作（先解压，再选解压出来的目录）；
-- 新增一段明确写：**用不带 `-store` 的那个 zip**，并解释原因（`-store` 无 `key` → id 不在
-  白名单 → 连接被拒），不再让用户靠文件名猜。
-
-配套的另一半在 BUG-005：真装错了，面板要说得出原因。
-
-### 复核
-
-- 两个 zip 的 `manifest.json` 逐字段核对（`key` 的有无如上表）；
-- 四个产物（chrome / chrome-store / firefox / firefox-store）的条目数、无反斜杠路径、
-  manifest、图标 3/3、语言区域 3/3 均已校验；
-- 文档改动不影响任何代码路径，全量仍为扩展 548 / 桥接 255(+1 skipped) / 协议 20。
-
----
-
-## BUG-005 — 桥接以 `4002` 拒绝握手时，扩展只显示「未连接」
-
-**状态**：已修（0.38.6）
-**首次发现**：0.38.6（写 BUG-004 时顺着"用户装错之后会看到什么"查出来的）
-**影响**：装错构建、扩展 id 不在白名单、或令牌不对的用户，看到的症状和"桌面端没启动"完全一样，无从判断，也没有下一步可做
-
-### 症状
-
-`ws://127.0.0.1:<port>/ext/bridge` 被以 `4002` 关闭后，侧边栏的状态点变红、文案是
-「未连接」。而"dsh 没开"、"端口被占"、"网络问题"给出的也是同一个「未连接」。
-四种原因、一个界面，**其中只有一种（4002）是用户自己能修的**。
-
-这条不是本轮引入的 —— 仓库里原本就有一条测试的注释直接承认了它：
-
-`packages/bridge/tests/extension-identity.spec.ts:12`
-
-> ```
-> * 以 close code 4002 拒绝，而面板只会说一句“未连接”。
-> ```
-
-### 定位
-
-- 服务端**只**用 `4002` 表达"令牌或扩展 id 不匹配"：`packages/bridge/src/server.ts:357`；
-- 扩展侧的关闭处理**只认 4000**（被另一个浏览器顶掉）：`extension/src/background/bridge.ts`
-  的 `socket.addEventListener('close', …)`，其余关闭码一律落回通用的重连/停止路径；
-- `BridgeState` 只有 `connecting | connected | reconnecting | stopped` 四个值，
-  **没有"为什么"的通道** —— 所以面板即便想知道也拿不到。
-
-### 实际修法（0.38.6）
-
-给状态面加一条"最近一次被拒绝"的通道，只在面板上呈现，不改连接策略：
-
-| 位置 | 改动 |
-|---|---|
-| `extension/src/background/bridge.ts:93` | 新增 `lastRejection: { code, reason } \| null`；`:211-212` 在 close 时记录 `4002`/`1008`；`:107`（`start()`）与 `:280`（连上）清空 |
-| `extension/src/background/index.ts:361` | 把 `bridge.lastRejection` 放进 `ControlState.bridgeRejection` |
-| `extension/src/settings.ts:261` | `ControlState.bridgeRejection?`（可选，避免既有测试夹具全量翻修） |
-| `extension/control/main.ts:497` | 做形状校验后才采用（一次坏推送不该在面板上留一条假警告） |
-| `extension/control/main.ts:954-956` | 渲染为 `alert` 级 notice，且**只在未连接时**显示 |
-| `extension/control/strings.ts:149,256,362` | 中英文各一条可操作文案 |
-
-文案给的是**下一步**，不是错误码：手动加载了带 `-store` 的包就换成不带 `-store` 的；
-否则检查 token 设置。服务器原始字符串不摊给用户看。
-
-两个刻意的取舍：
-
-- **连上就清空**。否则一次历史拒绝会长期挂在面板上，反而误导 —— `:280`；
-- **只记 4002 / 1008**。其它关闭码（含 1006 网络中断）不代表"你装错了"，
-  记下来会制造假线索。
+| P0-1 | `follow_tab` 成功，但快照读的是另一个标签页 | `TabAffinity.status()` 在 `follow` 模式下把显式绑定当成 `following`，`resolveTarget()` 于是返回可见标签页 | `status()` 先看 `keptActiveTabId`，显式跟随/后台绑定优先于 `follow` 偏好 |
+| P0-2 | `open_tab{active:false}` 建好了标签页却报 `controlled tab changed` | 同上：`allowsTarget(newTab)` 为 false → `targetChanged()` | 同上；`bindOpenedTabAffinity` 的 `rebindControlled` 生效 |
+| P0-0 | DSH/浏览器重启后扩展不重连，直到手动开侧栏 | 没有 `chrome.runtime.onStartup` 监听；`alarms` 跨重启不保证 | 新增 `onStartup` → 重新 `armBridgeKeepalive()` + `startBridge()` |
+| P1-3 | 点击触发导航，却报「content script stopped responding」 | 文档卸载让 `sendMessage` 以 port closed 失败 | catch 里识别 `dispatchLostToNavigation`，等新文档就绪后拍快照；**绝不重发点击** |
+| P1-4 | `press Enter` 不提交表单 | 只发合成 `submit` 事件，不触发提交流程 | `form.requestSubmit()` / 点 submit 按钮；`preventDefault()` 时不动 |
+| P1-5 | 快照 URL 里出现 `pwd=s3cret` | URL 原样渲染 | `redactSensitiveUrl()` 掩码 `pwd/token/sig/api_key/otp/…`，保留 `user=alice` 这类普通参数 |
+| P1-6 | `<main>` 外的标题/导语消失；delta 说「没有可见变化」 | readability 只渲染主区域 | `surroundingText()` 按文本节点补齐主区域外的内容，跳过 nav/aside/footer/script/style |
+| P1-7 | `navigate`/`back`/`forward`/`reload` 有时不自动快照 | `dispatchTabNativeTool` 直接返回 `navigationPending` | 导航类工具也 `waitForNextDocumentReady` + `snapshotAfterNavigation`；目标不可注入时不干等 |
+| P2-8 | `region` 只裁正文，清单还是整页 | 交互清单/图片按整页收集 | 用 `regionEl ?? document` 作为收集范围 |
+| P2-9 | CSS 背景图不进 Images | ——（复核：本来就支持） | 补回归测试 `snapshot-background-image.spec.ts` |
+| P2-10 | `<style>` 文本混进正文 | 非 `HTMLElement`（内联 SVG）退回裸 `textContent` | 逐文本节点读并跳过 `SCRIPT/STYLE/NOSCRIPT/TEMPLATE`（SVG 的 `tagName` 是小写，统一 `toUpperCase()`） |
+| P2-11 | 最小化窗口把所有元素标成 `[outside viewport]` | 0×0 视口让公式全判 false | 视口宽/高 ≤ 0 时视为「未知」，不标注 |
+| P2-12 | `click` 缺元素报错，`get_text` 缺选择器却成功 | `get_text` 把「没命中」写进成功文本 | 缺元素时抛 `ActionError('action-failed', …)`，与 `click` 一致 |
+| P2-13 | `describe_image` 说识别关闭，`hello.ok` 却报 `imageRecognition: true` | 两个开关说混了：桌面端「愿意识别」vs 扩展「看图档位关」 | 错误文案区分两者，并说明打开档位即可用桌面端 |
 
 ### 回归测试
 
 | 用例 | 钉住的行为 |
 |---|---|
-| `extension/tests/bridge.spec.ts:180` | 收到 `4002` 后 `lastRejection` 有值；重连并 `hello.ok` 后**清空** |
-| `extension/tests/control-page.spec.ts:987` | `bridge: 'stopped'` + 拒绝记录 ⇒ 面板出现「桌面端拒绝了这次连接」 |
-| `extension/tests/control-page.spec.ts:994` | `bridge: 'connected'` + 旧的拒绝记录 ⇒ **不**显示那条提示 |
+| `extension/tests/tab-affinity.spec.ts` → `keeps tools on an explicitly followed background tab in follow mode` | follow 模式显式绑定后台标签页后，工具目标仍是它；用户真切走才回到 `following` |
+| `extension/tests/open-tab-binding.spec.ts` → `targets a background open even when the switch mode is follow` | `active:false` 的后台打开成为目标 |
+| `extension/tests/background-bridge-lifecycle.spec.ts` → `reconnects on browser startup without waiting for the panel to be opened` | `onStartup` 触发新 socket + keepalive alarm |
+| `extension/tests/background-tools.spec.ts` → `reports a click that navigated away as navigation…` | 只发一次 `browser_click`，答案带新页面快照 |
+| `… > attaches the new page snapshot after a browser-level navigation` | 浏览器级 `navigate` 也等新文档并拍快照 |
+| `extension/tests/actions-press.spec.ts`（5 个） | Enter 提交流程、textarea 不提交、`preventDefault` 生效 |
+| `extension/tests/snapshot-redaction.spec.ts`（6 个） | URL/delta/链接/src 的敏感参数掩码，百分号编码也认 |
+| `extension/tests/snapshot-main-region.spec.ts`（3 个） | 主区域外文本进入快照，delta 能看见变化 |
+| `extension/tests/snapshot-region.spec.ts`（2 个） | `region` 同时裁交互清单 |
+| `extension/tests/snapshot-background-image.spec.ts`（2 个） | CSS 背景图进 Images，渐变不进 |
+| `extension/tests/actions-get-text.spec.ts`（2 个） | 选择器没命中时报错；0×0 视口不误判 |
+| `extension/tests/extract.spec.ts` → `never leaks style or script source into page text` | 内联 SVG 的 `<style>` 不进正文 |
 
 ### 复核
 
-- `extension`：545 → **548 passed**（+3），`pnpm run typecheck` 通过；
-- `packages/bridge`：255 passed（+1 skipped）、`packages/protocol`：20 passed，均无回归；
-- 四个构建目标重建后，**真实浏览器 e2e**（握手 → 工具调用 → 图片中继 → 面板设置持久化）
-  4 passed / 1 skipped，确认这条改动没有影响正常连接路径；
-- 冷启动那条（`DSH_E2E_COLD_START=1`）在本机仍失败：81.8s 后 `connected === false`。
-  原因是本机浏览器不加载 unpacked 扩展，与本次改动无关（未修改的 HEAD 上同样失败），
-  **因此"自动拉起浏览器"这条路径在本机仍属未验证**。
+- `extension`：**54 files, 577 passed**（~14 s）；`pnpm run typecheck` 干净；`pnpm run build` 通过。
+- 仍需人工复核的一项：Chrome 真·最小化时 `window.innerWidth/height` 的实际取值（P2-11 的
+  guard 在 0 时生效；若某些平台最小化仍报非零尺寸，需要再看 `document.visibilityState`）。
 
 ---
 
-## BUG-006 — 桥接只挂在宿主的随机端口上，扩展永远探不到
+## BUG-011 — 从源码 `link:` 安装桥接还要「补依赖」：产物把运行时依赖留在外面
 
-**状态**：已修（0.38.7）
-**首次发现**：2026-10-17，宿主端口 50966
-**影响**：扩展面板长期「未连接」；dsh 重启换了端口就复发
+**状态**：已修（待发版；分发形态改动）
+**首次发现**：2026-11-07，预览报告 I-1（桌面端 0.2.2-rc.1，扩展 0.38.8 预览版）
+**影响**：换机器、干净 checkout 或用 `file:` tgz 安装插件时，加载直接失败；`pnpm`
+的 `auto-install-peers` 还会把整套 `@deepseek-ai/dsh-*` 装进包内，其中
+`dsh-llm` 又缺自己的依赖，越补越坏
 
-### 症状
+### 现象
 
-- `http://127.0.0.1:50966/ext/bridge-config` 返回
-  `200 {"wsUrl":"ws://127.0.0.1:50966/ext/bridge"}`；
-- 扩展只探 `3080 / 3081 / 3090 / 14389 / 43189 / 19387`，六个端口全部 `ECONNREFUSED`；
-- 扩展设置里 `bridgeUrl` 是空字符串（自动发现开着），不是配置错了。
+```
+ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cosmokit'
+  imported from ...\node_modules\@deepseek-ai\schemastery\lib\index.mjs
+```
+
+同一 checkout 里 `packages/bridge/node_modules` 在，宿主就能加载；换个目录/换台机器就报错。
 
 ### 根因
 
-发现端点只注册在宿主 webServer 上，而宿主端口每次启动都变（实测见过 19387、57342、
-60400、63571、50966）。扩展没有别的途径知道这次落在哪个端口上，只有撞上列表里的值才连得上。
+`tsdown` 默认把 `dependencies` 与 `peerDependencies` 都外置，`lib/index.js` 里仍
+保留 `@deepseek-ai/schemastery`、`@deepseek-ai/dsh-llm`、`@deepseek-ai/dsh-tools`、
+`@deepseek-ai/dsh-home-paths`、`ws` 这些裸 import。宿主的
+`cordis-plugin-loader` 只把「插件入口」按 profile 作用域解析（它写
+`.cordis/resolve.mjs`，内容是 profile 的 `import.meta.resolve`），插件文件内部的
+import 按插件自身的 realpath 解析——也就是 checkout 的 `node_modules`。所以
+`link:` 装的是「目录」，不是「补齐过的包」。
 
-### 修复
+### 修法
 
-- `packages/bridge/src/index.ts`：按 `DISCOVERY_PORTS` 顺序绑第一个空闲端口，提供同一个
-  `/ext/bridge-config`，并把 `/ext/bridge` 的升级交给同一个 `BridgeServer`（认证与 Origin
-  白名单不复制一份）。全部端口被占时只记一条 warning，宿主端口那条路不受影响；
-- 端口表从两份副本收成一份：`packages/protocol/src/index.ts` 导出 `DISCOVERY_PORTS`，
-  bridge 与扩展都 import 它（测试仍然钉住具体数值，防的是有人无意改端口）；
-- 新配置 `discoveryListener`（默认开）与 `discoveryPorts`（默认与扩展列表一致）；
-- 「等服务就绪再挂载」的路径加了一次性守卫：依赖被替换时 inject 会重跑回调，不挡住就会把
-  同一条路由注册两遍。
+| 改动 | 内容 |
+|---|---|
+| `packages/bridge/tsdown.config.ts` | `alwaysBundle`：除 `node:*`、相对路径、绝对路径外全部内联 |
+| `packages/bridge/package.json` | `@deepseek-ai/schemastery`、`ws` 移入 `devDependencies`；新增 `check-bundle` / `smoke-bundle` 脚本；`files` 增加 `THIRD-PARTY-NOTICES.md` |
+| 产物 | `lib/index.js` 193 kB → 646 kB（gzip 182 kB），只剩 `node:*` import |
+| `packages/bridge/scripts/check-bundle.mjs` | 把 `lib/` 拷到没有 `node_modules` 的临时目录再 import，非 `node:*` 的 import 直接失败 |
+| `packages/bridge/scripts/smoke-bundle.mjs` | 用测试里的 stub context 真正 `apply`：1 个 upgrade 路由、17 个工具 |
+| `packages/bridge/THIRD-PARTY-NOTICES.md` | 14 个内联包（全 MIT）的清单与 MIT 文本，随 `pnpm pack` 发布 |
+| CI `.github/workflows/check.yml` | 构建后新增一步跑上面两个脚本，推广告物回归为红灯 |
+
+安全性依据：`dsh-brand` 自述 duplicate-install-safe、无运行时身份与可变状态；
+`defineTool` 只产出普通对象 + JSON Schema；`createMessage` 是
+`deepFreeze(structuredClone(...))` 纯构造；cordis 用
+`Config['~standard'].validate` 鸭子类型校验、按 `Symbol.for('cordis.…')`
+找服务——多份副本不会造成身份或实例问题。
 
 ### 回归测试
 
 | 用例 | 钉住的行为 |
 |---|---|
-| `packages/bridge/tests/index.spec.ts` → `fixed-port discovery > serves the same discovery document…` | 固定端口返回同一份文档、WS 升级交给 BridgeServer、关闭后端口真的释放 |
-| `… > skips a taken port and uses the next one` | 端口被占时换下一个 |
-| `… > rejects a port list it cannot bind rather than crashing the host` | 全被占时只告警，不抛 |
-| `… > keeps the extension probe list and the bridge default in step` | 桥接默认端口表与扩展探测表必须一致 |
+| `pnpm --dir packages/bridge run check-bundle` | 空目录可 import，且只剩 `node:*` |
+| `pnpm --dir packages/bridge run smoke-bundle` | 内联后的插件仍能 apply：1 路由 / 17 工具 |
+| `pnpm pack` 后解压 import | 发布物（`lib` + `src` + 声明 + notices，无 `node_modules`）自包含 |
+| `packages/bridge` 全量测试 | 19 files，274 passed / 1 skipped |
 
 ### 复核
 
-- `packages/bridge`：**263 passed**（+1 skipped），typecheck 通过；
-- `packages/protocol` 20 passed、`extension` 548 passed，无回归；
-- 构建后的 `lib/index.js` 在 3080 上起监听，实测 `/ext/bridge-config` 返回 200，关闭后释放端口；
-- **未验证**：运行中的桌面端要重启才会加载新的 `lib`，重启后的真实连接待确认。
+- 旧 checkout 报 cosmokit 错，只说明 `lib/` 是内联前的产物：重建即可，不要补依赖。
+- 运行中的桌面端仍加载旧模块（linked 插件热重载不可靠），需要重启桌面端才算真正加载新产物；
+  扩展侧不受影响。
 
 ---
 
-## BUG-007 — Host 的 Remote 流没带 Peer，连上就断：`hello.ok` → `stream-failed` → WS 1011
+## BUG-012 — 解压加载的扩展被判定为「未安装」
 
-**状态**：已修（0.38.7）
-**首次发现**：2026-10-17，桌面端 0.2.x，扩展已能发现 3080
-**影响**：扩展反复重连、面板永远「未连接」；每次连接都在握手成功后立刻被关掉
+**状态**：已修（待发版）
+**首次发现**：2026-11-08，用户实测（Windows 10、Edge 157、扩展以「加载已解压」安装，Edge Secure Preferences 里 `location: 4`）
+**影响**：扩展明明在跑、面板也开着，任一 `browser_*` 工具却回答「扩展没装」并劝用户再装一遍；用户白忙，且这句错误建议会掩盖真正的原因
 
-### 症状
+### 现象
 
-dsh 侧 `/ext/bridge-config` 已经在固定端口上返回 200，扩展也能连上，但连接一瞬间就断：
+桥接已监听、扩展尚未连上时触发工具，返回：
 
 ```
-{"t":"hello.ok", ...}                                  ← 握手成功
-{"t":"error","code":"stream-failed",
- "message":"TypeError: Cannot read properties of undefined (reading 'signal')"}
-WebSocket closed 1011 (event stream failed)            ← 立刻关掉
+The extension was not found in chrome (Default)…, which is why nothing connects.
+It has to be installed once at chrome://extensions/ …
 ```
 
-`Get-NetTCPConnection -LocalPort 3080` 会看到成百上千条 `TimeWait`：扩展在无限重连。
+而用户刚用「加载已解压的扩展程序」把 `extension/dist` 装进了 Edge，并能打开面板。
 
 ### 根因
 
-dsh 0.2.x 的 `TypertGatewayWireStream.open(endpoint, payload, uplink, peer, signal)`
-在 `$events` 和 `session/follow` 里会读 `peer.signal` / `peer.principal` / `peer.interactions`。
-桥接的 `openWireStream` 一直把第四位传成 `undefined`，于是 Host 在 `openRemoteEvents` 里第一行就抛：
+`packages/bridge/src/browser-launch.ts` 的 `scanExtensionInstalls` 只探测
+`<profile>\Extensions\<id>\` 目录。商店安装会在那里留副本，**未打包加载不会**——它只在
+`<profile>\Secure Preferences`（旧浏览器在 `Preferences`）的 `extensions.settings` 里记
+一条 `location: 4` 的条目，`path` 指向加载目录。于是「装了」被读成「没装」。
 
-```js
-const lifetime = AbortSignal.any([signal, registration.lifetime.signal, peer.signal])
-```
+同一处还有一句错误假设：「未打包加载只撑一个会话，下次启动就没了」——只对命令行
+`--load-extension` 成立；在 `chrome://extensions` 里点的「加载已解压」会一直保留。
 
-（`packages/bridge/src/dsh-gateway.ts` 的注释其实早就写了这个症状，但只处理了参数个数，没处理 Peer。）
+### 修法
 
-### 修复
-
-- `packages/bridge/src/dsh-gateway.ts`：新增 `PeerLike` / `createWirePeer`；优先
-  `connection.createPeer({ principal: { kind: 'owner' } })`，旧宿主没有它时借用共享的
-  `connection.browserPeer`（借用不释放）；`openWireStream` 的第四位改为这个 Peer。
-- `packages/bridge/src/remote-host-api.ts`：适配器持有 Peer，`$events`、`session/follow`、
-  `workspace/follow` 全部带上它；新增 `dispose()` 只释放自己造的 Peer。
-- `packages/bridge/src/index.ts`：卸载时调用 `hostApi.dispose?.()`。
-- 顺带修 e2e：真实桌面端占了 3080 之后，测试桥接会顺延到 3081 与页面 server 撞车；现在跳过
-  `PAGE_PORT`，并把测试扩展的 `bridgeUrl` 钉到测试桥接，避免它去连真实的桌面端。
+| 改动 | 内容 |
+|---|---|
+| `scanExtensionInstalls` | 除目录外，还读该 profile 的 `Secure Preferences` / `Preferences`，把 `extensions.settings` 的键当作已记录的扩展 id；两条证据任一成立即算安装 |
+| 读取注入 | 新增可注入的 `readFile`（默认 `readFileSync`），坏文件/读不到按「没有记录」处理，不抛错 |
+| 文案（两处） | 不再断言「没装、必须装一次」；改为「没找到安装记录」并给出两条路：已加载就确认 `chrome://extensions` 里启用，否则商店或「加载已解压」装一次（两种安装都会跨重启保留；只有命令行加载不保留） |
 
 ### 回归测试
 
 | 用例 | 钉住的行为 |
 |---|---|
-| `packages/bridge/tests/remote-host-api.spec.ts` → `hands the Connection Peer to $events…` | 五参数 open 收到的第四位就是 Peer；`dispose()` 释放它一次 |
-| `… > borrows the shared browser Peer when createPeer is absent…` | 回退到 `browserPeer`，且**不**释放借来的 Peer |
-| `tests/e2e/extension.e2e.spec.ts` | 真实浏览器 + 固定 `bridgeUrl` 的握手与工具调用 |
+| `tests/browser-launch.spec.ts` → `finds an unpacked extension that only left a record in the profile preferences` | 只有 `Secure Preferences` 记录（`location: 4`）也算安装 |
+| `tests/browser-launch.spec.ts` → `treats an unreadable or corrupt preferences file as no record` | 坏偏好文件不会崩，也不会误报安装 |
+| 既有 `probes every id…` / `finds a store install…` | 商店安装（`Extensions\<id>`）路径不回归 |
 
 ### 复核
 
-- `packages/bridge`：**263 passed**（+1 skipped），typecheck 通过；
-- `packages/protocol` 20 passed、`extension` 548 passed，无回归；
-- **未验证**：这次同样要重启桌面端才会加载新 `lib`；重启后应看到连接稳定、`TimeWait` 不再暴涨。
+- 在装有商店版 Chrome 与未打包 Edge 的机器上，`scanExtensionInstalls` 能同时读到两种证据；
+  台架实测 `chrome`（商店 `agpip…`）与仅偏好文件记录的未打包安装都能命中。
+- 若解压加载的构建没有 `key`，浏览器推导出的 id 每次不同、不在白名单，即使检测到也连不上：
+  这种情况下要加载带 `key` 的 `extension/dist`，而不是换 id。
+
+---
+
+## BUG-013 — 面板报错指向已不存在的设置项
+
+**状态**：已修（待发版）
+**首次发现**：2026-11-08，用户实测（扩展 0.38.8、桌面端 0.2.2-rc.1）
+**影响**：用户在设置表里找一个并不存在的地址/token 输入框；这句话还和排障手册「面板已无连接设置」相矛盾
+
+### 现象
+
+面板未连接时发送任一 RPC，底部提示：
+
+```
+未连接 dsh（请检查设置中的地址与 token）
+```
+
+而设置表里只有「dsh 连接状态」、共享/对话/标签页/视觉、开关与宽度——没有地址和 token。
+
+### 根因
+
+`extension/src/background/index.ts` 的 `gatewayRpc` 拒绝分支沿用了旧文案。地址与 token 早已
+改为由桌面端自动发现（`bridgeUrl`/`token` 只是存储里的逃生口，面板没有输入框），文案没跟上。
+`extension/control/strings.ts` 的 `bridgeRejected` 也还写着「检查扩展的 token 设置」。
+
+### 修法
+
+| 改动 | 内容 |
+|---|---|
+| `gatewayRpc`（中/英） | 改为「桌面端可能没在运行，或连接还没建立；先启动桌面端再重开面板。地址与 token 由桌面端自动发现，面板里没有这两项设置」 |
+| `strings.ts` `bridgeRejected`（中/英） | 去掉「检查 token 设置」，改为按排障手册检查桌面端桥接配置，并明说面板没有 token 输入框 |
+| `control/main.ts` 注释 | 注明地址/token 不在设置表里，文案不要再指向它们 |
+
+### 回归测试
+
+| 用例 | 钉住的行为 |
+|---|---|
+| `tests/background-session.spec.ts` → `rejects a prompt with a clear message while the bridge is not connected` | 错误以 "not connected" 开头讲清原因，提 desktop app，且不再出现 `Settings` |
+| `tests/control-page.spec.ts` → `names a rejected connection…` | 拒绝连接的提示仍然出现，且不再出现「token 设置」 |
+
+### 复核
+
+- 面板设置的唯一入口是右上角齿轮；连接地址与 token 不在其中，自动发现失败时按排障手册处理。
+- 旧扩展（0.38.7 商店版）仍是旧文案：重载 `extension/dist` 后才会变。
 
 ---
 
 ## 待补
 
-- `The controlled tab was closed.` 与 BUG-001 是否同源 —— 需要能区分「标签页真关了」和
-  「受控绑定漂移」的复现，再决定合并还是单列。
-- ~~扩展 ID 的两套来源在**未打包加载**时的行为~~ —— **已结案（0.38.6）**。原先担心
-  `.dsh\browser-extension` 那份 manifest 没有 `key`、只能由路径推导出
-  `ccmhjdgbdgknaomhhddppfoadbifboom`、两个默认 ID 都对不上，现在确认**它不是问题**：
-  那份是 0.3.1 旧副本，浏览器里真正加载的是 `D:\DSH-demo-0.38.5\extension\dist`
-  （有 `key`，推出 `kdhkdg…hcjfk`，在默认列表里）。「未打包 + 无 key」确实会被桥接拒绝，
-  但那是**设计如此**：路径推导出来的 id 每次都不同，无法进白名单；要么让构建保留 `key`，
-  要么把该 id 写进 `extensionId` 配置。BUG-003 修的就是这类「查不到就下结论」的诊断。
+- `The controlled tab was closed.` 是否与「受控绑定漂移」同源——需要能区分「标签页真关了」
+  与「绑定漂移」的复现，再决定合并还是单列。
+- ~~扩展 ID 的两套来源在**未打包加载**时的行为~~——**已结案**：没有 `key` 的构建只能由路径推导 id，
+  每次不同、进不了白名单；要么构建保留 `key`，要么把该 id 写进 `extensionId`。
+  当前两个构建（商店 0.38.7 带 `key`、未打包 0.38.8 用开发 `key`）都在默认白名单内。

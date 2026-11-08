@@ -207,6 +207,6 @@ creditworthiness or for lending.
   `extension/tests/versions.spec.ts` asserts all seven agree — following a shorter list
   leaves the suite red — and the packaging script names each archive after the
   manifest inside it. Then rebuild.
-- The published store version is `0.3.1`. This build is `0.38.7` — a rewrite that adds image
-  recognition, the panel work, and the identity-bound loopback shortcut — so the next
-  submission is `0.38.7`, not `0.3.2`.
+- The published store version is `0.3.1`; the store build is `0.38.7` and this tree is
+  `0.38.8`. The `0.38.x` line is a rewrite that adds image recognition, the panel work, and
+  the identity-bound loopback shortcut — so the next submission is `0.38.8`, not `0.3.2`.

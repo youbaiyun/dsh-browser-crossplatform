@@ -1230,9 +1230,9 @@ export class App {
    */
   private fillSettingsBody(body: Element): void {
     const settings = this.state?.settings ?? normalizeSettings(undefined)
-    // 只留下用户真正能做的选择：bridge 地址、token、审批通知的兜底，
-    // Chrome-over-loopback 这条路已经替他们定好了。需要
-    // 人介进来的情况，由一个已安装的排查技能覆盖。
+    // 只留下用户真正能做的选择：连接状态、共享/对话/标签页/视觉、开关与宽度。
+    // bridge 地址与 token 不在这里：它们由桌面端自动发现，需要手填时用排障技能
+    // 写进扩展存储，所以面板里没有这两个输入框——文案也不要再指向它们。
     body.replaceChildren(
       this.connectionSetting(),
       this.sharingSetting(settings),

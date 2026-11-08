@@ -65,6 +65,26 @@ describe('bindOpenedTabAffinity', () => {
     expect(affinity.allowsTarget(1)).toBe(false)
   })
 
+  it('targets a background open even when the switch mode is follow', () => {
+    // 默认设置就是 follow（settings.ts 的 SETTINGS_DEFAULTS），而以前 follow 模式
+    // 会让 resolveTarget 一律落到活动标签页上，于是 open_tab(active:false) 刚绑好的
+    // 新标签页立刻被判成「受控标签变了」（BUG 报告 P0-2）。
+    const affinity = new TabAffinityController()
+    affinity.setSwitchMode('follow')
+    affinity.observeActive(tab(1, 'Current'))
+    affinity.bindInitial(tab(1, 'Current'))
+
+    expect(bindOpenedTabAffinity(affinity, tab(42, 'Docs'), { active: false })).toBe(true)
+    expect(affinity.snapshot()).toMatchObject({
+      status: 'background',
+      active: { tabId: 1 },
+      controlled: { tabId: 42 },
+    })
+    expect(affinity.resolveTarget()).toMatchObject({ kind: 'target', tab: { tabId: 42 } })
+    expect(affinity.allowsTarget(42)).toBe(true)
+    expect(affinity.allowsTarget(1)).toBe(false)
+  })
+
   it('defaults missing options to a foreground rebind', () => {
     const affinity = following()
 

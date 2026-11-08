@@ -204,6 +204,28 @@ describe('scanExtensionInstalls', () => {
     const scan = scanExtensionInstalls('win32', { LOCALAPPDATA: 'C:\\Local' }, [id], () => false, () => ['Default'])
     expect(scan.checked).toEqual(['chrome (Default)', 'edge (Default)', 'brave (Default)', 'chromium (Default)'])
   })
+
+  it('finds an unpacked extension that only left a record in the profile preferences', () => {
+    // “加载已解压的扩展程序”不在 `<profile>\Extensions\<id>\` 留副本，只在
+    // Secure Preferences 里记一条 location 4。只查目录会把这类用户报成“没装”，
+    // 再劝他们装一遍（BUG-012）。
+    const chrome = 'C:\\Local\\Google\\Chrome\\User Data'
+    const preferences = JSON.stringify({
+      extensions: { settings: { [id]: { location: 4, path: 'D:\\DSH-demo-0.38.8\\extension\\dist' } } },
+    })
+    const readFile = (path: string): string | undefined =>
+      path === `${chrome}\\Default\\Secure Preferences` ? preferences : undefined
+    const scan = scanExtensionInstalls('win32', { LOCALAPPDATA: 'C:\\Local' }, [id], () => false, () => ['Default'], readFile)
+    expect(scan.installed).toEqual(['chrome'])
+  })
+
+  it('treats an unreadable or corrupt preferences file as no record, not as an install', () => {
+    const chrome = 'C:\\Local\\Google\\Chrome\\User Data'
+    const readFile = (path: string): string | undefined =>
+      path === `${chrome}\\Default\\Secure Preferences` ? '{ not json' : undefined
+    const scan = scanExtensionInstalls('win32', { LOCALAPPDATA: 'C:\\Local' }, [id], () => false, () => ['Default'], readFile)
+    expect(scan.installed).toEqual([])
+  })
 })
 
 describe('userDataRoots', () => {

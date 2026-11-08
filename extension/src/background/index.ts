@@ -1230,9 +1230,11 @@ function followConnectionChanged(): void {
  */
 async function gatewayRpc(method: string, payload: unknown): Promise<unknown> {
   if (rpc === null || bridge === null || !bridge.connected) {
+    // 面板的设置表里没有地址/token 输入框：连接地址与 token 由桌面端自动发现，
+    // 用户能做的只有把桌面端跑起来。指向一个不存在的输入框只会让人白找。
     throw new Error(getUiLocale() === 'zh'
-      ? '未连接 dsh（请检查设置中的地址与 token）'
-      : 'dsh is not connected (check the bridge address and token in Settings)')
+      ? '未连接 dsh：桌面端可能没在运行，或者连接还没建立。先启动桌面端，再重开这个面板；地址与 token 由桌面端自动发现，面板里没有这两项设置。'
+      : 'dsh is not connected. The desktop app may not be running, or the link has not been established yet; start it, then reopen this panel. The bridge address and token are discovered from the desktop app — this panel has no setting for them.')
   }
   return rpc.request(method, payload)
 }
@@ -1912,11 +1914,17 @@ async function describeImage(
   // 出厂即开的 `unrestrictedBrowserAccess` 会把这一档盖成 `'auto'`。
   const visionService = vision()
   if (settings.visionTier === 'off') {
+    // 握手里的 `imageRecognition: true` 说的是桌面端愿意替扩展识别图片；
+    // 这里说的是扩展自己的开关。两句话都对，但不能让模型以为是同一个开关
+    // （BUG 报告 P2-13）：把“谁关的、开了就能用”讲清楚。
+    const relayReady = bridgePolicy?.imageRecognition === true
     return {
       ok: false,
       error: {
         code: 'action-failed',
-        message: 'Image recognition is off. Enable a tier in Settings > Image recognition to allow it.',
+        message: relayReady
+          ? 'Image recognition is off in the extension settings. The desktop app can recognize images; turn on a tier in Settings > Image recognition to use it.'
+          : 'Image recognition is off. Enable a tier in Settings > Image recognition to allow it.',
       },
     }
   }
@@ -2685,4 +2693,18 @@ void settingsReady.then(() => {
 
 chrome.runtime.onInstalled.addListener(() => {
   void settingsReady.then(() => { armBridgeKeepalive() })
+})
+
+// 浏览器启动时必须自己把 worker 叫起来。Chrome 只在扩展注册了 onStartup 监听器时
+// 才会在启动过程中唤醒它，而 alarms 又明确不保证跨重启保留：少了这一条，重启后
+// 没有任何东西会去连 bridge，用户要手动打开侧栏才会「突然恢复」（BUG 报告 P0-0）。
+// 这里做的正是面板打开时做的那套——重新武装 keepalive、抢回可能已被让出的槽位、
+// 没连就重连——只是触发者换成了浏览器启动本身。
+chrome.runtime.onStartup.addListener(() => {
+  void settingsReady.then(() => {
+    armBridgeKeepalive()
+    reclaimBridgeIfReplaced()
+    if (bridge === null || bridge.state === 'stopped') void startBridge()
+    syncBadge()
+  })
 })

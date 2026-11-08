@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import { BridgeServer, BridgeToolError, isLoopbackAddress, messageToText, payloadCode, payloadMessage } from '../src/server.ts'
+import { DEFAULT_EXTENSION_IDS } from '../src/index.ts'
 import { BRIDGE_INJECT_BROWSER_SNAPSHOT_METHOD, BRIDGE_SESSION_PURGE_METHOD, type BridgeFrame } from '@dsh-browser/protocol'
 import { SessionPurgeError } from '../src/session-purge.ts'
 import type { BrowserHostApi, HostEventFrame } from '../src/host-api.ts'
@@ -15,6 +16,9 @@ const EXT_ORIGIN = `chrome-extension://${EXT_ID}`
 /** 另一个扩展：同样带 chrome-extension:// 前缀，但不是本扩展。 */
 const OTHER_EXT_ORIGIN = 'chrome-extension://some-other-installed-extension'
 const FIREFOX_EXT_ORIGIN = 'moz-extension://per-install-uuid'
+/** 开发加载（manifest `key` 钉住）与 Web Store 打包两个渠道各自的 id。 */
+const DEV_EXT_ID = 'kdhkdgfcinfkmogifamoapmheihhcjfk'
+const STORE_EXT_ID = 'agpipnjijkpomaannkijkilggoffdiaf'
 
 /** 本套件里每次 hello 都会用的扩展能力声明。 */
 const CAPS = { textOnly: true as const, snapshotMaxChars: 12_000, maxInteractiveItems: 60 }
@@ -858,5 +862,56 @@ describe('BridgeServer', () => {
     const countBefore = frames.filter((f) => f.t === 'event').length
     await new Promise((resolve) => { setTimeout(resolve, 80) })
     expect(frames.filter((f) => f.t === 'event').length).toBe(countBefore)
+  })
+
+  it('accepts the packaged Web Store extension id without a token, so store builds are indexed like dev ones', async () => {
+    // 打包/商店渠道装出来的扩展拿到的是 Chrome 分配的 id，不是开发加载时由 manifest
+    // `key` 钉住的那个。少了这一条，商店用户就得手工粘贴 token，否则面板永远「未连接」。
+    // 这里走完整的 socket 路径，而不是只测谓词：hello + 一次 RPC 都得过。
+    const h = await startBridge({ extensionId: DEFAULT_EXTENSION_IDS.join(',') })
+    harnesses.push(h)
+    const { ws, frames } = await connect(h.url, `chrome-extension://${STORE_EXT_ID}`)
+    send(ws, { t: 'hello', token: '', caps: CAPS })
+    await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
+    send(ws, { t: 'rpc', id: 'store-rpc', method: 'session.list', payload: {} })
+    await waitFor(() => frames.some((f) => f.t === 'rpc.result' && f.id === 'store-rpc'))
+    expect(frames.find((f) => f.t === 'rpc.result' && f.id === 'store-rpc')).toMatchObject({ ok: true })
+    expect(h.callMock).toHaveBeenCalledWith(expect.objectContaining({ method: 'session.list' }))
+    ws.close()
+  })
+
+  it('answers a burst of concurrent rpc calls on one connection without dropping or misrouting ids', async () => {
+    // 扩展在打开工作区时会一次问很多个 Session 的历史；这里的并发量比它实际发出的更多，
+    // 用来确认单条连接的请求表在多路复用下不会丢 id、不会串行化到超时。
+    const h = await startBridge({ api: hostApi({ call: async () => ({ ok: true, value: 'ok' }) }) })
+    harnesses.push(h)
+    const { ws, frames } = await connect(h.url)
+    send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
+    await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
+
+    const ids = Array.from({ length: 200 }, (_, index) => `burst-${index}`)
+    for (const id of ids) send(ws, { t: 'rpc', id, method: 'session.list', payload: {} })
+    await waitFor(() => frames.filter((f) => f.t === 'rpc.result').length >= ids.length, 10_000)
+
+    const results = frames.filter((f) => f.t === 'rpc.result')
+    expect(new Set(results.map((f) => (f as { id: string }).id)).size).toBe(ids.length)
+    for (const result of results) expect(result).toMatchObject({ ok: true })
+    ws.close()
+  })
+
+  it('relays a large rpc payload without dropping the connection', async () => {
+    // 抓下来的页面快照可以很大。桥接不该在它上面碎掉：它只是转发，不解读。
+    const h = await startBridge()
+    harnesses.push(h)
+    const { ws, frames } = await connect(h.url)
+    send(ws, { t: 'hello', token: TOKEN, caps: CAPS })
+    await waitFor(() => frames.some((f) => f.t === 'hello.ok'))
+
+    const snapshot = 'x'.repeat(1_000_000)
+    send(ws, { t: 'rpc', id: 'large-rpc', method: 'session.list', payload: { note: snapshot } })
+    await waitFor(() => frames.some((f) => f.t === 'rpc.result' && f.id === 'large-rpc'), 10_000)
+    expect(frames.find((f) => f.t === 'rpc.result' && f.id === 'large-rpc')).toMatchObject({ ok: true })
+    expect(h.callMock).toHaveBeenCalledWith(expect.objectContaining({ payload: { note: snapshot } }))
+    ws.close()
   })
 })

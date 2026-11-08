@@ -12,7 +12,7 @@
 
 import { annotatedText } from './annotate.ts'
 import { imageMarker } from '../markers.ts'
-import { accessibleName, collectInteractive, isInViewport, isVisible, mainRoot, truncate } from './extract.ts'
+import { accessibleName, collectInteractive, isInViewport, isVisible, mainRoot, surroundingText, truncate } from './extract.ts'
 import { ElementIds } from './ids.ts'
 import { collectImages, imageIdentity } from './images.ts'
 import { isSensitiveField, maskValue } from './privacy.ts'
@@ -204,8 +204,14 @@ function openDialogOf(el: Element, isOpen: (dialog: Element) => boolean): Elemen
  * @returns 快照视图。
  */
 export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: SnapshotView | null): SnapshotView {
-  const elements = collectInteractive(document)
-  const images = collectImages(document)
+  // region 是调用方要的「局部快照」：正文、清单、表单、图片都得裁剪到同一块区域，
+  // 只裁正文会让清单仍然列出整页（BUG 报告 P2-8）。
+  const regionEl = options.region !== undefined && options.region !== ''
+    ? document.querySelector(options.region)
+    : null
+  const scope = regionEl ?? document
+  const elements = collectInteractive(scope)
+  const images = collectImages(scope)
   // 图片和交互元素进同一个注册表，图片才得以成为一等的点击目标：模型按索引寻址图片，跟寻址
   // 按钮一样，中间不需要哪一步靠模型估摸屏幕位置。
   const { added, removed } = ids.assign([...elements, ...images.map((image) => image.element)])
@@ -312,12 +318,14 @@ export function buildSnapshot(ids: ElementIds, options: SnapshotOptions, last: S
     })
   }
 
-  const regionEl = options.region !== undefined && options.region !== ''
-    ? document.querySelector(options.region)
-    : null
   // 正文渲染时会在每张图的位置留一个标记。描述没法在这儿写——识别还没发生——所以标记由
   // background 拿到答案后再填。
-  const mainSource = annotatedText(regionEl ?? mainRoot(document), imageIndexByElement)
+  const region = regionEl ?? mainRoot(document)
+  const mainRootText = annotatedText(region, imageIndexByElement)
+  // 正文根之外的标题、导语同样是页面内容：选中 <main> 以后不再读它外面的文字，
+  // 快照就会丢掉页面抬头（BUG 报告 P1-6）。region 显式指定时尊重调用方的裁剪。
+  const outsideText = regionEl === null ? surroundingText(document, region) : ''
+  const mainSource = outsideText === '' ? mainRootText : `${outsideText}\n\n${mainRootText}`
   const mainBudget = Math.floor(options.budget.maxChars * 0.5)
   const main = truncate(mainSource, mainBudget)
 
@@ -410,6 +418,46 @@ function capRendered(text: string, budgetChars: number): string {
   return `${text.slice(0, budgetChars)}…(truncated to the snapshot character budget)`
 }
 
+/**
+ * 不该在快照里露面的 query 参数名。
+ *
+ * 页面地址常常带着会话、令牌、签名或一次性验证码，而快照会被原样送进模型上下文
+ * （BUG 报告 P1-5）。保留参数名能让模型看懂页面结构，值一律换掉。
+ */
+const SENSITIVE_QUERY_PARAMETER = /^(?:pass|passwd|password|pwd|secret|client[_-]?secret|token|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|key|auth|authorization|session|sessionid|session[_-]?id|sid|signature|sig|otp|pin|code|credential|credentials)$/iu
+
+/**
+ * 把 URL 里敏感 query 参数的值替换成 `***`。
+ *
+ * 只碰值，不碰参数名、路径和 fragment；相对地址也照样处理，所以图片、链接的
+ * `→ /path?...` 和页面的 `URL:` 行走的是同一条规则。
+ */
+export function redactSensitiveUrl(raw: string): string {
+  const hashIndex = raw.indexOf('#')
+  const beforeHash = hashIndex === -1 ? raw : raw.slice(0, hashIndex)
+  const hash = hashIndex === -1 ? '' : raw.slice(hashIndex)
+  const queryIndex = beforeHash.indexOf('?')
+  if (queryIndex === -1) return raw
+  const base = beforeHash.slice(0, queryIndex)
+  let changed = false
+  const redacted = beforeHash.slice(queryIndex + 1).split('&').map((pair) => {
+    if (pair === '') return pair
+    const equals = pair.indexOf('=')
+    if (equals === -1) return pair
+    const name = pair.slice(0, equals)
+    let decoded = name
+    try {
+      decoded = decodeURIComponent(name)
+    } catch {
+      // 编码坏掉的参数名按原样匹配，匹配不上就算了。
+    }
+    if (!SENSITIVE_QUERY_PARAMETER.test(decoded)) return pair
+    changed = true
+    return `${name}=***`
+  }).join('&')
+  return changed ? `${base}?${redacted}${hash}` : raw
+}
+
 function renderItem(item: InventoryItem): string {
   const state = [
     item.disabled === true ? 'disabled' : undefined,
@@ -417,7 +465,7 @@ function renderItem(item: InventoryItem): string {
     item.inViewport ? undefined : 'outside viewport',
   ].filter((value) => value !== undefined).join('/')
   const stateText = state === '' ? '' : ` [${state}]`
-  const hrefText = item.href !== undefined ? ` → ${item.href}` : ''
+  const hrefText = item.href !== undefined ? ` → ${redactSensitiveUrl(item.href)}` : ''
   return `  [${item.index}] ${item.role} "${item.name}"${stateText}${hrefText}`
 }
 
@@ -482,14 +530,14 @@ function renderImage(image: ImageView): string {
   const near = image.near === '' ? '' : ` near="${image.near}"`
   const described = image.textDescribed ? ' text-described' : ''
   const unavailable = image.unavailable === undefined ? '' : ` [${image.unavailable}]`
-  const src = image.src === '' ? '' : ` → ${image.src}`
+  const src = image.src === '' ? '' : ` → ${redactSensitiveUrl(image.src)}`
   return `  [${image.index}] ${image.kind}${size}${label}${near}${described}${unavailable}${src} ${imageMarker(image.index)}`
 }
 
 export function renderSnapshot(view: SnapshotView, delta: boolean, maxChars: number = view.budgetChars): string {
   const lines: string[] = []
   if (delta) {
-    lines.push(`Page change v${view.version} (${view.url})`)
+    lines.push(`Page change v${view.version} (${redactSensitiveUrl(view.url)})`)
     const elementChanges = view.changed.filter((id) => id !== -1)
     const changedIds = new Set(elementChanges)
     const changedItems = view.items.filter((item) => changedIds.has(item.index))
@@ -528,7 +576,7 @@ export function renderSnapshot(view: SnapshotView, delta: boolean, maxChars: num
     return capRendered(lines.join('\n'), maxChars)
   }
   lines.push(`Title: ${view.title || '(untitled)'}`)
-  lines.push(`URL: ${view.url}`)
+  lines.push(`URL: ${redactSensitiveUrl(view.url)}`)
   lines.push(`Status: ${view.ready}${view.reindexed ? ' (element indices were reassigned; use the indices in this snapshot)' : ''}`)
   if (view.main.length > 0) {
     lines.push('')

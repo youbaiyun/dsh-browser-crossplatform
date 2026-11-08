@@ -536,15 +536,39 @@ function parseCheckboxValue(text: string): boolean | undefined {
   return undefined
 }
 
+/**
+ * Enter 键在表单里该做的事。
+ *
+ * 合成一个 `submit` 事件只是在页面上广播一声「有人想提交」，它不会跑表单提交算法：
+ * 校验、`submit` 监听里的默认行为、请求构造，全都不会发生——所以以前按 Enter
+ * 填好的表单不会动（BUG 报告 P1-4）。这里走浏览器自己的路径：
+ * `requestSubmit()`（或按钮的 `click()`），让页面看到和用户按回车时一模一样的
+ * 事件序列。页面自己拦下 keydown（搜索框直接发请求那种）就不替它做第二遍。
+ */
+function submitFromEnter(target: HTMLElement): void {
+  if (target instanceof HTMLButtonElement) {
+    target.click()
+    return
+  }
+  if (!(target instanceof HTMLInputElement)) return
+  const form = target.form
+  if (form === null) return
+  const type = (target.getAttribute('type') ?? 'text').toLowerCase()
+  // 提交控件上的 Enter 等同于点它；其它 input（text/search/number…）走隐式提交。
+  if (type === 'submit' || type === 'image' || type === 'reset' || type === 'button') {
+    target.click()
+    return
+  }
+  form.requestSubmit()
+}
+
 async function pressAction(args: Record<string, unknown>, ctx: ActionContext): Promise<ActionResult> {
   const key = typeof args.key === 'string' && args.key !== '' ? args.key : ''
   if (key === '') throw new ActionError('bad-args', 'key must not be empty.')
   const target = document.activeElement instanceof HTMLElement ? document.activeElement : document.body
-  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  const notCancelled = target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
   target.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true, cancelable: true }))
-  if (key === 'Enter' && target instanceof HTMLInputElement && target.form !== null) {
-    target.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-  }
+  if (key === 'Enter' && notCancelled) submitFromEnter(target)
   await waitForPageSettled(ACTION_SETTLE)
   return withPageDelta(`Sent key "${key}".`, ctx)
 }
@@ -617,7 +641,12 @@ function reloadAction(): ActionResult {
 async function getTextAction(args: Record<string, unknown>): Promise<ActionResult> {
   const selector = typeof args.selector === 'string' && args.selector !== '' ? args.selector : undefined
   const source = selector !== undefined ? document.querySelector(selector) : null
-  const text = source !== null ? pageText(source) : selector !== undefined ? `No element matched selector: ${selector}` : pageText()
+  // 选择器没命中是读失败，不是读到了空文本：`browser_click` 找不到元素就报错，
+  // 读文本却回一句成功文案，只会让模型以为页面上写着这句话（BUG 报告 P2-12）。
+  if (selector !== undefined && source === null) {
+    throw new ActionError('action-failed', `No element matched selector: ${selector}`)
+  }
+  const text = source !== null ? pageText(source) : pageText()
   const truncated = truncate(text, 8_000)
   return { text: truncated.text + (truncated.truncated > 0 ? `\n(Truncated ${truncated.truncated} characters.)` : '') }
 }

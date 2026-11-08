@@ -79,6 +79,7 @@ function mockChrome() {
       onConnect,
       onMessage: chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>(),
       onInstalled: chromeEvent<[]>(),
+      onStartup: chromeEvent<[]>(),
     },
     storage: {
       local: {

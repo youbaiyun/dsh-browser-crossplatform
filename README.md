@@ -26,8 +26,18 @@ dsh plugin --profile desktop add dsh-browser-crossplatform   # the CLI dsh web u
 
 # Or straight from this repository, with no registry involved:
 git clone https://github.com/youbaiyun/dsh-browser-crossplatform
+cd dsh-browser-crossplatform && pnpm install      # build tooling only (TypeScript + tsdown)
+pnpm --dir packages/bridge run build              # writes the self-contained lib/index.js
 dsh plugin --profile desktop add link:<clone>/packages/bridge
 ```
+
+A `link:` install does not run the linked package's own install, and it no longer
+needs to: `lib/` inlines its runtime dependencies, so a directory with
+`lib/index.js` loads with no `node_modules` of its own. The two commands above are
+for **building** it (a fresh clone has no `lib/`). Old `lib/` builds, or a clone
+that was never built, fail at load with `ERR_MODULE_NOT_FOUND: Cannot find package
+'@deepseek-ai/cosmokit'` / a missing `lib/index.js`. Details in
+[docs/INSTALL.md step 2b](docs/INSTALL.md#step-2b-install-the-bridge-plugin-from-a-source-checkout-developers).
 
 **Step-by-step foolproof instructions (including "how to confirm it is installed") are in [docs/INSTALL.md](docs/INSTALL.md).**
 
@@ -49,7 +59,7 @@ skills/             the troubleshooting skill your AI agent reads when the panel
 | Target | Minimum version | Where this number comes from |
 |---|---|---|
 | **Operating system** | Windows / macOS / **Linux** — all supported (CI is Linux, so it is verified the most thoroughly) | The platform-specific code is confined to one place, `packages/bridge/src/browser-launch.ts`, which has to know where each platform keeps its browsers and profiles; build/benchmark tooling adds the Windows `.cmd` shim. Everything else is platform-neutral. CI's `ubuntu-latest` **is Linux**, and the full chain runs on it for every commit |
-| **dsh desktop** | **any `0.2.x`** — declared as `>=0.2.0-rc.2 <0.3.0` and **optional**, verified against `0.2.1-rc.2` | dsh is the host and provides these packages at runtime, so the bridge declares them as **optional peers** with a range, never an exact pin. The range documents the supported line; `optional` is what actually keeps a host on a prerelease (`0.2.1-rc.2`, the current desktop release) installable, because semver's prerelease rule excludes such versions from every `0.2.x` range — `*` and `0.2.x` included. The runtime gate is a capability check (`gateway.wireStream`); a genuinely missing service fails loudly by name, and a missing agent registry degrades to a no-op |
+| **dsh desktop** | **any `0.2.x`** — declared as `>=0.2.0-rc.2 <0.3.0` and **optional**, verified against `0.2.2-rc.1` | dsh is the host and provides the services at runtime; the helper packages the bridge calls are now inlined into its bundle, and the dsh packages stay declared as **optional peers** with a range, never an exact pin — they document the supported line and supply the types. `optional` is what actually keeps a host on a prerelease (`0.2.2-rc.1`, the current desktop release) installable, because semver's prerelease rule excludes such versions from every `0.2.x` range — `*` and `0.2.x` included. The runtime gate is a capability check (`gateway.wireStream`); a genuinely missing service fails loudly by name, and a missing agent registry degrades to a no-op |
 | **Node** | **≥ 20** | `engines.node` in the root, bridge and extension manifests (the protocol package declares none, because it is a private workspace package with no scripts to run) |
 | **Desktop Chrome / Chromium / Edge** | **116** | `minimum_chrome_version` in `extension/manifest.json` |
 | **Desktop Firefox** | **140.0** | `gecko.strict_min_version` in `extension/manifest.firefox.json` |
@@ -57,7 +67,7 @@ skills/             the troubleshooting skill your AI agent reads when the panel
 | **Build/test (development)** | Node **22** + pnpm **11** | `.github/workflows/check.yml` |
 | **Phone / tablet** | ❌ Not supported | See below |
 
-The bridge has only `ws` and `@deepseek-ai/schemastery` as runtime dependencies, and both are platform-independent; the extension bundles its two panel-only dependencies (`marked`, `dompurify`) into the build.
+The bridge build is self-contained: its former runtime dependencies (`ws`, `@deepseek-ai/schemastery`) and the small `@deepseek-ai/*` helpers it calls are inlined into `lib/`, which then imports only `node:*`; both were platform-independent to begin with, and the extension bundles its two panel-only dependencies (`marked`, `dompurify`) into the build.
 CI builds both browser targets and runs the full test suite (including end-to-end cases that actually launch Chromium);
 Windows has been verified locally; macOS is not covered by CI, but it is POSIX like Linux and the platform-specific surface is that one module.
 
@@ -73,10 +83,10 @@ ordinary session methods that `dsh web --host` exists to serve; what it cannot d
 
 | Dimension | Original | This version |
 |---|---|---|
-| Version | Root 0.2.1 / extension 0.3.1 / bridge 0.0.7, each drifting independently | Unified `0.38.8` — root package, protocol, bridge, extension and both manifests all agree |
+| Version | Each part versioned independently, drifting apart | Unified `0.38.8` — root package, protocol, bridge, extension and both manifests all agree |
 | Node | `^22.19 \|\| >=24` | `>=20` |
 | TypeScript | Split between extension 5.6 and bridge 6.0 | One toolchain; the extension's declared range is `^5.6`, the bridge's and the protocol's `^5.7`, and the lockfile resolves a single installed version |
-| Dependencies | 35 `@deepseek-ai/*` (RC) in the root package, node_modules at 600 MB | **0** dsh dependencies in the root package (its tests and typecheck are pure Node + a bundled tsc); the bridge ships with only `ws` + `@deepseek-ai/schemastery` and declares all of dsh as `peerDependencies` (at runtime it probes the host via `ctx.get()`, and bundles nothing); the extension has two panel-only runtime dependencies (`marked` + `dompurify`), both bundled into the panel build |
+| Dependencies | 35 `@deepseek-ai/*` (RC) in the root package, node_modules at 600 MB | **0** dsh dependencies in the root package (its tests and typecheck are pure Node + a bundled tsc); the bridge's former runtime dependencies (`ws`, `@deepseek-ai/schemastery`) are now dev-only and inlined into `lib/` together with the small `@deepseek-ai/*` helpers it calls — the built bundle imports only `node:*` and needs no `node_modules`, while dsh services are still probed at runtime via `ctx.get()` and the dsh packages stay declared as optional peers for ranges and types; the extension has two panel-only runtime dependencies (`marked` + `dompurify`), both bundled into the panel build |
 | Bridge hard-deps | React peer + 3 web-side `dsh-client-ui-*`/`locale` peers + a `dsh.client` injection block | **All removed** (the extension panel is self-contained and injects no UI into dsh's web client) |
 | Bridge protocol | Its own `protocol.ts` (12.7 KB), with a separate copy in the extension | Shared `@dsh-browser/protocol`, inlined into both artifacts by the bundler |
 | Bridge redundancy | Plus a web-side `client.js` (7.2 KB) | Deleted |

@@ -5,7 +5,8 @@ token-authenticated WebSocket bridge on the desktop app's own webserver, exposes
 `browser_*` tools to the model, and relays image recognition to the model the user
 configured.
 
-Published as **`dsh-browser-crossplatform@0.38.7`**. Part of
+Published as **`dsh-browser-crossplatform@0.38.7`**; this tree builds **0.38.8**
+(unreleased), whose `lib/` is self-contained. Part of
 [dsh-browser-crossplatform](https://github.com/youbaiyun/dsh-browser-crossplatform).
 Install it into a dsh profile rather than by hand:
 
@@ -14,8 +15,21 @@ Install it into a dsh profile rather than by hand:
 dsh plugin --profile desktop add dsh-browser-crossplatform
 
 # or from a clone, with no registry involved
+cd <clone> && pnpm install              # build tooling only (TypeScript + tsdown)
+pnpm --dir packages/bridge run build    # writes the self-contained lib/index.js
 dsh plugin --profile desktop add link:<clone>/packages/bridge
 ```
+
+A `link:` install only points the profile at the directory; it does not run this
+package's install, and this build no longer needs it to: `lib/` bundles its
+runtime dependencies (`schemastery`, `ws`, and the small `@deepseek-ai/*` helpers
+it calls), so a directory with `lib/index.js` loads with no `node_modules` of its
+own. Build it once with the two commands above (a clone carries no `lib/`). An
+older, non-bundled `lib/` fails at load with `ERR_MODULE_NOT_FOUND: Cannot find
+package '@deepseek-ai/cosmokit'` (reached via `schemastery`). `npm pack` ships the
+same self-contained `lib` + `src` + declarations, so once 0.38.8 is published the
+registry path needs no dependency resolution either (the registry still serves
+0.38.7, whose `lib` is not bundled).
 
 (the profile your desktop app runs is `desktop`; the CLI `dsh web` uses `web`)
 

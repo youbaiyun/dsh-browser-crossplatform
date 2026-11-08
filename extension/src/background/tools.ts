@@ -263,6 +263,19 @@ function contentScriptReceiverMissing(error: unknown): boolean {
 }
 
 /**
+ * 动作派发之后，响应通道才消失。
+ *
+ * 与 {@link contentScriptReceiverMissing} 不同的是，这两种形态都可能是「动作已经执行了」：
+ * 页面开始导航会先把旧文档连同它的 content script 一起拆掉，而一次慢到超时的导航也走同一条路。
+ * 所以调用方只允许等新文档报到，绝不允许重新分发——对一次点击来说，重发就是点两次。
+ */
+function dispatchLostToNavigation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return /message (?:port|channel) closed/iu.test(error.message)
+    || error.message === DISPATCH_UNANSWERED
+}
+
+/**
  * 每个带编号的图片，在最后一次为它编号的那份快照里是什么。
  *
  * 元素索引是 per-frame 的命名空间，页面一次重渲染就能让它失效，而模型指代图片用的就是编号。
@@ -457,6 +470,15 @@ async function dispatchTabNativeTool(
   if (isCancelled(call, signal)) return cancelled()
   if (targetStillAllowed?.() === false) return targetChanged()
 
+  // 浏览器级导航也要等新文档报到再回过期 snapshot，否则 navigate/back/reload 和
+  // 页面内点击的自动快照行为就不一致（BUG 报告 P1-7）。先记下导航前的文档 id。
+  const waitsForDocument = isNavigationCandidateTool(call.name)
+  const beforeFrames = waitsForDocument ? await listTabFrames(tabId, tabUrl).catch(() => [] as TabFrame[]) : []
+  const beforeDocument = beforeFrames.find((frame) => frame.frameId === 0)?.documentId
+  const navigationWait = waitsForDocument
+    ? waitForNextDocumentReady(tabId, 0, beforeDocument, signal)
+    : undefined
+
   let operation: Promise<unknown>
   let text: string
   try {
@@ -492,11 +514,34 @@ async function dispatchTabNativeTool(
     resetTabSnapshot(tabId)
     await operation
   } catch (error: unknown) {
+    navigationWait?.cancel()
     const detail = error instanceof Error ? error.message : String(error)
     return unavailable(`The browser-level operation failed: ${detail}`)
   }
+  if (navigationWait === undefined) {
+    return { ok: true, result: { text, navigationPending: true } }
+  }
+  // 目标是浏览器内部页（chrome://、扩展页、PDF 查看器）时根本不会有内容脚本报到，
+  // 等满超时只会让工具调用白等；这类页面本来也只有浏览器级元数据。
+  const updated = await operation as Partial<chrome.tabs.Tab> | undefined
+  const destinationUrl = typeof updated?.url === 'string'
+    ? updated.url
+    : (await chrome.tabs.get(tabId).catch(() => undefined))?.url
+  if (destinationUrl === undefined || !isInjectablePage(destinationUrl)) {
+    navigationWait.cancel()
+    return { ok: true, result: { text, navigationPending: true } }
+  }
+  const ready = await navigationWait.ready
   if (isCancelled(call, signal)) return cancelled()
   if (targetStillAllowed?.() === false) return targetChanged()
+  if (ready) {
+    try {
+      const snapshot = await snapshotAfterNavigation(tabId, call, text, budget, targetStillAllowed)
+      if (snapshot !== undefined) return snapshot
+    } catch {
+      // 新文档已经导航成功，只是暂时读不了；状态事实不因此改变。
+    }
+  }
   return { ok: true, result: { text, navigationPending: true } }
 }
 
@@ -727,6 +772,32 @@ async function dispatchOnce(
     )
   } catch (error: unknown) {
     if (stateChanging && contentScriptReceiverMissing(error)) rollbackActionCommit?.()
+    // 端口在动作派发之后才关掉，最可能的原因是这次点击/按键把文档导航走了，
+    // content script 跟着旧文档一起被销毁。这里绝不能重新分发——动作可能已经执行——
+    // 所以只等新文档报到：等到了就把它当作导航成功（并顺手拍一张新页面的快照），
+    // 而不是回一句「content script 停止响应」（BUG 报告 P1-3）。
+    if (navigationWait !== undefined && dispatchLostToNavigation(error)) {
+      const ready = await navigationWait.ready
+      if (ready && !isCancelled(call, signal) && targetStillAllowed?.() !== false) {
+        try {
+          const snapshot = await snapshotAfterNavigation(
+            tabId,
+            call,
+            'The action navigated the page.',
+            budget,
+            targetStillAllowed,
+            vision,
+          )
+          if (snapshot !== undefined) return snapshot
+        } catch {
+          // 导航成功这个事实不因为新页面暂时读不了而改变。
+        }
+        return {
+          ok: true,
+          result: { text: 'The action navigated the page. Call browser_snapshot to read the resulting state.' },
+        }
+      }
+    }
     navigationWait?.cancel()
     throw error
   }

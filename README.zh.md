@@ -27,8 +27,17 @@ dsh plugin --profile desktop add dsh-browser-crossplatform   # 命令行版 dsh 
 
 # 或者直接从这个仓库装，不经过 npm：
 git clone https://github.com/youbaiyun/dsh-browser-crossplatform
+cd dsh-browser-crossplatform && pnpm install      # 只是构建工具（TypeScript + tsdown）
+pnpm --dir packages/bridge run build              # 生成自包含的 lib/index.js
 dsh plugin --profile desktop add link:<clone>/packages/bridge
 ```
+
+`link:` 不会执行被链接包自己的安装，但现在也不需要：`lib/` 已经把运行时依赖内联，
+只要目录里有 `lib/index.js`，即使没有自己的 node_modules 也能加载。上面两条命令只是
+**构建**它（新 clone 里没有 `lib/`）。旧的 `lib/` 构建、或从没构建过的 clone，会在加载时
+失败：`ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cosmokit'` 或缺少
+`lib/index.js`。详见
+[docs/INSTALL.zh.md 第 2b 步](docs/INSTALL.zh.md#第-2b-步从源码-checkout-装桥接开发者)。
 
 **一步步的傻瓜式步骤（含"怎么确认装好了"）见 [docs/INSTALL.md](docs/INSTALL.md)。**
 
@@ -50,7 +59,7 @@ skills/             排障 skill：侧边栏出问题时由你的 AI agent 读�
 | 端                               | 最低版本                                                 | 这个数字出自哪里                                                                                                                                                         |
 | ------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **操作系统**                        | Windows ✓ / macOS ✓ / **Linux ✓（CI 就是 Linux，验得最扎实）** | 平台相关代码只集中在一处：`packages/bridge/src/browser-launch.ts`（它必须知道每个平台把浏览器和配置放在哪）；构建/基准脚本另加 Windows 的 `.cmd` 指名。其余都是平台无关的。CI 的 `ubuntu-latest` **就是 Linux**，每次提交都在上面跑完整链 |
-| **dsh 桌面端**                     | **任意 `0.2.x`** —— 声明为 `>=0.2.0-rc.2 <0.3.0` 且 **optional**，已在 `0.2.1-rc.2` 上验证 | dsh 是宿主、在运行时提供这些包，所以桥接把它们声明为**可选 peer**（带范围，绝不精确锁定）。范围只用来标注支持的产品线；真正让预发布版宿主编译得过的是 `optional`——因为 semver 的预发布规则会把 `0.2.1-rc.2`（当前桌面版）排除在所有 `0.2.x` 范围之外，连 `*` 和 `0.2.x` 也排除。运行时真正的闸门是能力检查（`gateway.wireStream`）：缺必需服务会带名字报错，缺 agent registry 则降级成空操作 |
+| **dsh 桌面端**                     | **任意 `0.2.x`** —— 声明为 `>=0.2.0-rc.2 <0.3.0` 且 **optional**，已在 `0.2.2-rc.1` 上验证 | dsh 是宿主、在运行时提供服务；桥调用到的辅助包现在已经内联进产物，dsh 的包则继续声明为**可选 peer**（带范围，绝不精确锁定）——范围标注支持的产品线、同时提供类型。真正让预发布版宿主编译得过的是 `optional`——因为 semver 的预发布规则会把 `0.2.2-rc.1`（当前桌面版）排除在所有 `0.2.x` 范围之外，连 `*` 和 `0.2.x` 也排除。运行时真正的闸门是能力检查（`gateway.wireStream`）：缺必需服务会带名字报错，缺 agent registry 则降级成空操作 |
 | **Node**                          | **≥ 20**                                             | 根包、桥接、扩展的 `engines.node`（协议包不声明——它是私有工作区包，没有要跑的脚本）                                                                                         |
 | **桌面 Chrome / Chromium / Edge** | **116**                                              | `extension/manifest.json` 的 `minimum_chrome_version`                                                                                                             |
 | **桌面 Firefox**                  | **140.0**                                            | `extension/manifest.firefox.json` 的 `gecko.strict_min_version`                                                                                                   |
@@ -58,7 +67,7 @@ skills/             排障 skill：侧边栏出问题时由你的 AI agent 读�
 | **构建/测试（开发）**                   | Node **22** + pnpm **11**                            | `.github/workflows/check.yml`                                                                                                                                    |
 | **手机 / 平板**                     | ❌ 不支持                                                | 见下                                                                                                                                                               |
 
-桥接的运行时依赖只有 `ws` 与 `@deepseek-ai/schemastery`，两者都与平台无关；扩展把两个面板依赖（`marked`、`dompurify`）打进构建产物。  
+桥接产物是自包含的：原先的运行时依赖（`ws`、`@deepseek-ai/schemastery`）连同它调用的小 `@deepseek-ai/*` 辅助函数都已内联进 `lib/`，产物只 import `node:*`（这两个依赖本来也与平台无关）；扩展把两个面板依赖（`marked`、`dompurify`）打进构建产物。  
 CI 会构建两个浏览器目标并跑完全部测试（含真启动 Chromium 的端到端用例）；  
 Windows 在本机验过；macOS 未被 CI 覆盖，但它与 Linux 同为 POSIX，且平台相关面就是那一个模块。
 
@@ -74,10 +83,10 @@ Firefox for Android 没有侧边栏这种界面；而且桥接**在关键处只�
 
 | 维度         | 原版                                                                        | 本版                                                                                                                                                                                                 |
 | ---------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 版本         | 根 0.2.1 / 扩展 0.3.1 / 桥 0.0.7 各自漂移                                         | 统一 `0.38.8` —— 根包、协议、桥接、扩展与两个 manifest 全一致                                                                                                                                                         |
+| 版本         | 各组件各自演进、版本互不对齐                                      | 统一 `0.38.8` —— 根包、协议、桥接、扩展与两个 manifest 全一致                                                                                                                                                         |
 | Node       | `^22.19 \|\| >=24`                                                        | `>=20`                                                                                                                                                                                             |
 | TypeScript | 扩展 5.6 与桥 6.0 分裂                                                          | 单一工具链：扩展声明 `^5.6`、桥与协议声明 `^5.7`，lockfile 只解析出一个已安装版本                                                                                                                                               |
-| 依赖         | 根包 35 个 `@deepseek-ai/*`（RC）、node_modules 600MB                           | 根包 **0 个** dsh 依赖（它的 typecheck/测试是纯 Node + 自带 tsc）；桥只有 `ws` 与 `@deepseek-ai/schemastery` 两个运行时依赖，dsh 全声明为 `peerDependencies`（运行时 `ctx.get()` 探测宿主，不内嵌）；扩展只有 `marked` + `dompurify` 两个面板依赖，且都打进面板产物 |
+| 依赖         | 根包 35 个 `@deepseek-ai/*`（RC）、node_modules 600MB                           | 根包 **0 个** dsh 依赖（它的 typecheck/测试是纯 Node + 自带 tsc）；桥原先的运行时依赖（`ws`、`@deepseek-ai/schemastery`）改为只在构建期使用，并连同它调用的小 `@deepseek-ai/*` 辅助函数一起内联进 `lib/`——构建产物只 import `node:*`，不需要自己的 `node_modules`；dsh 服务仍在运行时用 `ctx.get()` 探测，dsh 包继续声明为 optional peer（只用于范围与类型）；扩展只有 `marked` + `dompurify` 两个面板依赖，且都打进面板产物 |
 | 桥接死依赖      | React peer + 3 个 web 端 `dsh-client-ui-*`/`locale` peer + `dsh.client` 注入块 | **全部移除**（扩展面板自带，不往 dsh 的 web 客户端注入 UI）                                                                                                                                                             |
 | 桥接协议       | 自带 `protocol.ts`（12.7 KB）与扩展各存一份                                          | 共享 `@dsh-browser/protocol`，由打包器内联进两份产物                                                                                                                                                             |
 | 桥接冗余       | 另有 web 端 `client.js`（7.2 KB）                                              | 删除                                                                                                                                                                                                 |

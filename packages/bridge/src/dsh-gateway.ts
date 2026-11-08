@@ -28,6 +28,14 @@ export interface TypertGatewayLike {
     readonly method: string
     readonly args: Readonly<Record<string, unknown>>
     readonly signal?: AbortSignal
+    /**
+     * 调用方所属的 Peer。dsh 0.2.2 的 `prepareInvocation` 第一行就是
+     * `assertPeerLive(request.peer, endpoint)`，它直接读 `peer.signal`；不给它，
+     * unary 调用就会以 `Cannot read properties of undefined (reading 'signal')` 失败
+     * （0.2.0-rc.2 有 `operatorPeer()` 兜底，0.2.2 没有）。
+     * 显式允许 undefined：宿主既没有 `createPeer` 也没有 `browserPeer` 时，`wirePeer.peer` 就是空。
+     */
+    readonly peer?: PeerLike | undefined
   }): Promise<unknown>
 }
 

@@ -481,6 +481,31 @@ describe('tab switch mode', () => {
     expect(affinity.allowsTarget(2)).toBe(false)
   })
 
+  it('keeps tools on an explicitly followed background tab in follow mode', () => {
+    // follow_tab 到一个用户没在看的标签页：这是明确的工具指令，不能被「跟随活动标签页」
+    // 的默认策略盖掉，否则 snapshot/click 会打在别的页面上（BUG 报告 P0-1）。
+    const affinity = new TabAffinityController()
+    affinity.setSwitchMode('follow')
+    affinity.observeActive(tab(1))
+    affinity.bindInitial(tab(1))
+
+    affinity.rebindControlled(tab(2))
+    expect(affinity.snapshot()).toMatchObject({
+      status: 'background',
+      controlled: { tabId: 2 },
+      active: { tabId: 1 },
+    })
+    expect(affinity.resolveTarget()).toEqual({ kind: 'target', tab: tab(2) })
+    expect(affinity.allowsTarget(2)).toBe(true)
+    expect(affinity.allowsTarget(1)).toBe(false)
+
+    // 用户真的切走之后，跟随策略才重新说话。
+    affinity.observeActive(tab(3))
+    expect(affinity.snapshot()).toMatchObject({ status: 'following' })
+    expect(affinity.resolveTarget()).toEqual({ kind: 'target', tab: tab(3) })
+    expect(affinity.allowsTarget(2)).toBe(false)
+  })
+
   it('changes the mode in place and reports whether anything moved', () => {
     const affinity = switchedToIn('keep', 2)
     expect(affinity.mode).toBe('keep')

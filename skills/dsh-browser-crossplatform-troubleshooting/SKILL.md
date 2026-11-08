@@ -129,6 +129,48 @@ guessing between them is how you waste the user's time.
 
 ## Step 2 — Match the symptom
 
+### Check the versions before matching a symptom
+
+Three versions decide most reports, and they move independently:
+
+| Version | Read it from |
+|---|---|
+| desktop app (the host, ships the gateway) | the app's About window, or `app.asar`'s `dsh/package.json` |
+| extension (the panel) | `chrome://extensions` card — also shows **which folder** is loaded (store build vs `dist`) |
+| bridge plugin | `<DSH_HOME>/profiles/<profile>/node_modules/dsh-browser-crossplatform/package.json` |
+
+Two extension builds exist, and only these two: the **store/packaged build is
+`0.38.7`** (id `agpipnjijkpomaannkijkilggoffdiaf`), the **unpacked build from this
+tree is `0.38.8`** (id `kdhkdgfcinfkmogifamoapmheihhcjfk`). The bridge in this tree
+is `0.38.8`. `0.38.7` was written before the Host required a Peer on every gateway
+call, so on desktop `0.2.2-rc.1` it shows 「已连接」 and then fails every RPC; `0.38.8`
+works on the whole declared host range (`>=0.2.0-rc.2 <0.3.0`). The store build carries
+none of the `0.38.8` fixes below.
+
+Every symptom below is by design **already fixed in 0.38.8**; if the user is
+reporting one of them, first prove they are not running an older build:
+
+| Symptom | Cause | Fixed in | Repair |
+|---|---|---|---|
+| panel 已连接, every message fails with `Cannot read properties of undefined (reading 'signal')` | unary `gateway.invoke` calls did not carry the Host Peer (BUG-008) | bridge 0.38.8 | update bridge, **restart the desktop app** |
+| `Remote invocation "session/follow" was aborted` when two history reads overlap | one active follow per session; the newer one cancels the older (BUG-009) | bridge 0.38.8 (per-session queue + one retry) | update bridge, restart |
+| after a browser/desktop restart the extension never reconnects until the panel is opened | no `chrome.runtime.onStartup` hook, and alarms do not survive a browser restart | extension 0.38.8 | update + reload the extension |
+| explicit `browser_follow_tab` of a background tab still reads the visible tab; `browser_open_tab(active:false)` returns `The controlled tab changed during the operation.` | `follow` mode ignored an explicit binding | extension 0.38.8 | update + reload |
+| a click that navigates returns `The content script stopped responding…` although the page did navigate | the dispatch rejected before the new document answered | extension 0.38.8 | update + reload |
+| `press Enter` does not submit a form | a synthetic `submit` event never runs the submission algorithm | extension 0.38.8 (`requestSubmit()`) | update + reload |
+| `?user=alice&pwd=s3cret` appears verbatim in a snapshot | URLs were rendered unmasked | extension 0.38.8 | update + reload |
+| text outside `<main>` is missing; `wait(text=…)` succeeds while the snapshot says `(No visible changes.)` | only the main container was diffed | extension 0.38.8 | update + reload |
+| `navigate` / `back` sometimes answer only `Call browser_snapshot again after the page loads.` | browser-level navigation never snapshotted | extension 0.38.8 | update + reload |
+| `region` crops body text but the interactive list still shows elements outside it | region did not scope the inventory | extension 0.38.8 | update + reload |
+| `<style>`/`<script>` source shows up as page text | `textContent` fallback for non-HTML containers | extension 0.38.8 | update + reload |
+| a minimized window marks every element `[outside viewport]` | 0×0 viewport read as "not visible" | extension 0.38.8 (guard) | update + reload; if still non-zero on that platform, report the measured values |
+| `click` on a missing element fails while `get_text` on a missing selector returns text | two error conventions | extension 0.38.8 | update + reload |
+| every `browser_*` tool says the extension "was not found", although it is loaded with **Load unpacked** | the install scan read only `<profile>\Extensions\<id>\`; unpacked installs only leave a record in the profile preferences (BUG-012) | bridge 0.38.8 | update bridge, **restart the desktop app**; confirm the loaded build carries `key` (id `kdhk…`) |
+| the panel reports 「未连接 dsh（请检查设置中的地址与 token）」 / "check the bridge address and token in Settings", but the settings sheet has no such fields | stale copy: address and token are discovered from the desktop app (BUG-013) | extension 0.38.8 | update + reload |
+
+If the observed version is already at those numbers, the table is not the
+answer — continue with the symptoms below.
+
 ### The dot is red (`stopped`) and the page name is empty
 
 The worker is not talking to the bridge at all. In order of likelihood:
@@ -245,7 +287,7 @@ are all zero.
 - A flex child without `min-width: 0` (a `<textarea>` especially) refuses to
   shrink, so its row grows past the panel and `overflow-x: hidden` clips the overflow
   away. There is no scrollbar to warn you: the content simply disappears off the right
-  edge. `.header__actions` and `.select` were both fixed this way in 0.38.5;
+  edge. `.header__actions` and `.select` already carry it;
   `.composer__input` already carried `min-width: 0`.
 
 `--panel-max` must be **clamped to the panel**, never written through: the
@@ -319,9 +361,9 @@ whether the last visit is reused:
   looks incomplete mid-session is usually this and not a fault. Entering the mode
   mirrors everything once, which is what brings an existing transcript on screen.
   And a launch opens one follower per conversation on the bridge, so a panel stuck
-  on one conversation while others are active points at the bridge: one older than
-  `0.38.4` follows a single Session and aborts the previous follower when asked for
-  another.
+  on one conversation while others are active points at the bridge: a bridge older
+  than this tree follows a single Session and aborts the previous follower when asked
+  for another.
 
   First failure to check is a desktop running an older bridge, which answers
   `session.follow` with `not-found`. The worker surfaces that as a panel notice naming
@@ -557,8 +599,22 @@ If `pnpm` is missing, enable Corepack (`corepack enable`) rather than reaching
 for a path inside the app bundle. The bridge plugin needs the same treatment:
 
 ```sh
-cd <DSH_HOME>/dsh-browser/packages/bridge
+cd <DSH_HOME>/dsh-browser
+pnpm install              # build tooling for this checkout only; a consumer needs none of it
+cd packages/bridge
 pnpm run build            # writes lib/, which is what the loader actually reads
+```
+
+The bridge build is **self-contained**: `lib/` inlines every npm dependency and
+imports only `node:*`, so a `link:` or unpacked install needs no `node_modules` of
+its own. If a load fails with `ERR_MODULE_NOT_FOUND … @deepseek-ai/cosmokit …
+schemastery`, that `lib/` is from before the bundling change (or was never built):
+rebuild it, do not install dependencies. Two scripts make the promise checkable
+without a desktop app:
+
+```sh
+pnpm run check-bundle     # imports lib/ from a directory with no node_modules; fails on any non-node:* import
+pnpm run smoke-bundle     # applies the bundle against a stub host context (1 upgrade route, 17 tools)
 ```
 
 The user's browser loads the **unpacked** build from `~/.dsh/browser-extension`,
@@ -568,3 +624,18 @@ not work — always confirm the reload before believing a negative result.
 
 **Never claim a UI fix works without this.** Layout in particular cannot be
 verified from the sources alone: measure it, or say plainly that you could not.
+
+### Where the user can get the extension, three ways
+
+| If the user wants… | Point them at | Then |
+|---|---|---|
+| to test a build from this checkout | `extension/dist` after `pnpm run build` in `extension/` (load unpacked: `chrome://extensions` → Developer mode → Load unpacked → that folder) | reload the extension after every build; an unreloaded fix looks like a failed fix |
+| a file to hand out or upload | `node extension/scripts/package.mjs` in the checkout root → `dsh-browser-crossplatform-<version>-store.zip` (store upload; no dev `key`) or `dsh-browser-crossplatform-<version>.zip` (dev-key build, keeps the unpacked id) | store uploads take the `-store` archive only |
+| the published build | [Chrome Web Store — dsh 浏览器扩展（全平台）](https://chromewebstore.google.com/detail/dsh-%E6%B5%8F%E8%A7%88%E5%99%A8%E6%89%A9%E5%B1%95%EF%BC%88%E5%85%A8%E5%B9%B3%E5%8F%B0%EF%BC%89/agpipnjijkpomaannkijkilggoffdiaf), id `agpipnjijkpomaannkijkilggoffdiaf` | no token needed: both the store id and the dev id are trusted origins |
+
+A reminder that saves a debugging session: the user's Chrome may hold the
+**store** build (`0.38.7`) while the checkout holds the **unpacked** one (`0.38.8`), and
+the two ids behave identically on loopback. If the reported symptom is one of the
+`0.38.8`-only fixes above, the store build is the whole explanation — load the unpacked
+build to reproduce the fix. Before calling a fix broken, check which build the panel is
+actually running (`chrome://extensions` shows the loaded folder).

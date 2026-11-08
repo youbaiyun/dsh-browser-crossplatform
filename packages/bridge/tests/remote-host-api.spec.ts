@@ -158,6 +158,41 @@ describe('dsh 0.2 Remote Host adapter', () => {
     await api.dispose?.()
     expect(dispose).not.toHaveBeenCalled()
   })
+  it('hands the Connection Peer to every unary invoke, because the Host reads request.peer', async () => {
+    // dsh 0.2.2 的 `prepareInvocation` 第一行就是 `assertPeerLive(request.peer, endpoint)`，
+    // 而 `assertPeerLive` 读的是 `peer.signal`。0.38.7 只给 Remote 流补了 Peer，忘了 unary；
+    // 于是面板显示「已连接」，`workspace.list` 也正常，但 `session.models` 一类的调用全部
+    // 以 `Cannot read properties of undefined (reading 'signal')` 失败。
+    const peer = {
+      signal: new AbortController().signal,
+      principal: { kind: 'owner' },
+      interactions: 'answer',
+    }
+    const { api, invoke } = harness({
+      peer,
+      invoke: async ({ method }) => {
+        if (method === 'modelCatalog') {
+          return { default: { provider: 'deepseek-official', model: 'deepseek-flash' }, groups: [] }
+        }
+        if (method === 'projections') return { values: {} }
+        if (method === 'page') return { records: [], hasMore: false }
+        return {}
+      },
+      open: async (_endpoint, _payload, _uplink, _peer, signal) => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'snapshot', cursor: 3, records: [], hasMore: false }
+          await abortWait(signal)
+        },
+      }),
+    })
+    await api.call(call('session.models', { sessionId: 'session-1' }))
+    await api.call(call('session.list', {}))
+    await api.call(call('session.history', { sessionId: 'session-1', beforeSeq: 1 }))
+    // catalog、projections、list、page：四处 unary 调用一个都不能漏。
+    expect(invoke).toHaveBeenCalledTimes(4)
+    for (const [request] of invoke.mock.calls) expect(request.peer).toBe(peer)
+  })
+
   it('preserves V3 durable streams and orders reconnect baselines before transient frames without advancing the durable cursor', async () => {
     const baseline = {
       revision: 2,

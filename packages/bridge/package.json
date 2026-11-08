@@ -32,6 +32,7 @@
     "lib/invariant.js",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
+    "THIRD-PARTY-NOTICES.md",
     "src"
   ],
   "peerDependencies": {
@@ -60,10 +61,6 @@
     "@deepseek-ai/dsh-session-persistence": { "optional": true },
     "@deepseek-ai/dsh-tools": { "optional": true }
   },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4",
-    "ws": "^8.21.0"
-  },
   "devDependencies": {
     "@deepseek-ai/cordis": "~4.0.4",
     "@deepseek-ai/dsh-agent": "0.2.0-rc.2",
@@ -83,16 +80,20 @@
     "@deepseek-ai/dsh-system-prompt": "0.2.0-rc.2",
     "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
     "@deepseek-ai/dsh-user-approval": "0.2.0-rc.2",
+    "@deepseek-ai/schemastery": "~3.18.4",
     "@dsh-browser/protocol": "workspace:*",
     "@types/node": "^22.10.0",
     "@types/ws": "^8.18.1",
     "playwright-core": "^1.50.0",
     "tsdown": "0.22.2",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "ws": "^8.21.0"
   },
   "scripts": {
     "build": "tsc -b --pretty false && tsdown",
+    "check-bundle": "node scripts/check-bundle.mjs",
+    "smoke-bundle": "node scripts/smoke-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run"
   },

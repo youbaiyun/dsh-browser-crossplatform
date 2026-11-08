@@ -23,7 +23,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** 一个候选可执行文件，以及这个路径的出处。 */
@@ -398,18 +398,60 @@ function readDirectoryNames(path: string): string[] | undefined {
   }
 }
 
+/** 读一个偏好文件，读不到时是 undefined。 */
+function readTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 一个 profile 记下来的扩展 id。
+ *
+ * 商店安装会把扩展复制到 `<profile>\Extensions\<id>\`，所以查目录就够了；而“加载已解压
+ * 的扩展程序”（location 4）**不会**在那里留副本，只在 `Secure Preferences`（旧浏览器
+ * 在 `Preferences`）的 `extensions.settings` 里记一条。只查目录会把这类用户报成
+ * “没装”，再劝他们装一遍——这正是 BUG-012 里用户白忙的那一步。
+ *
+ * 读不到、解析失败都当作没有记录：坏掉的偏好文件不是安装证据。
+ */
+function extensionIdsRecordedInPreferences(
+  files: readonly string[],
+  readFile: (path: string) => string | undefined,
+): ReadonlySet<string> {
+  const recorded = new Set<string>()
+  for (const file of files) {
+    const raw = readFile(file)
+    if (raw === undefined) continue
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      const settings = (parsed as { extensions?: { settings?: unknown } } | null)?.extensions?.settings
+      if (settings === null || settings === undefined || typeof settings !== 'object') continue
+      for (const id of Object.keys(settings)) recorded.add(id)
+    } catch {
+      // 偏好文件被写坏时没有可用的信息；继续看下一个。
+    }
+  }
+  return recorded
+}
+
 /**
  * 某个浏览器 profile 里装了扩展没有，以及看过哪些 profile。
  *
  * 装扩展是用户的动作——从商店装，或者“加载已解压的扩展程序”走一遍——没有任何命令行
- * 标志能代替它；未打包加载只撑一个会话，下次启动就没了（已验证）。所以这里回答的是
- * 决定一次启动成败的那个问题，并让 bridge 说出用户实际是哪一种情形，而不是去猜。
+ * 标志能代替它（`--load-extension` 那种只在当次进程里生效，不进 profile）。两种安装都
+ * 会留下证据：商店安装是 `Extensions\<id>\` 目录，未打包加载是偏好文件里的一条记录。
+ * 所以这里回答的是决定一次启动成败的那个问题，并让 bridge 说出用户实际是哪一种情形，
+ * 而不是去猜。
  *
  * @param platform - 目标平台。
  * @param env - 环境变量，用来定位上面那些 profile 根目录。
  * @param extensions - 扩展的目录名，它可能有的每个 id 各一个。
  * @param exists - 文件系统探测，测试注入。
  * @param listDirectory - 目录列表，测试注入。
+ * @param readFile - 偏好文件读取，测试注入。
  * @returns 装了它的浏览器，以及每个浏览器读了哪些 profile。
  */
 export function scanExtensionInstalls(
@@ -418,6 +460,7 @@ export function scanExtensionInstalls(
   extensions: readonly string[],
   exists: (path: string) => boolean = existsSync,
   listDirectory: (path: string) => string[] | undefined = readDirectoryNames,
+  readFile: (path: string) => string | undefined = readTextFile,
 ): ExtensionInstallScan {
   const installed: string[] = []
   const checked: string[] = []
@@ -433,7 +476,14 @@ export function scanExtensionInstalls(
     if (root === undefined || root === '') continue
     const profiles = chromiumProfileNames(root, listDirectory)
     checked.push(`${id} (${profiles.join(', ')})`)
-    const found = profiles.some((profile) => ids.some((extension) => exists(under(root, profile, 'Extensions', extension))))
+    const found = profiles.some((profile) => {
+      const recorded = extensionIdsRecordedInPreferences(
+        [under(root, profile, 'Secure Preferences'), under(root, profile, 'Preferences')],
+        readFile,
+      )
+      return ids.some((extension) => recorded.has(extension)
+        || exists(under(root, profile, 'Extensions', extension)))
+    })
     if (found) installed.push(id)
   }
   return { installed, checked }
@@ -995,7 +1045,7 @@ export async function launchBrowser(
       message: `${browserId} is already running, so starting it again would only open a window in the existing one — no extension would load from it. `
         + (installed.length > 0
           ? `The extension is installed in ${installed.join(', ')}; ask the user to make sure it is enabled at ${extensionsPageUrl(browserId)}, and the connection returns on its own.`
-          : `The extension was not found in ${profilesReadClause(checked)}, which is why nothing connects. It has to be installed once at ${extensionsPageUrl(browserId)} — from the extension store, or by turning on developer mode and using "Load unpacked" to pick the built extension folder. After that single install a normal start reconnects on its own.`),
+          : `No install record for the extension was found in ${profilesReadClause(checked)}, which is why nothing connects. If it is loaded already, make sure it is enabled at ${extensionsPageUrl(browserId)} — the bridge reads each profile's extension record, and a build the browser has not loaded looks the same as one that was never installed. Otherwise install it once there: from the extension store, or with "Load unpacked" in developer mode. Both kinds of install persist across restarts.`),
       ...(installed.length === 0 ? { installUrl: extensionsPageUrl(browserId) } : {}),
     }
   }
@@ -1047,9 +1097,10 @@ export async function launchBrowser(
   const { installed, checked } = installScan(platform)
   const extensionHint = installed.length > 0
     ? `The extension is installed in ${installed.join(', ')}; confirm it is enabled at ${extensionsPageUrl(browserId)} and that this browser is the one that profile belongs to.`
-    : `The extension was not found in ${profilesReadClause(checked)}, so there was nothing to connect. `
-      + `It has to be installed once at ${extensionsPageUrl(browserId)} — from the extension store, or by turning on developer mode and using "Load unpacked" to pick the built extension folder; `
-      + 'a command-line load only lasts one session and would have to be repeated every start.'
+    : `No install record for the extension was found in ${profilesReadClause(checked)}, so there was nothing to connect. `
+      + `If it is loaded already, make sure it is enabled at ${extensionsPageUrl(browserId)}. `
+      + `Otherwise install it once there — from the extension store, or with "Load unpacked" in developer mode; `
+      + 'both persist across restarts, while a command-line load does not.'
   return {
     launched: true,
     resolved: true,

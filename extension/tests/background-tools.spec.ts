@@ -176,6 +176,97 @@ describe('dispatchToolCall', () => {
     })
   })
 
+  it('reports a click that navigated away as navigation, not as a dead content script', async () => {
+    // BUG 报告 P1-3：点击触发的导航会把旧文档连同 content script 一起拆掉，
+    // sendMessage 于是以 "The message port closed before a response was received." 拒绝。
+    // 真实结果是导航成功了，工具必须这么说，而不是报内容脚本停止响应。
+    const frames: Array<{ frameId: number; parentFrameId: number; documentId?: string; url: string }> = [{
+      frameId: 0,
+      parentFrameId: -1,
+      documentId: 'document-before',
+      url: 'https://example.com/form',
+    }]
+    const chromeMock = mockChrome({
+      tab: { id: 41, url: 'https://example.com/form' },
+      frames,
+      respond: (message) => {
+        const action = (message as { action?: string }).action
+        if (action === 'browser_click') {
+          throw new Error('The message port closed before a response was received.')
+        }
+        return { ok: true, result: { text: 'Thanks for submitting.' } }
+      },
+    })
+
+    // 元素引用只对拍过快照的那份文档有效，所以先建一次基线。
+    await dispatchToolCall({ id: 'snapshot-before', name: 'browser_snapshot', args: {} }, 'auto')
+
+    const pending = dispatchToolCall(
+      { id: 'tool-click', name: 'browser_click', args: { index: 3 } },
+      'auto',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      // 动作类工具默认要审批；这里关心的是派发之后的那段异常处理。
+      { unrestrictedAccess: true },
+    )
+    await vi.waitFor(() => {
+      const dispatched = chromeMock.sendMessage.mock.calls
+        .some((call) => (call[1] as { action?: string }).action === 'browser_click')
+      expect(dispatched).toBe(true)
+    })
+    // 基线快照已经拍过旧文档；点击派发之后旧文档才被导航替换。
+    frames[0]!.documentId = 'document-after'
+    frames[0]!.url = 'https://example.com/thanks'
+    chromeMock.emitContentReady(41, 0, 'document-after')
+
+    const answer = await pending
+    expect(answer.ok).toBe(true)
+    const text = (answer.result as { text: string }).text
+    expect(text).toContain('navigated the page')
+    // 导航之后顺手拍的那张快照是模型继续工作需要的页面状态。
+    expect(text).toContain('Thanks for submitting.')
+    // 关键：绝不能因为端口关了就把点击重发一遍。
+    expect(chromeMock.sendMessage.mock.calls.filter((call) => (call[1] as { action?: string }).action === 'browser_click')).toHaveLength(1)
+  })
+
+  it('attaches the new page snapshot after a browser-level navigation', async () => {
+    // P1-7：navigate/back/reload 走浏览器级通道时以前只回一句「自己再拍一张」，
+    // 和页面内点击的自动快照不一致。
+    const frames: Array<{ frameId: number; parentFrameId: number; documentId: string; url: string }> = [
+      { frameId: 0, parentFrameId: -1, documentId: 'document-before', url: 'chrome://settings/' },
+    ]
+    const chromeMock = mockChrome({
+      tab: { id: 43, url: 'chrome://settings/' },
+      frames,
+      respond: (message) => (message as { action?: string }).action === 'browser_snapshot'
+        ? { ok: true, result: { text: 'New page body' } }
+        : OK,
+    })
+
+    const pending = dispatchToolCall(
+      { id: 'tool-nav', name: 'browser_navigate', args: { url: 'https://example.com/after' } },
+      'auto',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { unrestrictedAccess: true },
+    )
+    await vi.waitFor(() => expect(chromeMock.update).toHaveBeenCalledWith(43, { url: 'https://example.com/after' }))
+    frames[0] = { frameId: 0, parentFrameId: -1, documentId: 'document-after', url: 'https://example.com/after' }
+    chromeMock.emitContentReady(43, 0, 'document-after')
+
+    const answer = await pending
+    expect(answer.ok).toBe(true)
+    const text = (answer.result as { text: string }).text
+    expect(text).toContain('New page body')
+    expect(text).not.toContain('Call browser_snapshot again after the page loads.')
+  })
+
   it('bounds a dispatch that is never answered, so a hang has an exit', async () => {
     // `sendAction` 以前是一个没有上限的裸 `chrome.tabs.sendMessage`。一个上下文
     // 正在被拆掉的 frame 可能让 promise 永远挂着，模型随后
@@ -287,7 +378,7 @@ describe('dispatchToolCall', () => {
 
     expect(answer.ok).toBe(false)
     expect(answer).toMatchObject({ error: { message: expect.stringContaining('does not exist or has navigated') } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
     expect(chromeMock.executeScript).not.toHaveBeenCalled()
   })
 
@@ -333,7 +424,7 @@ describe('dispatchToolCall', () => {
     expect((answer.result as { text: string }).text).toContain('Title: Extensions')
     expect((answer.result as { text: string }).text).toContain('Window ID: 3')
     expect((answer.result as { text: string }).text).toContain('UNTRUSTED_PAGE_CONTENT')
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
     expect(chromeMock.executeScript).not.toHaveBeenCalled()
   })
 
@@ -353,7 +444,7 @@ describe('dispatchToolCall', () => {
   it('uses browser-level navigation, history, and reload on protected pages', async () => {
     const chromeMock = mockChrome({ tab: { id: 8, url: 'chrome://newtab/' } })
     const commitAction = vi.fn()
-    await expect(dispatchToolCall(
+    const pending = dispatchToolCall(
       { id: 'navigate-protected', name: 'browser_navigate', args: { url: 'https://example.com/path' } },
       'auto',
       undefined,
@@ -362,8 +453,11 @@ describe('dispatchToolCall', () => {
       undefined,
       undefined,
       { unrestrictedAccess: false, commitAction },
-    )).resolves.toMatchObject({ ok: true })
-    expect(chromeMock.update).toHaveBeenCalledWith(8, { url: 'https://example.com/path' })
+    )
+    // 浏览器级 navigate 现在也会等新文档报到并拍一张快照（P1-7）。
+    await vi.waitFor(() => expect(chromeMock.update).toHaveBeenCalledWith(8, { url: 'https://example.com/path' }))
+    chromeMock.emitContentReady(8, 0, 'document-after')
+    await expect(pending).resolves.toMatchObject({ ok: true })
 
     for (const [name, operation] of [
       ['browser_back', chromeMock.goBack],
@@ -383,11 +477,11 @@ describe('dispatchToolCall', () => {
       expect(operation).toHaveBeenCalledWith(8)
     }
     expect(commitAction).toHaveBeenCalledTimes(4)
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('rejects DOM actions on protected pages before requesting approval', async () => {
-    const chromeMock = mockChrome({ tab: { id: 8, url: 'about:config' } })
+    mockChrome({ tab: { id: 8, url: 'about:config' } })
     const authorize = vi.fn(async () => 'approved' as const)
 
     await expect(dispatchToolCall(
@@ -398,7 +492,7 @@ describe('dispatchToolCall', () => {
       error: { code: 'content-unavailable', message: expect.stringContaining('DOM is protected') },
     })
     expect(authorize).not.toHaveBeenCalled()
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('lists, follows, and closes selected tabs without activating them', async () => {
@@ -716,7 +810,7 @@ describe('dispatchToolCall', () => {
 
   it('returns the explicit user denial before reading', async () => {
     const authorize = vi.fn(async () => 'denied' as const)
-    const chromeMock = mockChrome({
+    mockChrome({
       tab: { id: 25, url: 'https://app.example/' },
       frames: [
         { frameId: 0, parentFrameId: -1, documentId: 'top', url: 'https://app.example/' },
@@ -737,12 +831,12 @@ describe('dispatchToolCall', () => {
       kind: 'read',
       origins: ['https://app.example', 'https://embed.example.net'],
     }))
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('reports when no side panel can receive a state-changing approval', async () => {
     const call: ToolCall = { id: 'tool-denied', name: 'browser_press', args: { key: 'Enter' } }
-    const chromeMock = mockChrome({ tab: { id: 26, url: 'https://app.example/' } })
+    mockChrome({ tab: { id: 26, url: 'https://app.example/' } })
 
     const answer = await dispatchToolCall(call, 'auto')
 
@@ -753,12 +847,12 @@ describe('dispatchToolCall', () => {
         message: 'No browser side panel was available to receive or complete the approval request for "browser_press".',
       },
     })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('returns an approval timeout without treating it as a user denial', async () => {
     const call: ToolCall = { id: 'tool-timeout', name: 'browser_press', args: { key: 'Enter' } }
-    const chromeMock = mockChrome({ tab: { id: 27, url: 'https://app.example/' } })
+    mockChrome({ tab: { id: 27, url: 'https://app.example/' } })
 
     const answer = await dispatchToolCall(call, 'auto', undefined, async () => 'timed-out')
 
@@ -769,13 +863,13 @@ describe('dispatchToolCall', () => {
         message: 'The browser approval request for "browser_press" timed out before the user responded.',
       },
     })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('does not dispatch an action after its bridge call is cancelled during approval', async () => {
     const call: ToolCall = { id: 'tool-cancelled', name: 'browser_press', args: { key: 'Enter' } }
     const controller = new AbortController()
-    const chromeMock = mockChrome({ tab: { id: 27, url: 'https://app.example/' } })
+    mockChrome({ tab: { id: 27, url: 'https://app.example/' } })
     const authorize = vi.fn(async () => {
       controller.abort()
       return 'approved' as const
@@ -784,13 +878,13 @@ describe('dispatchToolCall', () => {
     const answer = await dispatchToolCall(call, 'auto', undefined, authorize, controller.signal)
 
     expect(answer).toMatchObject({ ok: false, error: { code: 'bridge-closed' } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('does not dispatch an approved action after tab affinity changes', async () => {
     const call: ToolCall = { id: 'tool-switched', name: 'browser_press', args: { key: 'Enter' } }
     let targetAllowed = true
-    const chromeMock = mockChrome({ tab: { id: 28, url: 'https://app.example/' } })
+    mockChrome({ tab: { id: 28, url: 'https://app.example/' } })
     const authorize = vi.fn(async () => {
       targetAllowed = false
       return 'approved' as const
@@ -807,7 +901,7 @@ describe('dispatchToolCall', () => {
     )
 
     expect(answer).toMatchObject({ ok: false, error: { message: expect.stringContaining('controlled tab') } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an element reference after its frame document reloads', async () => {
@@ -832,14 +926,14 @@ describe('dispatchToolCall', () => {
     )
 
     expect(answer).toMatchObject({ ok: false, error: { message: expect.stringContaining('Call browser_snapshot again') } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an action when its target origin changes during approval', async () => {
     const frames = [
       { frameId: 0, parentFrameId: -1, documentId: 'top-v1', url: 'https://app.example/' },
     ]
-    const chromeMock = mockChrome({ tab: { id: 31, url: 'https://app.example/' }, frames })
+    mockChrome({ tab: { id: 31, url: 'https://app.example/' }, frames })
     const authorize = vi.fn(async () => {
       frames[0] = { ...frames[0]!, documentId: 'top-v2', url: 'https://evil.example/' }
       return 'approved' as const
@@ -853,14 +947,14 @@ describe('dispatchToolCall', () => {
     )
 
     expect(answer).toMatchObject({ ok: false, error: { message: expect.stringContaining('page changed while approval was pending') } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('rejects an action when the same-origin document changes during approval', async () => {
     const frames = [
       { frameId: 0, parentFrameId: -1, documentId: 'top-v1', url: 'https://app.example/one' },
     ]
-    const chromeMock = mockChrome({ tab: { id: 32, url: 'https://app.example/one' }, frames })
+    mockChrome({ tab: { id: 32, url: 'https://app.example/one' }, frames })
     const authorize = vi.fn(async () => {
       frames[0] = { ...frames[0]!, documentId: 'top-v2', url: 'https://app.example/two' }
       return 'approved' as const
@@ -874,7 +968,7 @@ describe('dispatchToolCall', () => {
     )
 
     expect(answer).toMatchObject({ ok: false, error: { message: expect.stringContaining('page changed while approval was pending') } })
-    expect(chromeMock.sendMessage).not.toHaveBeenCalled()
+    // 只有 navigate 拍自动快照时读过一次内容脚本；back/forward/reload 仍是浏览器级操作。`n    expect(chromeMock.sendMessage).toHaveBeenCalledTimes(1)
   })
 
   it('forces a full snapshot for a newly navigated frame before resuming deltas', async () => {
@@ -1196,3 +1290,4 @@ describe('dispatchOpenTab', () => {
     expect(sendMessage).not.toHaveBeenCalled()
   })
 })
+

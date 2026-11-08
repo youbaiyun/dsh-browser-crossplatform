@@ -18,7 +18,61 @@ export interface SessionSnapshot {
   readonly snapshotId?: string
 }
 
+/**
+ * 宿主机对每个 Session 只保留一条活跃的 `session/follow`：后开的流会把先开的以
+ * `gateway/cancelled`（"Remote invocation ... was aborted"）掐掉。桥接一次历史读取
+ * 只需要基线一帧，于是并发的历史调用会互相踩。按 Session 排队，一次只开一条。
+ */
+const SNAPSHOT_QUEUE = new Map<string, Promise<unknown>>()
+
 export async function oneShotSessionSnapshot(
+  gateway: TypertGatewayLike,
+  sessionId: string,
+  outerSignal: AbortSignal,
+  peer: PeerLike | undefined,
+  maxMessages?: number,
+): Promise<SessionSnapshot> {
+  const previous = SNAPSHOT_QUEUE.get(sessionId) ?? Promise.resolve()
+  const current = previous
+    .catch(() => undefined)
+    .then(() => openSnapshot(gateway, sessionId, outerSignal, peer, maxMessages))
+  SNAPSHOT_QUEUE.set(sessionId, current)
+  try {
+    return await current
+  } finally {
+    if (SNAPSHOT_QUEUE.get(sessionId) === current) SNAPSHOT_QUEUE.delete(sessionId)
+  }
+}
+
+async function openSnapshot(
+  gateway: TypertGatewayLike,
+  sessionId: string,
+  outerSignal: AbortSignal,
+  peer: PeerLike | undefined,
+  maxMessages?: number,
+): Promise<SessionSnapshot> {
+  // 桌面端自己也在看同一条会话时，开流仍可能撞上别人的活跃流；重试一次即可，
+  // 真正的取消（调用方 abort）不重试。
+  let failure: unknown
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await openSnapshotOnce(gateway, sessionId, outerSignal, peer, maxMessages)
+    } catch (error) {
+      failure = error
+      if (outerSignal.aborted || !isStreamCancellation(error)) throw error
+      await new Promise((resolve) => { setTimeout(resolve, 25) })
+    }
+  }
+  throw failure
+}
+
+function isStreamCancellation(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const code = (error as Error & { code?: unknown }).code
+  return code === 'gateway/cancelled' || /aborted/i.test(error.message)
+}
+
+async function openSnapshotOnce(
   gateway: TypertGatewayLike,
   sessionId: string,
   outerSignal: AbortSignal,

@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { defineConfig } from 'tsdown'
 
 /**
@@ -14,4 +15,16 @@ export default defineConfig({
   fixedExtension: false,
   dts: false,
   clean: false,
+  deps: {
+    /**
+     * 发布产物必须自包含：宿主只保证有 Node 内置模块。
+     * 从这里加载插件的人（`link:` 源码安装、解压后的目录）不该先跑 `pnpm install`，
+     * 所以运行时会引用到的 npm 包全部内联；只有 `node:*` 与相对路径保持外部。
+     *
+     * 这些包要么是纯构造函数（dsh-home-paths、dsh-llm 的 createUserMessage、
+     * dsh-tools 的 defineTool），要么按标准 schema 鸭子类型被宿主消费（schemastery，
+     * cordis 用 `Config['~standard'].validate`），内联不会造成实例身份冲突。
+     */
+    alwaysBundle: (id) => id !== '' && !id.startsWith('node:') && !id.startsWith('.') && !isAbsolute(id),
+  },
 })

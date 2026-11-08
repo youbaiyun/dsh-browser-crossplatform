@@ -8,7 +8,7 @@ The whole installation has **two parts**:
 | What to install | Where it comes from | What it is |
 |---|---|---|
 | **The extension** (the browser side) | Browser extension store | The side panel you see in your browser |
-| **The bridge plugin** (the desktop side) | npm, one command | Lets dsh talk to the extension, and provides the `browser_*` tools |
+| **The bridge plugin** (the desktop side) | npm, one command (or a source checkout — see step 2b) | Lets dsh talk to the extension, and provides the `browser_*` tools |
 
 With both parts installed, the extension panel finds the desktop on its own: the token is generated automatically, and **you do not need to fill it in by hand**.
 
@@ -61,6 +61,57 @@ dsh plugin --profile desktop add dsh-browser-crossplatform
 
 After installing, **restart dsh once**. After the restart, the bridge plugin's settings page appears, titled 「**dsh 浏览器扩展（全平台）的桌面端一半**」.
 
+### Step 2b: install the bridge plugin from a source checkout (developers)
+
+`lib/` is **self-contained**: the build inlines every runtime dependency
+(`@deepseek-ai/schemastery`, `ws`, and the small `@deepseek-ai/*` helpers it
+calls), so a directory that contains `lib/index.js` loads with **no
+`node_modules` of its own** — the same as the published tarball. A checkout does
+not carry `lib/` (it is gitignored), so build it once:
+
+```sh
+cd <checkout>
+pnpm install                        # 1. build tooling only: TypeScript + tsdown
+cd packages/bridge
+pnpm run build                      # 2. writes lib/index.js (the loader reads that, never src/)
+```
+
+3. register **that directory**, not the npm name:
+
+```sh
+dsh plugin --profile desktop add link:/absolute/path/to/<checkout>/packages/bridge
+```
+
+(or add `"dsh-browser-crossplatform": "link:/absolute/path/to/<checkout>/packages/bridge"`
+to the profile's `package.json`)
+
+The `pnpm install` above is for the **build**, not for loading. Once
+`lib/index.js` exists you can copy `lib/` + `package.json` anywhere and `link:`
+that directory: the plugin's own imports no longer reach into `node_modules`.
+(That is why the published `.tgz` works without its dependencies — it ships the
+same bundled `lib/`.)
+
+**Older builds are not self-contained.** If a `link:` install fails with
+
+```
+ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cosmokit' imported from
+.../schemastery/lib/index.mjs
+```
+
+the `lib/` was built before the bundling change (or the checkout has no `lib/` at
+all). Rebuild it with the two commands above; no dependency completion is needed
+for the consumer afterwards. `pnpm --dir packages/bridge run check-bundle`
+reproduces the promise: it imports `lib/` from a temp directory with no
+`node_modules` and fails if anything but `node:*` is imported.
+
+If you swap one spec for another (`link:` → `file:*.tgz`), re-run the install so
+the profile's lockfile is re-resolved instead of reusing the previous entry.
+
+**Do not add the `@deepseek-ai/dsh-*` peers yourself.** They are optional peers
+supplied by the host and are no longer needed at runtime (the bundle carries the
+helpers it calls); adding copies to the profile is how you end up with a second
+`dsh-llm` that is missing its own dependencies.
+
 ## Step 3: confirm it is installed (30 seconds)
 
 ```
@@ -93,6 +144,7 @@ When you no longer need it, switch it back off.
 | Symptom | Most likely cause |
 |---|---|
 | The panel keeps showing "not connected" | Step 2 was not done, or **dsh was not restarted** afterwards |
+| The plugin fails to load with `ERR_MODULE_NOT_FOUND` / `Cannot find package '@deepseek-ai/cosmokit'` | An old, non-self-contained `lib/` (or a checkout without `lib/`): rebuild with `pnpm install` + `pnpm run build` in `packages/bridge` (step 2b) |
 | 「dsh 浏览器扩展（全平台）的桌面端一半」 is not listed in the plugin settings page | The `--profile` name is not the one your desktop uses |
 | The panel connects, but the model says the page is empty | Try refreshing the page once and reading it again (restricted pages such as `chrome://` cannot be read; that is normal) |
 | Image viewing is enabled but it reports unavailable | The key from step 4 has not been configured yet |
@@ -112,6 +164,15 @@ browser extension page → remove                                   # the extens
 
 Both parts must be installed: the extension from the browser extension store, and the bridge plugin with the single command
 `dsh plugin --profile desktop add dsh-browser-crossplatform`, then restart dsh. See steps 1 and 2 above for details.
+
+### Can I install the bridge plugin from a source checkout?
+
+Yes. The built `lib/` is self-contained, so the only prerequisite is a `lib/`
+that exists: build it once with `pnpm install` + `pnpm run build` in
+`packages/bridge`, then add it with
+`dsh plugin --profile desktop add link:<checkout>/packages/bridge`. A `link:`
+install does not run the linked package's own install — but it no longer needs
+to, because the bundle carries its dependencies. Full steps: **step 2b**.
 
 ### After installing, how do I confirm it works?
 

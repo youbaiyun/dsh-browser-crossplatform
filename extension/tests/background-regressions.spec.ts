@@ -190,6 +190,7 @@ function mockChrome(options: {
       onConnect,
       onMessage: onRuntimeMessage,
       onInstalled: chromeEvent<[]>(),
+      onStartup: chromeEvent<[]>(),
     },
     storage: {
       local: {

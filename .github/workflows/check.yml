@@ -38,6 +38,14 @@ jobs:
           pnpm --filter dsh-browser-extension run build
           pnpm --filter dsh-browser-extension run build:firefox
 
+      - name: Check the bridge bundle is self-contained
+        # 发布出去的只有 lib/，所以“不需要 node_modules”必须是可失败的断言，
+        # 而不是文档里的一句话：check-bundle 在空目录里 import，smoke-bundle 用
+        # 桩上下文把插件真正 apply 一遍（少一个 tool 也算回归）。
+        run: |
+          pnpm --filter dsh-browser-crossplatform run check-bundle
+          pnpm --filter dsh-browser-crossplatform run smoke-bundle
+
       - name: Package both store archives
         # 打包器一旦回退就让构建失败（它拒绝含反斜杠的条目，
         # 并按包内 manifest 给每个归档命名）。

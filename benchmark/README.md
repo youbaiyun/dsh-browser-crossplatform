@@ -28,6 +28,10 @@ pnpm build
 node benchmark/run.mjs --dry-run --smoke
 ```
 
+`pnpm build` 写出的桥接 `lib/` 是自包含的（只 import `node:*`，运行时依赖全部内联），
+benchmark 直接用 file URL 加载它，所以这个目录不需要额外的依赖补齐；怀疑产物不完整时
+用 `pnpm --dir packages/bridge run check-bundle` 验证。
+
 扩展自动加载需要 Chrome for Testing 或 Chromium。新版 Google Chrome Stable 会忽略 `--load-extension`，不能作为扩展后端的自动评测浏览器。
 
 不调用模型的全链路基础设施探针：

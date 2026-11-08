@@ -90,6 +90,11 @@ pnpm add link:<你 clone 的仓库>\packages\bridge
 ```
 
 **所以这个 profile 用的是源码目录里的插件，不是一个发布版。** 改源码后必须重新构建 `lib/` 并重启，否则不生效。
+
+（0.38.8 起 `lib/` 把运行时依赖全部内联，只 import `node:*`：`link:` 指向的目录不需要再补
+`node_modules`。如果恢复后报 `ERR_MODULE_NOT_FOUND … @deepseek-ai/cosmokit`，说明那份
+`lib/` 是内联前构建的旧产物，重建即可；`pnpm --dir packages/bridge run check-bundle`
+可以验证。）
 （这个 `link:` 的目标是本机状态，所以模板里写的是占位符而不是某个人的目录。）
 
 ### `workspace-registry.json`

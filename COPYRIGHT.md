@@ -84,6 +84,20 @@ Stated plainly, because "derivative" can mean anything from a rename to a rewrit
 | **Different** | ships no settings model of its own; panel owns almost no policy | `extension/src/settings.ts` owns the choices, and the panel only renders what it is handed |
 | **Added here** | — | `session.follow` / `session.unfollow`, whole-workspace mirroring, `browser_launch`, image recognition relay, the troubleshooting skill, and the plugin settings page |
 
+## Bundled npm packages in the bridge build
+
+Since 0.38.8, `packages/bridge/lib/index.js` is self-contained: the build inlines
+the npm packages the plugin calls, so a `link:` or unpacked install needs no
+`node_modules` of its own. Those packages stay under their own licenses, and their
+notices are preserved in
+[`packages/bridge/THIRD-PARTY-NOTICES.md`](packages/bridge/THIRD-PARTY-NOTICES.md),
+which `pnpm pack` and the npm registry include alongside `lib/`.
+
+The inlined set is fixed and checked: `pnpm --dir packages/bridge run check-bundle`
+fails if the bundle imports anything other than `node:*`. All fourteen packages are
+MIT licensed. Inlining does not relicense any of them, and no upstream browser-engine
+code is involved — this is about npm dependencies of this fork's bridge.
+
 ## Removed on purpose
 
 `.github/FUNDING.yml` was deleted. It named the upstream maintainer's sponsorship

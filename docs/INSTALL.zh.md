@@ -8,7 +8,7 @@
 | 要装的东西 | 从哪来 | 它是什么 |
 |---|---|---|
 | **扩展**（浏览器里那半） | 浏览器扩展商店 | 你在浏览器里看到的侧边栏面板 |
-| **桥接插件**（桌面端里那半） | npm，一条命令 | 让 dsh 与扩展说上话，并提供 `browser_*` 工具 |
+| **桥接插件**（桌面端里那半） | npm，一条命令（源码 checkout 见第 2b 步） | 让 dsh 与扩展说上话，并提供 `browser_*` 工具 |
 
 两半都装好，扩展面板会自己找到桌面端 ✓（令牌自动生成 ✓ **不需要你手填** ✓）
 
@@ -58,6 +58,53 @@ dsh plugin --profile desktop add dsh-browser-crossplatform
 
 装完**重启一次 dsh**。重启后插件设置页会出现，标题是「**dsh 浏览器扩展（全平台）的桌面端一半**」。
 
+### 第 2b 步：从源码 checkout 装桥接（开发者）
+
+`lib/` 是**自包含**的：构建时已经把运行时依赖（`@deepseek-ai/schemastery`、
+`ws`，以及它真正调用的几个 `@deepseek-ai/*` 小工具包）全部内联，所以只要目录里
+有 `lib/index.js`，**不需要任何 node_modules** 就能加载——和发布出来的 tarball 一样。
+checkout 里没有 `lib/`（它被 gitignore 了），所以先构建一次：
+
+```sh
+cd <checkout>
+pnpm install                        # ① 只是构建工具：TypeScript + tsdown
+cd packages/bridge
+pnpm run build                      # ② 生成 lib/index.js（加载器读它，不读 src/）
+```
+
+③ 注册**这个目录**，而不是 npm 包名：
+
+```sh
+dsh plugin --profile desktop add link:/absolute/path/to/<checkout>/packages/bridge
+```
+
+（或者在 profile 的 `package.json` 里加
+`"dsh-browser-crossplatform": "link:/absolute/path/to/<checkout>/packages/bridge"`）
+
+`pnpm install` 是给**构建**用的，不是给加载用的。`lib/index.js` 生成后，把
+`lib/` + `package.json` 拷到任何地方再 `link:` 那个目录也能跑：插件自己的 import
+不再伸进 node_modules。（发布的 `.tgz` 之所以不带依赖也能用，就是因为打进去的是
+同一份自包含 `lib/`。）
+
+**旧构建不是自包含的。** 如果 `link:` 安装后加载失败：
+
+```
+ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cosmokit' imported from
+.../schemastery/lib/index.mjs
+```
+
+说明 `lib/` 是内联之前构建的（或者 checkout 里根本没有 `lib/`）。用上面两条命令
+重建即可；消费者之后不需要再补任何依赖。`pnpm --dir packages/bridge run check-bundle`
+能把这句话验证一遍：它把 `lib/` 拷到没有 `node_modules` 的临时目录再导入，只要
+还有非 `node:*` 的 import 就失败。
+
+换 spec 时（`link:` → `file:*.tgz`）要重新执行安装，让 profile 的 lockfile
+重新解析，而不是复用旧条目。
+
+**不要自己补 `@deepseek-ai/dsh-*` 这些 peer。** 它们是由宿主提供的 optional
+peer，运行时也已经用不到（bundle 自带它调用的辅助函数）；往 profile 里加一份拷贝，
+只会多出一个缺少自身依赖的 `dsh-llm`。
+
 ## 第 3 步：确认装好了（30 秒）
 
 ```
@@ -90,6 +137,7 @@ dsh plugin --profile desktop add dsh-browser-crossplatform
 | 现象 | 多半是 |
 |---|---|
 | 面板一直显示"未连接" | 第 2 步没做，或做完**没重启** dsh |
+| 插件加载失败、报 `ERR_MODULE_NOT_FOUND` / `Cannot find package '@deepseek-ai/cosmokit'` | 是内联前的旧 `lib/`（或 checkout 里没有 `lib/`）：在 `packages/bridge` 里 `pnpm install` + `pnpm run build` 重建（第 2b 步） |
 | 插件设置页里找不到「dsh 浏览器扩展（全平台）的桌面端一半」 | `--profile` 的名字不是你桌面端用的那个 |
 | 面板能连、但模型说页面是空的 | 页面试试刷新一次再读（受限页面如 `chrome://` 读不到，属正常） |
 | 开了看图却提示不可用 | 第 4 步的密钥还没配好 |
@@ -109,6 +157,14 @@ dsh plugin --profile desktop remove dsh-browser-crossplatform     # 桌面端那
 
 两半都要装：扩展从浏览器扩展商店装；桌面端那一半用一条命令
 `dsh plugin --profile desktop add dsh-browser-crossplatform`，然后重启 dsh。详见上面第 1、2 步。
+
+### 能从源码 checkout 装桥接吗？
+
+能。构建出来的 `lib/` 是自包含的，唯一前提是它存在：在 `packages/bridge` 里
+`pnpm install` + `pnpm run build` 一次，然后用
+`dsh plugin --profile desktop add link:<checkout>/packages/bridge` 注册。
+`link:` 不会执行被链接包自己的安装，但现在也不需要——依赖都在 bundle 里。
+完整步骤见**第 2b 步**。
 
 ### 装完怎么确认能用？
 

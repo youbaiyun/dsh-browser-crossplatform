@@ -253,7 +253,7 @@ const ZH: ControlCopy = {
   common: {
     reconnecting: '正在重连后台',
     reconnectFailed: '后台连接已断开，请重新加载页面',
-    bridgeRejected: '桌面端拒绝了这次连接：令牌或扩展 id 对不上。如果你手动加载的是文件名带「-store」的包，请改用不带「-store」的那个（它带 key，id 才在白名单里）；否则请检查扩展的 token 设置。',
+    bridgeRejected: '桌面端拒绝了这次连接：令牌或扩展 id 对不上。如果你手动加载的是文件名带「-store」的包，请改用不带「-store」的那个（它带 key，id 才在白名单里）；否则按排障手册检查桌面端的桥接配置（面板里没有 token 输入框）。',
     close: '关闭',
   },
 }
@@ -359,7 +359,7 @@ const EN: ControlCopy = {
   common: {
     reconnecting: 'Reconnecting to the background',
     reconnectFailed: 'The background connection is gone; reload this panel',
-    bridgeRejected: 'The desktop app rejected this connection: the token or the extension id does not match. If you side-loaded an archive whose name contains "-store", use the one without it instead — only that build carries the manifest key whose id is on the allowlist. Otherwise check the extension\'s token setting.',
+    bridgeRejected: 'The desktop app rejected this connection: the token or the extension id does not match. If you side-loaded an archive whose name contains "-store", use the one without it instead — only that build carries the manifest key whose id is on the allowlist. Otherwise follow the troubleshooting guide and check the desktop app\'s bridge configuration — this panel has no token input.',
     close: 'Close',
   },
 }

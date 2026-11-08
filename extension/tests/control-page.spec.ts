@@ -988,7 +988,10 @@ describe('rendered panel', () => {
     // 手动加载了 `-store` 包、或扩展 id 不在白名单时，桌面端以 4002 关闭握手。原本面板
     // 只会显示「未连接」——和"桌面端没开"完全一样，而这一种恰恰是用户自己能修的。
     const { root } = mount(state({ bridge: 'stopped', bridgeRejection: { code: 4002, reason: 'bad token' } }))
-    expect(root.querySelector('.notice')?.textContent).toContain('桌面端拒绝了这次连接')
+    const notice = root.querySelector('.notice')?.textContent ?? ''
+    expect(notice).toContain('桌面端拒绝了这次连接')
+    // 面板设置里没有 token 输入框，别把用户指到一个不存在的控件上（BUG-013）。
+    expect(notice).not.toContain('token 设置')
   })
 
   it('drops the rejection notice once the connection is up again', () => {

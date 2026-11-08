@@ -312,6 +312,10 @@ export class TabAffinityController {
   private status(): TabAffinityStatus {
     if (this.controlled === null) return this.lost ? 'lost' : 'unbound'
     if (this.active?.tabId === this.controlled.tabId) return 'following'
+    // 显式把工具绑到「用户此刻没在看」的标签页（`follow_tab`、后台 `open_tab`）之后，
+    // 目标的切换偏好不能再说话：绑定来自一次明确的工具指令，不是被动跟随。
+    // 只有用户真的切走（`observeActive` 清掉 `keptActiveTabId`）才恢复跟随。
+    if (this.keptActiveTabId !== null && this.active?.tabId === this.keptActiveTabId) return 'background'
   // 切换模式决定了手动切 tab 是什么意思，所以这个提示只在 `ask` 模式下会走到。
     if (this.switchMode === 'follow') return 'following'
     if (this.switchMode === 'keep') return 'background'

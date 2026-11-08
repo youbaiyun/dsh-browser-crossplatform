@@ -53,6 +53,9 @@ export function isVisible(el: Element): boolean {
  * @returns 只要有任意一部分在视口里就为 true。
  */
 export function isInViewport(el: Element): boolean {
+  // 最小化的窗口里浏览器报告 0×0 视口，按下面这个公式整页都会落到视口外——
+  // 那是在给模型一个“什么都看不见”的错误结论。视口尺寸不可信时干脆不标注。
+  if (window.innerWidth <= 0 || window.innerHeight <= 0) return true
   const rect = el.getBoundingClientRect()
   return rect.bottom >= 0 && rect.top <= window.innerHeight && rect.right >= 0 && rect.left <= window.innerWidth
 }
@@ -63,8 +66,11 @@ function clean(text: string): string {
 }
 
 /**
- * 元素的文本：能用就用 innerText（浏览器），否则用 textContent
- * （jsdom／边角情况）。
+ * 元素的文本：能用就用 innerText（浏览器），否则逐文本节点读。
+ *
+ * 后者刻意不用裸 `textContent`：`<svg>` 不是 `HTMLElement`，没有 `innerText`，
+ * 而内联 SVG（以及任何非 HTMLElement 容器）里可能嵌着 `<style>`，裸读会把
+ * CSS 源码当作页面正文交给模型（BUG 报告 P2-10）。
  *
  * 之所以导出，是因为带标注的渲染必须和普通渲染用一模一样的方式读文本；
  * 两次读得不一样，带标注的文本就成了另一个页面。
@@ -73,9 +79,30 @@ function clean(text: string): string {
  * @returns 元素的文本。
  */
 export function elementText(el: Element): string {
-  if (el instanceof HTMLElement && typeof el.innerText === 'string') return el.innerText
-  return el.textContent ?? ''
+  // 残留着脚本/样式源码的子树走手工遍历：浏览器 innerText 会跳过它们，
+  // 但非浏览器实现（测试环境）不一定，两边的快照必须一致。
+  if (el instanceof HTMLElement && typeof el.innerText === 'string' && el.querySelector(TEXT_EXCLUDED_SELECTOR) === null) {
+    return el.innerText
+  }
+  const parts: string[] = []
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push((node as Text).data)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const element = node as Element
+    if (TEXT_EXCLUDED.has(element.tagName.toUpperCase())) return
+    for (const child of element.childNodes) walk(child)
+  }
+  walk(el)
+  return parts.join(' ')
 }
+
+/** 不构成页面正文的元素：脚本、样式、模板与降级内容。 */
+const TEXT_EXCLUDED = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'])
+
+const TEXT_EXCLUDED_SELECTOR = 'script, style, noscript, template'
 
 /**
  * 按字符预算截断文本，并在截断处做标记。
@@ -187,6 +214,50 @@ export function mainRoot(doc: Document): Element {
   }
   return best ?? doc.body
 }
+
+/**
+ * 正文之外、但属于「页面内容」的文字：标题、导语、正文区块外面的段落。
+ *
+ * 只挑正文根之外的分支，并且跳过页面框架（导航、侧栏、页脚、脚本样式）——
+ * 这些正是 {@link mainRoot} 选正文时要躲开的东西。选中 main 地标以后不再看它外面的文字，
+ * 会把 `<h1>` 和导语整段丢掉：快照就成了半张页面，模型也只能读半张（BUG 报告 P1-6）。
+ *
+ * 正文根不在 body 里时返回空串：没有可比对的「外面」。
+ *
+ * @param doc - 文档。
+ * @param root - 装正文的元素。
+ * @returns 清洗过的正文外围文字（可能为空）。
+ */
+export function surroundingText(doc: Document, root: Element): string {
+  if (root === doc.body || !doc.body.contains(root)) return ''
+  const parts: string[] = []
+  const visit = (element: Element): void => {
+    if (!doc.body.contains(element)) return
+    // 正文本身（以及它内部的任何东西）已经由标注渲染负责，这里不能重复读。
+    if (element === root || root.contains(element)) return
+    if (element.contains(root)) {
+      // 正文的祖先：只走进不包含正文的那些兄弟分支，避免把正文重复读一遍。
+      for (const child of element.children) visit(child)
+      return
+    }
+    if (PAGE_CHROME.has(element.tagName)) return
+    // 逐文本节点收集，而不是整棵子树取文本：`<header><nav>…</nav></header>` 这类
+    // 容器里既有真实内容又有页面框架，整取会把导航又带回来。
+    for (const node of element.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = clean(node.textContent ?? '')
+        if (text !== '') parts.push(text)
+        continue
+      }
+      if (node.nodeType === Node.ELEMENT_NODE) visit(node as Element)
+    }
+  }
+  visit(doc.body)
+  return parts.join(' ')
+}
+
+/** 页面框架元素：不属于正文，也不属于正文外围。 */
+const PAGE_CHROME = new Set(['NAV', 'ASIDE', 'FOOTER', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'])
 
 /**
  * 尽力而为的正文提取（readability-lite）：先取 main 地标，再取单篇独立 article，

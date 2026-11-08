@@ -156,6 +156,7 @@ function mockChrome(options: {
   const onNotificationClicked = chromeEvent<[string]>()
   const onNotificationButtonClicked = chromeEvent<[string]>()
   const onInstalled = chromeEvent<[{ reason: string }]>()
+  const onStartup = chromeEvent<[]>()
   const alarms = {
     create: vi.fn(),
     clear: vi.fn(async () => true),
@@ -206,6 +207,7 @@ function mockChrome(options: {
       onConnect,
       onMessage: chromeEvent<[unknown, chrome.runtime.MessageSender, (response: unknown) => void]>(),
       onInstalled,
+      onStartup,
     },
     storage: {
       local: {
@@ -228,7 +230,7 @@ function mockChrome(options: {
     },
     windows,
   } as unknown as typeof chrome)
-  return { action, alarms, notifications, onConnect, onInstalled, sidePanel, tabs, windows }
+  return { action, alarms, notifications, onConnect, onInstalled, onStartup, sidePanel, tabs, windows }
 }
 
 /**
@@ -361,6 +363,33 @@ describe('background bridge lifecycle', () => {
     chromeMock.alarms.onAlarm.emit({ name: KEEPALIVE_ALARM, scheduledTime: Date.now() })
     await vi.waitFor(() => { expect(fetchMock).toHaveBeenCalledTimes(12) })
     expect(FakeWebSocket.instances).toHaveLength(0)
+  })
+
+  it('reconnects on browser startup without waiting for the panel to be opened', async () => {
+    // BUG 报告 P0-0：重启浏览器/桌面端之后，扩展要等用户打开侧栏才连上。
+    // 浏览器启动时 Chrome 只会为注册了 onStartup 监听器的扩展唤醒 worker，
+    // 而 alarms 又不保证跨重启保留——所以启动路径必须自己把连接建起来。
+    const chromeMock = mockChrome()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      wsUrl: 'ws://127.0.0.1:3080/ext/bridge',
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('WebSocket', FakeWebSocket)
+
+    loadedWorker = await import('../src/background/index.ts')
+    await vi.waitFor(() => { expect(FakeWebSocket.instances).toHaveLength(1) })
+
+    // 模拟浏览器重启：worker 被拆掉，模块状态清零（keepalive 定时器也一起没了）。
+    loadedWorker.cancelPendingWork?.()
+    FakeWebSocket.instances = []
+    chromeMock.alarms.create.mockClear()
+
+    chromeMock.onStartup.emit()
+
+    await vi.waitFor(() => { expect(FakeWebSocket.instances).toHaveLength(1) })
+    expect(FakeWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:3080/ext/bridge')
+    // 重启会清掉 alarms；启动监听器必须重新武装它。
+    expect(chromeMock.alarms.create).toHaveBeenCalledWith(KEEPALIVE_ALARM, { periodInMinutes: 0.5 })
   })
 })
 

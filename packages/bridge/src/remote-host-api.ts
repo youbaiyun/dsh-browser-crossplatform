@@ -82,6 +82,9 @@ class RemoteHostApi implements BrowserHostApi {
         method: target.method,
         args: target.args,
         signal: call.signal,
+        // 这条 Peer 和 Remote 流用的是同一个：Host 的 `prepareInvocation` 第一件事就是
+        // `assertPeerLive(request.peer, endpoint)`。
+        peer: this.wirePeer.peer,
       })
       // 只在 create/prompt 成功之后才认领所有权。针对桌面 session 的失败 prompt
       // 绝不能把后面的 ask_user_question
@@ -155,6 +158,7 @@ class RemoteHostApi implements BrowserHostApi {
             },
           },
           signal: call.signal,
+          peer: this.wirePeer.peer,
         })
         return { ok: true, value: historyPageValue(page) }
       }
@@ -243,10 +247,12 @@ class RemoteHostApi implements BrowserHostApi {
     try {
       const catalog = await this.gateway.invoke({
         namespace: 'session', method: 'modelCatalog', args: {}, signal: call.signal,
+        peer: this.wirePeer.peer,
       })
       // 临时 Session 只要目录，再叠上自己那几项还没落定的选择。
       const projections = sessionId === undefined ? undefined : await this.gateway.invoke({
         namespace: 'session', method: 'projections', args: { request: { sessionId } }, signal: call.signal,
+        peer: this.wirePeer.peer,
       })
       const values = isRecord(projections) ? projections.values : undefined
       const modelSelection = isRecord(values) ? values.modelSelection : undefined

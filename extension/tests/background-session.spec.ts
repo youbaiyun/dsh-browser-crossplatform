@@ -279,6 +279,7 @@ function mockChrome(options: {
       onConnect,
       onMessage,
       onInstalled: chromeEvent<[]>(),
+      onStartup: chromeEvent<[]>(),
     },
     storage,
     tabs,
@@ -422,6 +423,12 @@ describe('session lifecycle', () => {
         error: expect.stringContaining('not connected'),
       })
     })
+    // 面板的设置表里没有地址/token 输入框，文案不能再把人指过去（BUG-013）。
+    const rejected = control.postMessage.mock.calls
+      .map(([frame]) => frame as { type?: string; error?: unknown })
+      .find((frame) => frame.type === 'session.result')
+    expect(String(rejected?.error)).toContain('desktop app')
+    expect(String(rejected?.error)).not.toContain('Settings')
     expect(FakeWebSocket.instances).toHaveLength(0)
   })
 
