@@ -29,18 +29,20 @@
 
 ## 第 1 步：装扩展
 
-打开你浏览器的扩展商店页面，点「添加至 Chrome / 添加到 Firefox」，确认。
+在**你真正在用的那个浏览器**里打开商店页面，点「添加至 Chrome」，确认：
 
-> ⚠️ 商店版本**尚未发布**时（审核中），商店里搜不到。这时只有开发者能装：
-> 在 `chrome://extensions` 打开「开发者模式」→「加载已解压的扩展程序」→ 选**那个含
-> `manifest.json` 的文件夹**（仓库里是 `extension/dist`；从 Release 下载的话，先把
+**Chrome 应用商店**：[dsh 浏览器扩展（全平台）](https://chromewebstore.google.com/detail/agpipnjijkpomaannkijkilggoffdiaf)
+
+Firefox 140+ 也支持，已上架 Mozilla：[dsh 浏览器扩展 · Firefox Add-ons](https://addons.mozilla.org/zh-CN/firefox/addon/dsh-browser-extension/)。Firefox 上第一次连接要手填一次令牌，见文末「需要自己去哪里找令牌吗？」。
+
+> 商店里搜不到时（审核有延迟，或你需要比商店更新的构建），在 `chrome://extensions`
+> 打开「开发者模式」→「加载已解压的扩展程序」→ 选**那个含 `manifest.json` 的文件夹**
+> （仓库里是 `extension/dist`；从 Release 下载的话，先把
 > `dsh-browser-crossplatform-<版本>.zip` 解压，选解压出来的那个目录）。
 >
 > **务必用不带 `-store` 的那个 zip。** 带 `-store` 的是给商店上传用的，它的 manifest
 > **没有 `key`**，手动加载后扩展 id 不在桥接的白名单里——连接会被拒，你会看到侧边栏一直
 > 未连接。不带 `-store` 的版本带 `key`，id 固定且已在白名单内，装完直接能连。
->
-> 普通用户请等商店上架后再装。
 
 **必须装进你真正在用的那个浏览器**：扩展是按浏览器/配置隔离的。如果你的默认浏览器是 Chrome，
 而扩展只装在 Edge 里，那两边都连不上——桌面端也会如实告诉你这一点。

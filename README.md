@@ -1,109 +1,98 @@
 > 中文版见 [README.zh.md](README.zh.md)
-# dsh-browser-crossplatform
 
-An MV3 extension + bridge plugin that lets the dsh desktop app read and operate a browser tab: pages are handed to the model as **text**
-(numbered actionable controls), and when image viewing is needed there is a separate **optional** channel, off by default. This is a derivative rewrite of [Lum1104/dsh-browser](https://github.com/Lum1104/dsh-browser), restructured around two priorities — **high compatibility and trimming bloat** — while balancing stability with efficiency.
+# dsh browser extension (all platforms)
 
-You can find this bridge plugin in the plugin marketplace under **`dsh-plugin`**, the marketplace's conventional topic tag.
+A browser extension built specifically for the **DSH (app)** client: it lets DSH see what is actually on the page you are browsing, and operate that page for you — click, type, scroll, turn pages, open new tabs.
 
-What sets it apart from similar projects: **cross-platform** (Windows / macOS / Linux, zero platform branches in the source) · the root package has **zero dsh dependencies**
-(the bridge declares all of dsh as peerDependencies) · **image viewing is optional and off by default** · one **unified version number** across the whole repository ·
-and **benchmarks and CI that compare the extension against a local Playwright baseline in pairs**.
+Pages reach the model as **text**, not screenshots. Title, URL and body are reduced to readable text, and buttons, links and inputs become a numbered inventory; when the model says "click number 7" it clicks number 7 — no coordinates to guess, and no need for you to describe the page first. Image viewing is a separate channel, **off by default**.
+
+**[Install from the Chrome Web Store →](https://chromewebstore.google.com/detail/agpipnjijkpomaannkijkilggoffdiaf)** · **[Firefox Add-ons →](https://addons.mozilla.org/zh-CN/firefox/addon/dsh-browser-extension/)**
+
+## Login and verification do not end the conversation
+
+On a page that requires a login or a human-verification challenge, the AI cannot get past it, and it will not pretend it did. What it does:
+
+1. opens the login or verification page (or switches to the tab where it is already open);
+2. stops there and tells you what it needs from you;
+3. you log in, solve the challenge, enter the SMS code;
+4. when you are done, it re-reads the page and carries on.
+
+**The conversation does not end at this step** — it is waiting for you, not failing. You do not have to send screenshots or passwords into the chat either: fill the form on the page and it reads the result afterwards, while password-type fields always show as `••••` and are never read out.
 
 ## Installation
 
-Three routes — pick any one:
+> **Note**: the browser extension and the DSH plugin (the desktop half) are the two halves of one project — install both. Follow the flow below, or hand it to an AI agent.
 
-| What you want | Where to get it |
-|---|---|
-| **The extension in the browser** (side panel) | Browser extension store ([Chrome] (not yet listed) / [Firefox] (not yet listed)) |
-| **The bridge plugin** (lets dsh talk to the extension) | This repository — [github.com/youbaiyun/dsh-browser-crossplatform](https://github.com/youbaiyun/dsh-browser-crossplatform). One command, see below |
-| **Offline packages** (to load yourself / upload to the store) | The two zips under [Releases](https://github.com/youbaiyun/dsh-browser-crossplatform/releases) |
+One half lives in the browser (the extension), the other in the desktop app (the bridge plugin). With both in place the side panel says "connected", and the token is negotiated by the two halves.
+
+| Step | Chrome / Edge | Firefox |
+| --- | --- | --- |
+| **1. Install the extension** | [Chrome Web Store](https://chromewebstore.google.com/detail/agpipnjijkpomaannkijkilggoffdiaf) → "Add to Chrome" | [Firefox Add-ons](https://addons.mozilla.org/zh-CN/firefox/addon/dsh-browser-extension/) → "Add to Firefox" |
+| **2. Install the desktop half** | `dsh plugin --profile desktop add dsh-browser-crossplatform` (in a terminal); or in DSH click **Plugins → Add plugin** and enter `dsh-browser-crossplatform` | Same as Chrome |
+| **3. Restart dsh** | Restart once; a settings page titled 「dsh 浏览器设置」 appears | Same as Chrome |
+| **4. Token** | negotiated between the two halves, nothing to type | fill it in once on first connection, see [the token FAQ](docs/INSTALL.md#do-i-need-to-find-the-token-myself) |
+| **5. Confirm (30 s)** | ① open any page ② open the dsh side panel ③ it says "connected" ④ ask it to read the page: it names the title and the buttons | Same as Chrome |
+
+- **Profile name**: `desktop` for the desktop app, `web` for `dsh web`; if unsure, check what is in `~/.dsh/profiles/`. The plugin is also findable in the plugin marketplace as **`dsh-plugin`**.
+- **Install it in the browser you actually use**: the extension is per browser and per profile. One installed in Edge, or in a second Chrome profile, does nothing for the browser you use every day.
+- **Side-loading the unpacked build** (when the store is unavailable): see [docs/INSTALL.md step 1](docs/INSTALL.md#step-1-install-the-extension).
+
+Stuck at a step? See [If it will not install, check these first](#if-it-will-not-install-check-these-first).
+
+### Other installation routes
+
+**From a source checkout (developers)**
 
 ```sh
-# From the npm registry (published: dsh-browser-crossplatform@0.38.7):
-dsh plugin --profile desktop add dsh-browser-crossplatform   # the CLI dsh web uses --profile web
-
-# Or straight from this repository, with no registry involved:
 git clone https://github.com/youbaiyun/dsh-browser-crossplatform
 cd dsh-browser-crossplatform && pnpm install      # build tooling only (TypeScript + tsdown)
 pnpm --dir packages/bridge run build              # writes the self-contained lib/index.js
 dsh plugin --profile desktop add link:<clone>/packages/bridge
 ```
 
-A `link:` install does not run the linked package's own install, and it no longer
-needs to: `lib/` inlines its runtime dependencies, so a directory with
-`lib/index.js` loads with no `node_modules` of its own. The two commands above are
-for **building** it (a fresh clone has no `lib/`). Old `lib/` builds, or a clone
-that was never built, fail at load with `ERR_MODULE_NOT_FOUND: Cannot find package
-'@deepseek-ai/cosmokit'` / a missing `lib/index.js`. Details in
-[docs/INSTALL.md step 2b](docs/INSTALL.md#step-2b-install-the-bridge-plugin-from-a-source-checkout-developers).
+A `link:` install does not run the linked package's own install, and it no longer needs to: `lib/` inlines its runtime dependencies, so a directory with `lib/index.js` loads with no `node_modules` of its own. The two commands above are for **building** it (a fresh clone has no `lib/`). Old `lib/` builds, or a clone that was never built, fail at load with `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/cosmokit'` or a missing `lib/index.js`. Details in [docs/INSTALL.md step 2b](docs/INSTALL.md#step-2b-install-the-bridge-plugin-from-a-source-checkout-developers).
 
-**Step-by-step foolproof instructions (including "how to confirm it is installed") are in [docs/INSTALL.md](docs/INSTALL.md).**
+**Offline packages (side-load / store upload)**
 
-The extension itself is installed from the browser extension store (or load the unpacked build yourself following the build section below); the package above is the bridge plugin,
-and its settings page lives inside dsh, titled 「dsh 浏览器设置」.
+The two zips under [Releases](https://github.com/youbaiyun/dsh-browser-crossplatform/releases). **Use the one without `-store` for a manual load**: it carries the manifest `key`, so its extension id is fixed and already on the bridge's allowlist. The `-store` archives are for uploading to a store; their manifest has no `key`, so side-loading them leaves the id off the allowlist and the panel stays "not connected".
 
-## Structure (five packages share the same version number `0.38.8`)
+Step-by-step beginner instructions (including "how to confirm it is installed") are in [docs/INSTALL.md](docs/INSTALL.md) (Chinese: [docs/INSTALL.zh.md](docs/INSTALL.zh.md)).
 
-```
-packages/protocol   zero-dependency wire protocol (frame validation, capability/authority split)
-packages/bridge     dsh bridge plugin (WebSocket server + browser_* tools, runs inside dsh)
-extension           the Chrome/Firefox MV3 extension itself
-skills/             the troubleshooting skill your AI agent reads when the panel misbehaves:
-                    one symptom → one section → a repair, without the user opening devtools
-```
+## If it will not install, check these first
 
-## Compatibility range (all targets and minimum versions)
+| Symptom | Usually |
+|---|---|
+| the panel keeps saying "not connected" | step 2 was skipped, or dsh was not **restarted** after it; or the extension is installed in a different browser or Chrome profile |
+| the plugin fails to load with `ERR_MODULE_NOT_FOUND` / `Cannot find package '@deepseek-ai/cosmokit'` | a pre-inline `lib/`, or no `lib/` at all: rebuild with `pnpm install` + `pnpm run build` in `packages/bridge` ([step 2b](docs/INSTALL.md#step-2b-install-the-bridge-plugin-from-a-source-checkout-developers)) |
+| there is no 「dsh 浏览器设置」 settings page | `--profile` is not the one your desktop app uses |
+| it connects, but the model says the page is empty | reload the page and read it again; restricted pages such as `chrome://` cannot be read at all |
+| image viewing says it is unavailable | the vision key is not configured yet (see [Image viewing](#image-viewing-recognition)) |
+| the panel says "connected", but every message fails with `Cannot read properties of undefined (reading 'signal')` | the desktop half is an old `0.38.7` build whose calls carry no Host Peer: upgrade to `0.38.8` and restart dsh |
 
-| Target | Minimum version | Where this number comes from |
-|---|---|---|
-| **Operating system** | Windows / macOS / **Linux** — all supported (CI is Linux, so it is verified the most thoroughly) | The platform-specific code is confined to one place, `packages/bridge/src/browser-launch.ts`, which has to know where each platform keeps its browsers and profiles; build/benchmark tooling adds the Windows `.cmd` shim. Everything else is platform-neutral. CI's `ubuntu-latest` **is Linux**, and the full chain runs on it for every commit |
+The store copy updates on its own schedule, so its version number need not match this tree (`0.38.8` as of 2026-11-09); `chrome://extensions` shows what you actually have, so check that first when troubleshooting.
+
+## Compatibility
+
+| Target | Minimum version | Where the number comes from |
+| --- | --- | --- |
+| **Operating system** | Windows ✓ / macOS ✓ / **Linux ✓ (testing is most stable on Linux)** | The platform-specific code is confined to one place, `packages/bridge/src/browser-launch.ts`, which has to know where each platform keeps its browsers and profiles; build/benchmark tooling adds the Windows `.cmd` shim. Everything else is platform-neutral. CI's `ubuntu-latest` **is Linux**, and the full chain runs on it for every commit |
 | **dsh desktop** | **any `0.2.x`** — declared as `>=0.2.0-rc.2 <0.3.0` and **optional**, verified against `0.2.2-rc.1` | dsh is the host and provides the services at runtime; the helper packages the bridge calls are now inlined into its bundle, and the dsh packages stay declared as **optional peers** with a range, never an exact pin — they document the supported line and supply the types. `optional` is what actually keeps a host on a prerelease (`0.2.2-rc.1`, the current desktop release) installable, because semver's prerelease rule excludes such versions from every `0.2.x` range — `*` and `0.2.x` included. The runtime gate is a capability check (`gateway.wireStream`); a genuinely missing service fails loudly by name, and a missing agent registry degrades to a no-op |
 | **Node** | **≥ 20** | `engines.node` in the root, bridge and extension manifests (the protocol package declares none, because it is a private workspace package with no scripts to run) |
 | **Desktop Chrome / Chromium / Edge** | **116** | `minimum_chrome_version` in `extension/manifest.json` |
 | **Desktop Firefox** | **140.0** | `gecko.strict_min_version` in `extension/manifest.firefox.json` |
 | **Panel UI** | Chrome uses `side_panel`, Firefox uses `sidebar_action` | Both point at the same `control/index.html` |
 | **Build/test (development)** | Node **22** + pnpm **11** | `.github/workflows/check.yml` |
-| **Phone / tablet** | ❌ Not supported | See below |
+| **Phone / tablet** | ❌ Not supported | — |
 
-The bridge build is self-contained: its former runtime dependencies (`ws`, `@deepseek-ai/schemastery`) and the small `@deepseek-ai/*` helpers it calls are inlined into `lib/`, which then imports only `node:*`; both were platform-independent to begin with, and the extension bundles its two panel-only dependencies (`marked`, `dompurify`) into the build.
-CI builds both browser targets and runs the full test suite (including end-to-end cases that actually launch Chromium);
-Windows has been verified locally; macOS is not covered by CI, but it is POSIX like Linux and the platform-specific surface is that one module.
-
-**The loopback shortcut is bound to named extension ids.** The bridge normally authenticates with a bearer token, but a loopback upgrade from the extension itself skips it so discovery stays zero-config. That exemption is not "any `chrome-extension://` origin" — every other extension on the machine has one of those too — but an exact match against `extensionId`, a comma-separated list whose default names two ids: `kdhkdgfcinfkmogifamoapmheihhcjfk`, which this repository's manifest `key` produces, and `agpipnjijkpomaannkijkilggoffdiaf`, which the Chrome Web Store assigned. Both are needed because the store refuses a manifest carrying `key`, so a development load and a store install present different origins. Add your own id to the list for a build of your own, or set `extensionId: ''` in the plugin config to require the token on every connection, including loopback.
-
-**Why phones and tablets are not supported**: Chrome / Edge for Android does not support third-party extensions;
-Firefox for Android has no side panel UI; and the bridge is **loopback-only where it matters** — the
-token-free path and the privileged gateway methods (`host.pickDirectory`, `host.openPath`, `settings.*`,
-`credentials.*`) are both gated on a loopback remote (`packages/bridge/src/server.ts`), and a phone would be
-connecting to `127.0.0.1` on a different machine. A non-loopback remote with a valid token can still use the
-ordinary session methods that `dsh web --host` exists to serve; what it cannot do is reach the privileged ones.
-## Key differences from the original
-
-| Dimension | Original | This version |
-|---|---|---|
-| Version | Each part versioned independently, drifting apart | Unified `0.38.8` — root package, protocol, bridge, extension and both manifests all agree |
-| Node | `^22.19 \|\| >=24` | `>=20` |
-| TypeScript | Split between extension 5.6 and bridge 6.0 | One toolchain; the extension's declared range is `^5.6`, the bridge's and the protocol's `^5.7`, and the lockfile resolves a single installed version |
-| Dependencies | 35 `@deepseek-ai/*` (RC) in the root package, node_modules at 600 MB | **0** dsh dependencies in the root package (its tests and typecheck are pure Node + a bundled tsc); the bridge's former runtime dependencies (`ws`, `@deepseek-ai/schemastery`) are now dev-only and inlined into `lib/` together with the small `@deepseek-ai/*` helpers it calls — the built bundle imports only `node:*` and needs no `node_modules`, while dsh services are still probed at runtime via `ctx.get()` and the dsh packages stay declared as optional peers for ranges and types; the extension has two panel-only runtime dependencies (`marked` + `dompurify`), both bundled into the panel build |
-| Bridge hard-deps | React peer + 3 web-side `dsh-client-ui-*`/`locale` peers + a `dsh.client` injection block | **All removed** (the extension panel is self-contained and injects no UI into dsh's web client) |
-| Bridge protocol | Its own `protocol.ts` (12.7 KB), with a separate copy in the extension | Shared `@dsh-browser/protocol`, inlined into both artifacts by the bundler |
-| Bridge redundancy | Plus a web-side `client.js` (7.2 KB) | Deleted |
-| Injection | the manifest's global `content_scripts` inject into every iframe on every site | Same global `content_scripts` declaration (the extension cannot know in advance which tab you will point it at), but **bounded at the other end**: only the tab you bound is read or operated, and `chrome.scripting` re-injects on demand into tabs that predate the install. See `docs/TRUST-MODEL.md` ("broad injection, narrow authority") |
-| Browser minimums | Chrome 116 / Firefox 140 | Same requirements as upstream, not relaxed (Chrome 116 / Firefox 140) |
-| Build | 3 vite configs + shared + build.mjs (5 files) | The same shape, deliberately: one `build.mjs` sequences the three targets, and `vite.shared.ts` holds what they share. What changed is that the config list lives in one script instead of being documented in three places |
-| Test runner | vitest + jsdom | vitest (jsdom environment for the extension panel, node environment for the bridge) |
-
-## Core mechanisms
+## How it works
 
 - **Text snapshot + action execution**: no screenshots, no recognition step (at the protocol layer, `textOnly: true`). Pages are rendered into structured text: title/URL/body (readability-lite) + a numbered interactive inventory (including ARIA role controls) + form fields (including `masked`/`checked`/`required`), with support for `delta` diffs and `region` partial snapshots.
 - **Safety invariants**: the values of sensitive fields (`type=password`, `autocomplete=credit-card|cc-*`, id/name/aria-label matching `password|passwd|credit|card|cvv|cvc|secret|pwd`) are always masked as `••••`; **the accessible name never uses the input's current value** (only the value of submit/button/reset inputs counts as a name), and unit tests enforce this.
 - **Tool surface (17)**: `browser_snapshot` / `click` / `type` / `press` / `scroll` / `navigate` / `open_tab` / `list_tabs` / `follow_tab` / `close_tab` / `back` / `forward` / `reload` / `get_text` / `wait` / `launch` / `describe_image`. Full parameter list: `delta`/`region`/`replace`/`amount`/`selector`/`ms`/`active`/`tabId`/`index`/`text`/`key`/`direction`/`url`, plus `frame` on the 7 frame-scoped tools. `browser_describe_image` answers only while recognition is on; `browser_launch` is the one tool that runs on the desktop side, because it is the only one that can work with no browser running.
-- **Starting a closed browser (`browser_launch`, and before every tool)**: tool execution lives in the extension, so with the browser closed there is nothing to dispatch to — the tools used to fail with a bare `bridge-closed`. Now a call with no connection first tries to start the browser and then reports what actually happened. It launches **the browser you already use**: the executable comes from the platform's own record of which app opens a link (the Windows `UserChoice` registry entry, or macOS LaunchServices), falling back to detection, and there are **no extra flags** — no `--user-data-dir` (that would be a second browser with none of your tabs or logins) and no `--load-extension`. If that browser is **already running with a window, nothing is launched at all** (a second start would only open a window in the existing process while discarding the flags), and the answer says which browser to enable the extension in. `browserUserDataDir` + `extensionPath` exist for the development case, a named profile where an unpacked build is genuinely loaded.
+- **Two operation details filled in**: `browser_type` can fill a `<select>` (matching in order by option value → visible label → 1-based index, listing the available options on failure) and set a checkbox/radio with true/false; `browser_wait` supports wait conditions (`selector` / `text`, failing with the `timeout` error code if they never appear) instead of only a fixed delay.
+- **Starting a closed browser** (`browser_launch`, and before every tool): tool execution lives in the extension, so with the browser closed there is nothing to dispatch to — the tools used to fail with a bare `bridge-closed`. Now a call with no connection first tries to start the browser and then reports what actually happened. It launches **the browser you already use**: the executable comes from the platform's own record of which app opens a link (the Windows `UserChoice` registry entry, or macOS LaunchServices), falling back to detection, and there are **no extra flags** — no `--user-data-dir` (that would be a second browser with none of your tabs or logins) and no `--load-extension`. If that browser is **already running with a window, nothing is launched at all** (a second start would only open a window in the existing process while discarding the flags), and the answer says which browser to enable the extension in. `browserUserDataDir` + `extensionPath` exist for the development case, a named profile where an unpacked build is genuinely loaded.
 - **What it cannot do**: install the extension. A command-line load lasts one session and installs nothing — closing the browser loses it — and since Chrome 137 branded Chrome/Edge builds ignore `--load-extension` altogether (Chromium and Chrome-for-Testing still honour it). So the extension has to be installed in the profile once (store, or "load unpacked" on the extensions page), and after that a normal start reconnects by itself. The bridge checks `<profile>/Extensions/<id>` in Chrome/Edge/Brave/Chromium profiles and says plainly which of the two situations the user is in rather than offering a step that cannot help.
 - **Frame routing**: a snapshot combines the main frame with all accessible iframes, and subframes are labeled `[frame N] <origin>`; the background remembers `N → frameId` and routes later tools carrying `frame` to the same frame; each frame renders its section within the same negotiated budget, and the body is truncated first (`mainBudget = maxChars × 0.5`) so a long page cannot swallow the inventory.
-- **Capabilities added beyond upstream** (additions, not removals): `browser_type` can fill a `<select>` (matching in order by option value → visible label → 1-based index, listing the available options on failure) and set a checkbox/radio with true/false; `browser_wait` supports wait conditions (`selector` / `text`, failing with the `timeout` error code if they never appear) instead of only a fixed delay.
 - **Automatic snapshot after navigation**: the content script announces when the new document is ready (the equivalent of the original's `DSH_CONTENT_READY`), and after navigation-class actions (navigate/back/forward/reload) the background performs the handshake, waits for the new document and snapshots automatically, pushing the result to the panel — the model does not need another round trip.
 - **Image manifest (useful even with image viewing off)**: the ported pipeline originally **discarded bare `<img>` elements entirely** — images are not in the interactive selectors, and `innerText` carries no `alt` either. Now an `Images:` section is added at the end of the snapshot: in document order, grouped by the nearest heading, each line rendered as `[N] kind WxH "label" near="…" text-described [unavailable] → src ⟦iN img:state⟧` (`content/snapshot.ts`, `renderImage`). `N` is the same interactive index the inventory uses, so the number in the section is the number to `browser_click` (for the images that are clickable at all); `text-described` marks an image whose author already supplied text, and the trailing marker carries the recognition state so the section and the inline marker always agree. Positional information comes from the DOM, so the model never needs coordinates. The marker is nonce-escaped, so a page cannot forge the section or the state it carries.
   **Image types covered**: `<img>` (including `currentSrc`, so a `srcset` candidate is reported rather than the fallback), `<video poster>` (the cover is an ordinary image URL and goes through the same fetch path), inline `<svg>` (no bytes to fetch, so it is reported as `kind=svg` and never handed to the fetch path), and CSS background images — inline `background-image` declarations are collected exactly, while class-declared ones go through a **bounded computed-style scan**: every element in the region is visited until `BACKGROUND_SCAN_LIMIT` (1500) elements or `MAX_BACKGROUND_IMAGES` (20) background images, whichever comes first, with elements already collected as img/svg/video and `script`/`style` tags skipped. `<canvas>` is **not** collected: a canvas has no address to fetch, and reading it back would mean reading page memory, so it is left out rather than listed as unreadable.
@@ -144,18 +133,32 @@ chrome.storage.local.set({ dshSettings: { visionEndpoint: 'https://…/v1', visi
 
 `tools/vision-stub.mjs` and `tools/vision-proxy.mjs` are development tools: the former measures local overhead, the latter lets the extension go to the cloud without changing the manifest. Normal use does not need them.
 
-## Commands
+## Development
+
+### Structure (five packages share the same version number `0.38.8`)
+
+```
+packages/protocol   zero-dependency wire protocol (frame validation, capability/authority split)
+packages/bridge     dsh bridge plugin (WebSocket server + browser_* tools, runs inside dsh)
+extension           the Chrome/Firefox MV3 extension itself
+skills/             the troubleshooting skill your AI agent reads when the panel misbehaves:
+                    one symptom → one section → a repair, without the user opening devtools
+```
+
+What sets it apart from similar projects: **cross-platform** (Windows / macOS / Linux, with the platform-specific code in one module) · the root package has **zero dsh dependencies** (the bridge declares all of dsh as peerDependencies) · **image viewing is optional and off by default** · one **unified version number** across the whole repository · and **benchmarks and CI that compare the extension against a local Playwright baseline in pairs**.
+
+### Commands
 
 ```sh
 pnpm install
 pnpm -r run typecheck   # typecheck the whole repo (protocol + bridge + extension)
 pnpm -r run test        # all unit tests (the bridge's e2e needs a Chromium; see below)
-pnpm --filter dsh-browser-extension run build           # Chrome → extension/dist
-pnpm --filter dsh-browser-extension run build:firefox   # Firefox → extension/dist-firefox
-pnpm --filter dsh-browser-extension run build:store     # Chrome, no manifest `key` → extension/dist-store
-pnpm --filter dsh-browser-extension run build:store:firefox  # Firefox, no `key` → extension/dist-store-firefox
-pnpm --filter dsh-browser-extension run package         # all archives → repo root
-pnpm --filter dsh-browser-crossplatform run build  # bridge plugin → packages/bridge/lib
+pnpm --filter dsh-browser-extension run build                # Chrome → extension/dist
+pnpm --filter dsh-browser-extension run build:firefox        # Firefox → extension/dist-firefox
+pnpm --filter dsh-browser-extension run build:store          # Chrome, no manifest `key` → extension/dist-store
+pnpm --filter dsh-browser-extension run build:store:firefox  # Firefox, no `key` → extension/dist-firefox-store
+pnpm --filter dsh-browser-extension run package              # all archives → repo root
+pnpm --filter dsh-browser-crossplatform run build            # bridge plugin → packages/bridge/lib
 ```
 
 `package` writes up to four archives — the two development ones always, and the two `-store`
@@ -169,7 +172,7 @@ the bridge's e2e locally, give it a browser that still honors
 `--load-extension`: `node benchmark/lib/browser-install.mjs chromium`, then set
 `PLAYWRIGHT_CHROMIUM_PATH` to what `node benchmark/lib/chromium-path.mjs` prints.
 
-## End-to-end benchmark (benchmark/)
+### End-to-end benchmark (benchmark/)
 
 A benchmark that turns "efficient" from an adjective into a number: the same model, the same profile, the same set of tasks, the same machine, **comparing two browser execution backends** — `playwright` (the runner's built-in baseline plugin) and `extension` (this repository's real bridge + the built extension). The baseline exposes the eight tools the six tasks actually need (`snapshot`, `click`, `type`, `press`, `scroll`, `navigate`, `get_text`, `wait`); the product exposes seventeen, so the comparison measures the same tasks rather than an identical surface.
 
@@ -193,9 +196,9 @@ Three prerequisites; miss one and it will not run:
 
 `benchmark/tests/` holds the benchmark tool's own unit tests (`node --test tests/*.test.mjs`, needing neither a model nor a browser).
 
-## Status
+### Tests and status
 
-All four capabilities are now complete, plus the image manifest section, background image fetching/caching, direct external API connection and desktop-relayed recognition. The table below lists each test suite; **the exact counts are whatever `pnpm -r run test` outputs** (the numbers previously hard-coded here have drifted twice already, so they are no longer hard-coded).
+Content pipeline, frame routing, automatic snapshot after navigation and panel markdown are all in place, plus the image manifest section, background image fetching/caching, direct external API connection and desktop-relayed recognition. The table below lists each test suite; **the exact counts are whatever `pnpm -r run test` outputs** (the numbers previously hard-coded here have drifted twice already, so they are no longer hard-coded).
 
 | Capability | Implementation | Verification |
 |---|---|---|
@@ -211,7 +214,7 @@ Test runner: **the protocol uses Node's built-in `node --test`**; **the extensio
 The "matches the store listing copy" check in `locales.spec.ts` compares the English short description with `store-assets/store-listing.md` whenever that file is present — which it is in this tree, so the assertion runs (it also enforces the 132-character limit on all three locales).
 e2e needs a browser that still honors `--load-extension` — Playwright's Chromium works, while branded Chrome/Edge 137+ removed that switch; the suite is skipped automatically when the browser or `extension/dist` is missing. `PLAYWRIGHT_CHROMIUM_PATH` can point at a specific browser.
 
-### Layering principle (why the code lives where it does)
+#### Layering principle (why the code lives where it does)
 
 - **Pure logic separated from wiring**: validating incoming data, generating the approval copy shown to the user, encoding bytes, parsing frame numbers and combining cross-frame snapshots — these are pure, so they live in unit-testable modules (`background/tools.ts` for dispatch and frame routing, `background/authorization.ts`, `background/frames.ts`, `background/image-fetch.ts`). The wiring stays in `background/index.ts`.
 - **The composition root is testable too**: each spec that loads `background/index.ts` installs a sufficient `chrome` API stub through `vi.stubGlobal` (see the `mockChrome` helper at the top of `tests/background-tools.spec.ts`), which brings the **wiring itself** under assertions such as "every event has a listener", "content-ready gets a reply" and "ports that are not the panel are ignored".
@@ -229,6 +232,26 @@ TODO (out of scope for this goal): `background/index.ts` can be split further; t
 
 **Identity invariants, also asserted**: the bridge's token-free path is bound to named extension ids, and tests keep that binding honest from both directions — `packages/bridge/tests/extension-identity.spec.ts` recomputes the id from `extension/manifest.json`'s `key` and compares it with the first entry of `DEFAULT_EXTENSION_IDS` (skipping when the extension is not a sibling, as in a standalone npm install), checks that both of this project's ids are listed by default, and checks that an unlisted id, a prefix of a listed one, another scheme, and an empty configuration are all still refused; `packages/bridge/tests/origin-gate.spec.ts` pins the predicate that only a listed exact Origin may skip the token. `extension/tests/versions.spec.ts` keeps the five package versions equal (root, protocol, bridge, extension and the benchmark harness, plus both manifests), and `node extension/scripts/extension-id.mjs` prints what a build's key actually derives, for checking by hand.
 
+## Upstream notice
+
+This project is a derivative rewrite of [Lum1104/dsh-browser](https://github.com/Lum1104/dsh-browser), restructured around **high compatibility and trimming bloat** while balancing stability with efficiency. For the upstream engine's attribution and file scope see [COPYRIGHT.md](COPYRIGHT.md).
+
+### Key differences from the original
+
+| Dimension | Original | This version |
+|---|---|---|
+| Version | Each part versioned independently, drifting apart | Unified `0.38.8` — root package, protocol, bridge, extension and both manifests all agree |
+| Node | `^22.19 \|\| >=24` | `>=20` |
+| TypeScript | Split between extension 5.6 and bridge 6.0 | One toolchain; the extension's declared range is `^5.6`, the bridge's and the protocol's `^5.7`, and the lockfile resolves a single installed version |
+| Dependencies | 35 `@deepseek-ai/*` (RC) in the root package, node_modules at 600 MB | **0** dsh dependencies in the root package (its tests and typecheck are pure Node + a bundled tsc); the bridge's former runtime dependencies (`ws`, `@deepseek-ai/schemastery`) are now dev-only and inlined into `lib/` together with the small `@deepseek-ai/*` helpers it calls — the built bundle imports only `node:*` and needs no `node_modules`, while dsh services are still probed at runtime via `ctx.get()` and the dsh packages stay declared as optional peers for ranges and types; the extension has two panel-only runtime dependencies (`marked` + `dompurify`), both bundled into the panel build |
+| Bridge hard-deps | React peer + 3 web-side `dsh-client-ui-*`/`locale` peers + a `dsh.client` injection block | **All removed** (the extension panel is self-contained and injects no UI into dsh's web client) |
+| Bridge protocol | Its own `protocol.ts` (12.7 KB), with a separate copy in the extension | Shared `@dsh-browser/protocol`, inlined into both artifacts by the bundler |
+| Bridge redundancy | Plus a web-side `client.js` (7.2 KB) | Deleted |
+| Injection | the manifest's global `content_scripts` inject into every iframe on every site | Same global `content_scripts` declaration (the extension cannot know in advance which tab you will point it at), but **bounded at the other end**: only the tab you bound is read or operated, and `chrome.scripting` re-injects on demand into tabs that predate the install. See `docs/TRUST-MODEL.md` ("broad injection, narrow authority") |
+| Browser minimums | Chrome 116 / Firefox 140 | Same requirements as upstream, not relaxed (Chrome 116 / Firefox 140) |
+| Build | 3 vite configs + shared + build.mjs (5 files) | The same shape, deliberately: one `build.mjs` sequences the three targets, and `vite.shared.ts` holds what they share. What changed is that the config list lives in one script instead of being documented in three places |
+| Test runner | vitest + jsdom | vitest (jsdom environment for the extension panel, node environment for the bridge) |
+
 ## License
 
 MIT. This project is a derivative rewrite of [`Lum1104/dsh-browser`](https://github.com/Lum1104/dsh-browser) (for the upstream engine's attribution and file scope see [`COPYRIGHT.md`](COPYRIGHT.md)), so `LICENSE` keeps the upstream copyright notice and adds this project's own line:
@@ -238,4 +261,4 @@ Copyright (c) 2026 Yuxiang Lin
 Copyright (c) 2026 youbaiyun
 ```
 
-MIT requires the copyright notice and license text to accompany distribution, so this file must ship with the source and the extension package and cannot be removed.
+MIT requires the copyright notice and the license text to accompany distribution, so that file has to travel with the source and the extension packages, and must not be deleted.

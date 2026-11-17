@@ -30,10 +30,13 @@ For the complete minimum versions and where each number comes from, see "Compati
 
 ## Step 1: install the extension
 
-Open your browser's extension store page, click "Add to Chrome / Add to Firefox", and confirm.
+Open the store page in **the browser you actually use**, click "Add to Chrome", and confirm:
 
-> ⚠️ When the store version is **not yet published** (under review), it cannot be found in the store. Until then, only developers can install it:
-> open "Developer mode" at `chrome://extensions` → "Load unpacked" → select **the folder that
+**Chrome Web Store**: [dsh browser extension (all platforms)](https://chromewebstore.google.com/detail/agpipnjijkpomaannkijkilggoffdiaf)
+
+Firefox 140+ is supported too and is listed on Mozilla: [dsh browser extension · Firefox Add-ons](https://addons.mozilla.org/zh-CN/firefox/addon/dsh-browser-extension/). On Firefox the token has to be filled in once on first connection — see "Do I need to find the token myself?" at the end of this page.
+
+> When the store cannot be used (review lag, or you need a build newer than the store copy), open "Developer mode" at `chrome://extensions` → "Load unpacked" → select **the folder that
 > contains `manifest.json`** (in a checkout that is `extension/dist`; from a Release download,
 > unzip `dsh-browser-crossplatform-<version>.zip` and select the unzipped folder).
 >
@@ -41,8 +44,6 @@ Open your browser's extension store page, click "Add to Chrome / Add to Firefox"
 > manifest has **no `key`**, so side-loading it gives the extension an id that is *not* on the
 > bridge's allowlist — the connection is refused and the panel stays 「未连接」. The plain build
 > carries `key`, so its id is fixed and already allowed, and it connects with no token.
->
-> Regular users should wait until it is listed in the store before installing.
 
 **It has to be the browser you actually use.** The extension is per-profile: installing it in one
 browser or one Chrome profile does nothing for another. If your default browser is Chrome but the
